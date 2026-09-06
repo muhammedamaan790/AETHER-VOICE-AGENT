@@ -51,8 +51,28 @@ class GenerationRegistry:
         )
         return gen
 
+    def mark_fenced(self, gen_id: str | None) -> None:
+        """Fence a generation immediately. Realtime-safe: plain state, no trace IO.
+
+        Called from the PortAudio input callback when a barge-in is confirmed, so it must not
+        allocate or write to the trace (locked decision 14). The caller emits `FenceRequested`
+        from a normal thread once it is back on the main loop.
+
+        After this, `is_active(gen_id)` is False, which is what lets a slow in-flight result --
+        an LLM answer that arrives after the user already moved on -- be recognised as stale and
+        discarded before it can be spoken (RULES.md R1).
+        """
+        if gen_id is None:
+            return
+        gen = self._gens.get(gen_id)
+        if gen is not None:
+            gen.status = GenerationStatus.FENCED
+        if self.active is not None and self.active.id == gen_id:
+            self.active = None
+
     def get(self, gen_id: str) -> Generation | None:
         return self._gens.get(gen_id)
 
     def is_active(self, gen_id: str) -> bool:
+        """True only if this generation is still the one allowed to produce spoken output."""
         return self.active is not None and self.active.id == gen_id

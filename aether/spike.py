@@ -80,6 +80,10 @@ class Day1Spike:
                 # still being synthesised for it from being played when it arrives. A bare stop
                 # would flush the queue and then happily accept the next stale chunk.
                 self._fenced_gen = self.gens.active.id if self.gens.active else None
+                # Fence the generation itself, not just the audio. The LLM for this generation
+                # may still be in flight; marking it fenced here is what makes its late answer
+                # recognisably stale when it finally returns. Realtime-safe: no trace IO.
+                self.gens.mark_fenced(self._fenced_gen)
                 self.gate.fence_generation(
                     self._fenced_gen, reason="voiced_duration_confirmed"
                 )
@@ -121,6 +125,23 @@ class Day1Spike:
         reply = self.llm.respond(text)
         print(f"  LLM({self.llm.name}): {reply}")
 
+        # THE FENCE CHECK. An LLM call takes real time, and the user can interrupt during it.
+        # If this generation was fenced while the model was thinking, its answer is stale: the
+        # user has already moved on. Discard it here, before it can reach Rime -- no synthesis,
+        # no audio, no ResponseSpoken (RULES.md R1). Cancellation is not relied upon: the
+        # provider is allowed to answer anyway, and this check still catches it.
+        if not self.gens.is_active(gen.id):
+            self.trace.emit(
+                EventType.RESULT_DISCARDED,
+                turn_id=self._turn,
+                gen=gen.id,
+                active_gen=self.gens.active.id if self.gens.active else None,
+                reason="stale_generation_llm",
+                stage="llm",
+            )
+            print("  (LLM answer discarded -- generation was fenced while the model was thinking)")
+            return
+
         try:
             pcm = self.rime.synthesize(
                 reply,
@@ -133,7 +154,22 @@ class Day1Spike:
             print("  !! No fallback TTS exists by design (RULES.md R9.4).")
             return
 
-        # Committing audio to the speaker is what ResponseSpoken means, and the gate is now the
+        # Synthesis takes real time too, so the user can interrupt during it as well. Re-check
+        # before touching the gate: set_active_generation would otherwise re-activate a
+        # generation that has just been fenced, and the audio would play.
+        if not self.gens.is_active(gen.id):
+            self.trace.emit(
+                EventType.RESULT_DISCARDED,
+                turn_id=self._turn,
+                gen=gen.id,
+                active_gen=self.gens.active.id if self.gens.active else None,
+                reason="stale_generation_tts",
+                stage="tts",
+            )
+            print("  (audio discarded -- generation was fenced during synthesis)")
+            return
+
+        # Committing audio to the speaker is what ResponseSpoken means, and the gate is the
         # check that decides whether committing is even allowed. If this generation was fenced
         # while its audio was being synthesised, enqueue refuses it and records ResultDiscarded --
         # so ResponseSpoken must not be emitted. Nothing was spoken.
