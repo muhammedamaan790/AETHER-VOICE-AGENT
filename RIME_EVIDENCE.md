@@ -250,6 +250,7 @@ run.
   (`MEANINGFUL_SPEECH_MS`), which the Day-3 classifier replaces. The reaction figure is the duck.
 
 Not a benchmark, but observed: `tiny.en` transcribed a 3.13 s fixture in 423–430 ms on CPU.
+Superseded configuration — STT is now `base.en` with `beam_size=5`, which has not been measured.
 
 ---
 

@@ -26,6 +26,7 @@ from .audio.player import AudioGate
 from .audio.rime import RimeNotConfigured, RimeTTS
 from .audio.vad import MicVAD
 from .config import RuntimeConfig
+from .conversation import ConversationHistory
 from .events import EventType
 from .llm import build_llm
 from .stt import WhisperSTT
@@ -41,7 +42,7 @@ class Day1Spike:
         self,
         trace: Trace,
         *,
-        stt_model: str = "tiny.en",
+        stt_model: str = "base.en",
         input_device: int | None = None,
         output_device: int | None = None,
         vad_aggressiveness: int = 2,
@@ -53,6 +54,9 @@ class Day1Spike:
         self.stt = WhisperSTT(trace, model_size=stt_model)
         self.llm = build_llm()
         self.rime = RimeTTS(trace)
+        # Session-scoped conversation history. Owned by this pipeline instance, never by the
+        # provider object, so two sessions can never share or leak context.
+        self.history = ConversationHistory()
 
         self._turn = 0
         self._barge_active = False
@@ -122,7 +126,7 @@ class Day1Spike:
             params={"utterance": text},
         )
 
-        reply = self.llm.respond(text)
+        reply = self.llm.respond(text, self.history.messages())
         print(f"  LLM({self.llm.name}): {reply}")
 
         # THE FENCE CHECK. An LLM call takes real time, and the user can interrupt during it.
@@ -178,6 +182,13 @@ class Day1Spike:
         if not self.gate.enqueue(pcm, turn_id=self._turn, gen=gen.id):
             print("  (audio discarded as stale -- generation was fenced during synthesis)")
             return
+        # THE COMPLETED/SPOKEN BOUNDARY. The gate has accepted the audio, so this turn really
+        # happened: only now may it become conversational context. Every fenced path above
+        # returned before reaching this line, which is precisely why a fenced generation cannot
+        # pollute history -- the existing fencing stays the authority and history just rides
+        # behind it. Level 1: a turn is remembered whole or not at all (MEMORY.md section 4).
+        self.history.commit_turn(text, reply)
+
         self.trace.emit(
             EventType.RESPONSE_SPOKEN,
             turn_id=self._turn,
@@ -220,7 +231,7 @@ class Day1Spike:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="AETHER Day-1 voice spike")
-    ap.add_argument("--stt-model", default="tiny.en")
+    ap.add_argument("--stt-model", default="base.en")
     ap.add_argument("--input-device", type=int, default=None)
     ap.add_argument("--output-device", type=int, default=None)
     ap.add_argument("--vad-aggressiveness", type=int, default=2)

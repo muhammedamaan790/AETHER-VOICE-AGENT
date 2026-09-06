@@ -34,7 +34,7 @@ class SlowLLM:
         self.release = threading.Event()
         self.completed = threading.Event()
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, history=None) -> str:
         self.started.set()
         assert self.release.wait(timeout=5.0), "test did not release the LLM"
         self.completed.set()
@@ -44,7 +44,7 @@ class SlowLLM:
 class InstantLLM:
     name = "instant-fake"
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, history=None) -> str:
         return "fresh answer"
 
 
@@ -198,7 +198,7 @@ def test_fence_landing_just_before_the_answer_returns_is_still_safe(spike):
     class RaceLLM:
         name = "race-fake"
 
-        def respond(self, user_text: str) -> str:
+        def respond(self, user_text: str, history=None) -> str:
             # Fence lands inside the request, immediately before the return.
             s.gens.mark_fenced(s.gens.active.id)
             return "answer that raced the fence"
