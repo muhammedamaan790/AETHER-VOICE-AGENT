@@ -17,7 +17,7 @@ class WhisperSTT:
     def __init__(
         self,
         trace: Trace,
-        model_size: str = "tiny.en",
+        model_size: str = "base.en",
         device: str = "cpu",
         compute_type: str = "int8",
         samplerate: int = 16000,
@@ -46,7 +46,7 @@ class WhisperSTT:
         segments, _info = self._model.transcribe(
             samples,
             language="en",
-            beam_size=1,
+            beam_size=5,
             vad_filter=False,   # segmentation already happened upstream in MicVAD
         )
         text = " ".join(s.text for s in segments).strip()

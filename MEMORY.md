@@ -97,8 +97,9 @@ Day 1 built the voice spike. The continuity engine is still untouched, by design
 | `aether/trace.py` — append-only JSONL trace | **Implemented, tested** |
 | `aether/audio/vad.py` — always-open mic + WebRTC VAD | **Implemented, tested** |
 | `aether/audio/player.py` — AudioGate duck/stop/resume | **Implemented, tested**; now also **generation-aware** (see below) |
-| `aether/stt.py` — faster-whisper (local, `tiny.en`) | **Implemented, tested on a speech fixture** |
+| `aether/stt.py` — faster-whisper (local, `base.en`) | **Implemented, tested on a speech fixture** |
 | `aether/llm.py` — reasoning path | Interface implemented; **only the stub has run** (no credential) |
+| `aether/conversation.py` — session history (Level 1) | **Implemented, tested.** In-memory, session-scoped, committed only at the completed/spoken boundary |
 | `aether/audio/rime.py` — Rime TTS client | **Implemented and executed against the live API** — real MP3 audio returned, decoded and played |
 | `aether/supervisor/generations.py` — generation IDs | ID allocation only, tested. **No fencing logic** |
 | `aether/spike.py` — Day-1 loop | Implemented; **not run end-to-end with a live mic** |
@@ -109,6 +110,32 @@ Day 1 built the voice spike. The continuity engine is still untouched, by design
 | Evaluator | Not started (Day 4) |
 | Observability panel | Not started (Day 6) |
 | Acceptance tests A–H | Pre-registered as specs and skipped stubs; none executed |
+
+### Conversation history: Level 1 (implemented) vs Level 2 (not implemented)
+
+Contextual follow-ups ("just tell me the first one") work because completed turns are kept in a
+session-scoped, in-memory history and passed to the next LLM call as clean role/content pairs.
+
+**Level 1 — what exists.** Only a turn that reached the completed/spoken boundary is remembered.
+That boundary is the successful `AudioGate.enqueue`, immediately before `ResponseSpoken` (locked
+decision 15). A fenced generation contributes **nothing** — not its assistant answer, and not its
+user text: the user moved on before hearing a reply, so that exchange is not part of the
+conversation. History needs no fencing logic of its own, because the only line that writes to it
+sits after every fenced path has already returned. Existing fencing stays authoritative.
+
+History is **append-only**, and fencing never modifies or deletes it — `fence_generation()` acts on
+audio and results only. Fencing invalidates *output*; it does not rewrite the past (RULES.md R5).
+A turn already spoken stays remembered even if the next generation is fenced. There is deliberately
+no `clear()`; the only removal is the session-length cap below.
+
+Known limitation, accepted: a flat cap of 12 turns, dropped oldest-first. No token budgeting.
+
+**Level 2 — deliberately NOT implemented.** If a turn is fenced *mid-speech*, the user really did
+hear the first part of it, and Level 1 forgets that entirely — so a follow-up referring to a
+partially-heard answer has no context. Level 2 would record the partial spoken prefix (what was
+actually heard, not what was generated) and make it available as context. That needs the audio
+path to report how much was played before the stop, which does not exist today. It is an upgrade
+path, not a claim.
 
 ---
 
@@ -137,6 +164,9 @@ Conditions and exclusions:
 
 **Other measured values** (single observations, not benchmarks):
 - STT: `tiny.en` transcribed a 3.13 s SAPI-generated fixture correctly in **423–430 ms** on CPU.
+  (Measured on `tiny.en` with `beam_size=1`. The default is now `base.en` with `beam_size=5`,
+  which is slower — this number does NOT describe the current configuration and has not been
+  re-measured.)
 - Device latency: WASAPI 22.0 ms vs MME 100.0 ms vs DirectSound 120.0 ms (48 kHz, blocksize 480).
 - WebRTC VAD hangover at aggressiveness 2: ~6 frames (~120 ms) of trailing silence still reported
   as speech. Utterance-end detection is therefore ~620 ms, not the nominal 500 ms.
@@ -199,6 +229,7 @@ Still `<from_run>` and must not be quoted:
 |---|---|---|
 | Suspend/resume | **Deferred.** Not implemented, not claimed. | Day-5 stretch only if the core is solid. Single slot, no stack, `RESUME` class, suspended generations cannot speak, late results held/tagged. If not solid, cut — and no `suspended` status enters the model. |
 | Spoken-prefix recovery | **Deferred.** Not implemented, not claimed. | Day-5 optional. Cut if not reliable by end of Day 5. Never part of the core claim. |
+| Level-2 conversation history (partial spoken prefix) | **Deferred.** Not implemented, not claimed. | Needs the audio path to report how much of a turn was actually played before a mid-speech fence. Level 1 is in place; see section 4. |
 | Multiple domains | **Out of scope.** | — |
 | Large warehouse application | **Out of scope.** | — |
 | Elaborate UI | **Out of scope.** Observability panel only. | — |
@@ -237,7 +268,7 @@ Not doable by an agent. Tracked in [RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 2.
 
 | Decision | Status |
 |---|---|
-| STT provider/library | **Decided Day 1** — faster-whisper `tiny.en`, local CPU |
+| STT provider/library | **Decided Day 1** — faster-whisper, local CPU. Upgraded `tiny.en` -> `base.en` (beam_size 1 -> 5) for transcription accuracy; costs latency, not yet re-measured |
 | VAD implementation | **Decided Day 1** — WebRTC VAD (`webrtcvad-wheels`), 20 ms frames, aggressiveness 2 |
 | Audio I/O library | **Decided Day 1** — `sounddevice`/PortAudio, WASAPI preferred on Windows |
 | Trace format on disk | **Decided Day 1** — JSONL, one event per line |

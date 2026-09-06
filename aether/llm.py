@@ -22,7 +22,10 @@ caller re-checks the fence before anything reaches Rime.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import Protocol
+
+from .conversation import Message
 
 # Voice-first. The model is instructed to be brief rather than having its output truncated after
 # the fact: truncation cuts mid-sentence, which sounds broken when spoken aloud.
@@ -54,6 +57,26 @@ PROVIDER_ENV: dict[str, tuple[str, str, str]] = {
 }
 
 
+def _prior_turns(history: Sequence[Message] | None) -> list[dict[str, str]]:
+    """Normalise committed history into clean role/content pairs for a provider request.
+
+    Every adapter goes through here, so this is the single place that decides what the model is
+    allowed to see. Anything that is not a `user`/`assistant` string pair is dropped: no generation
+    IDs, timestamps, trace events, fencing state, latency or provider metadata can reach the model,
+    even if a caller passes a richer object by mistake.
+    """
+    if not history:
+        return []
+
+    turns: list[dict[str, str]] = []
+    for entry in history:
+        role = str(entry.get("role", "")).strip()
+        content = str(entry.get("content", "")).strip()
+        if role in ("user", "assistant") and content:
+            turns.append({"role": role, "content": content})
+    return turns
+
+
 class LLMConfigurationError(RuntimeError):
     """Provider explicitly selected but unusable. Never triggers a silent fallback."""
 
@@ -61,7 +84,7 @@ class LLMConfigurationError(RuntimeError):
 class LLM(Protocol):
     name: str
 
-    def respond(self, user_text: str) -> str: ...
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str: ...
 
 
 class StubLLM:
@@ -73,7 +96,7 @@ class StubLLM:
 
     name = "stub"
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
         if not user_text.strip():
             return "I did not catch that."
         return f"You said: {user_text.strip()} I do not have a language model configured yet."
@@ -92,14 +115,14 @@ class _OpenAICompatibleLLM:
         self.model = model
         self._client = client
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
+        messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(_prior_turns(history))
+        messages.append({"role": "user", "content": user_text})
         completion = self._client.chat.completions.create(
             model=self.model,
             max_tokens=MAX_OUTPUT_TOKENS,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text},
-            ],
+            messages=messages,
         )
         return (completion.choices[0].message.content or "").strip()
 
@@ -128,7 +151,7 @@ class AnthropicLLM:
         self.model = model
         self._client = anthropic.Anthropic(api_key=api_key, timeout=REQUEST_TIMEOUT_S)
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
         msg = self._client.messages.create(
             model=self.model,
             max_tokens=MAX_OUTPUT_TOKENS,
@@ -137,7 +160,10 @@ class AnthropicLLM:
             # its default rather than disabled -- disabling it on Opus 5 can leak reasoning into
             # the visible text, which would then be spoken aloud.
             output_config={"effort": "low"},
-            messages=[{"role": "user", "content": user_text}],
+            messages=[
+                *_prior_turns(history),
+                {"role": "user", "content": user_text},
+            ],
         )
         return "".join(b.text for b in msg.content if b.type == "text").strip()
 
@@ -151,12 +177,22 @@ class GeminiLLM:
         self._genai = genai
         self._client = genai.Client(api_key=api_key)
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
         from google.genai import types
+
+        # Gemini names the assistant role "model"; everything else is the same role/text pairs.
+        contents = [
+            types.Content(
+                role="model" if m["role"] == "assistant" else "user",
+                parts=[types.Part(text=m["content"])],
+            )
+            for m in _prior_turns(history)
+        ]
+        contents.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
 
         resp = self._client.models.generate_content(
             model=self.model,
-            contents=user_text,
+            contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 max_output_tokens=MAX_OUTPUT_TOKENS,

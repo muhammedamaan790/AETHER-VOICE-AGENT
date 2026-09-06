@@ -48,7 +48,7 @@ def load_wav_16k(path: str) -> np.ndarray:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--wav", required=True, help="16-bit PCM WAV of a spoken utterance")
-    ap.add_argument("--stt-model", default="tiny.en")
+    ap.add_argument("--stt-model", default="base.en")
     ap.add_argument("--trace-dir", default="traces")
     args = ap.parse_args()
 
