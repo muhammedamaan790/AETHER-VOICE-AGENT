@@ -12,5 +12,10 @@ av>=14.0              # MP3 decode for Rime responses (bundles FFmpeg; also a fa
 pytest>=8.0
 pytest-asyncio>=0.23
 
-# TODO(Day 1+): LLM provider SDK once chosen (MEMORY.md section 10).
-#   the real reasoning path in aether/llm.py currently expects `anthropic` if LLM_PROVIDER=anthropic
+# LLM provider SDKs. aether/llm.py imports ONLY the selected provider's SDK, lazily, so an
+# unused provider costs nothing at runtime -- but all four are listed here so any of them can be
+# selected without a reinstall. Selection is via LLM_PROVIDER (see .env.example).
+groq>=1.0             # LLM_PROVIDER=groq       (default provider when several keys are present)
+anthropic>=1.0        # LLM_PROVIDER=anthropic
+openai>=2.0           # LLM_PROVIDER=openai
+google-genai>=1.0     # LLM_PROVIDER=gemini
