@@ -207,6 +207,21 @@ Two task paths, one supervisor:
 
 Both return results tagged with the generation that requested them. Neither speaks directly.
 
+### Two rules for anything the tools return
+
+**Structured payloads travel out-of-band, never inside the spoken text stream.** A tool result is a
+Python object (`aether.tools.ToolResult`) handed to the supervisor; it is never serialised into the
+model's reply for the caller to parse back out. Systems that merge narration and structured output
+into one token stream have to latch the boundary mid-stream and stop speaking at the right token —
+a whole class of bug that does not exist if the two never share a channel. The model chooses which
+tool runs; it does not author the payload, and the payload never passes through the TTS path.
+
+**Optional enrichment is bounded by a deadline; the primary tool call is not.** If a future lookup
+is merely *helpful* — cached context, a hint, a secondary source — it is raced against a deadline
+and degrades to empty rather than delaying the turn. The primary tool call is never capped that
+way: a slow tool is the situation AETHER exists to handle, and the answer to it is interruption and
+continuity, not a timeout that hides the problem.
+
 ## 10. Stack and concurrency model
 
 Python 3.11+, chosen for audio-library availability and pytest.

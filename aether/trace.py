@@ -31,6 +31,42 @@ def now_ms() -> float:
     return (time.perf_counter() - _T0) * 1000.0
 
 
+REDACTED = "<redacted>"
+
+# Field names whose value is a credential. Matched on the KEY, never on the value: guessing which
+# strings look secret is unreliable, whereas a field called `api_key` is unambiguous.
+_SECRET_KEY_HINTS = ("api_key", "apikey", "secret", "token", "password", "authorization", "auth")
+
+
+def redact(value: Any) -> Any:
+    """Strip credentials out of anything on its way into the trace.
+
+    The trace is written to disk, read back by the evaluator, and quoted as evidence, so it is a
+    disclosure surface and has to be safe by construction rather than by discipline.
+
+    `repr=False` on a config field is not enough on its own: `Event.to_json` flattens the payload
+    with `asdict()`, which recursively expands nested dataclasses back into plain dicts and puts
+    every field -- including the ones excluded from `repr` -- into the JSON. Passing a whole
+    `RimeConfig` as an event field therefore wrote the live API key into `traces/*.jsonl` in
+    plaintext. This runs last, at the one point every event must pass through.
+
+    Structure is preserved: only the value is replaced, so a redacted trace stays valid JSONL and
+    the evaluator still sees that a field was present.
+    """
+    if isinstance(value, dict):
+        return {
+            k: (REDACTED if _is_secret_key(k) else redact(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [redact(v) for v in value]
+    return value
+
+
+def _is_secret_key(key: Any) -> bool:
+    return isinstance(key, str) and any(h in key.lower() for h in _SECRET_KEY_HINTS)
+
+
 @dataclass
 class Event:
     seq: int
@@ -44,7 +80,7 @@ class Event:
         d = asdict(self)
         payload = d.pop("fields")
         d.update(payload)  # flatten per-event fields alongside the envelope
-        return json.dumps(d, ensure_ascii=False, default=str)
+        return json.dumps(redact(d), ensure_ascii=False, default=str)
 
 
 class Trace:
