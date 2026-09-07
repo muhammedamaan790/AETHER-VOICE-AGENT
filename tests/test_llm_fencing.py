@@ -19,6 +19,7 @@ import threading
 import numpy as np
 import pytest
 
+from aether.audio.rime_ws import SpeakResult
 from aether.events import EventType, GenerationStatus
 from aether.spike import Day1Spike
 from aether.trace import Trace
@@ -52,15 +53,28 @@ class RecordingRime:
     """Stands in for the Rime client and records whether it was ever asked to speak."""
 
     name = "rime"
+    transport = "fake"
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self._raises = None
         self.config = type("cfg", (), {"model": "mistv2", "voice": "astra"})()
         self.last_latency_ms = 1.0
 
-    def synthesize(self, text, *, target_samplerate, turn_id=None, gen=None):
+    def speak(self, text, *, gate, gen, turn_id=None, is_valid=None):
         self.calls.append(text)
-        return np.zeros(target_samplerate // 10, dtype=np.int16)
+        if self._raises is not None:
+            raise self._raises
+        if is_valid is not None and not is_valid():
+            return SpeakResult(accepted=False, completed=False, reason="fenced_midstream")
+        pcm = np.zeros(gate.samplerate // 10, dtype=np.int16)
+        accepted = gate.enqueue(pcm, turn_id=turn_id, gen=gen)
+        return SpeakResult(
+            accepted=bool(accepted),
+            completed=bool(accepted),
+            samples=len(pcm) if accepted else 0,
+            reason="" if accepted else "gate_refused",
+        )
 
 
 @pytest.fixture
@@ -72,7 +86,7 @@ def spike(monkeypatch):
     monkeypatch.setattr("aether.spike.MicVAD", lambda *a, **k: _FakeMic())
     monkeypatch.setattr("aether.spike.WhisperSTT", lambda *a, **k: _FakeSTT(trace))
     monkeypatch.setattr("aether.spike.build_llm", lambda: InstantLLM())
-    monkeypatch.setattr("aether.spike.RimeTTS", lambda *a, **k: RecordingRime())
+    monkeypatch.setattr("aether.spike.build_tts", lambda *a, **k: RecordingRime())
 
     s = Day1Spike(trace)
     s.rime = RecordingRime()

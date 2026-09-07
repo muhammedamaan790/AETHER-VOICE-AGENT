@@ -19,6 +19,7 @@ callback.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 from collections.abc import Callable
@@ -31,6 +32,60 @@ from ..events import EventType
 from ..trace import Trace, now_ms
 
 
+class InputDeviceError(RuntimeError):
+    """A microphone was explicitly requested and cannot be used. Never silently substituted."""
+
+
+def resolve_input_device(device: int | None = None) -> int | None:
+    """Decide which microphone the pipeline records from.
+
+    Explicit argument wins, then `AETHER_INPUT_DEVICE`, then PortAudio's default (None).
+
+    An explicitly requested device is validated and raises on failure rather than falling back.
+    Falling back is exactly the failure mode this exists to prevent: the machine this was found on
+    has its default input on a headset mic that captures effectively silence (RMS 1.5e-05), so a
+    silent fallback looks identical to a broken VAD and costs an afternoon to diagnose.
+    """
+    if device is not None:
+        return _validate_input_device(device, source="argument")
+
+    raw = (os.environ.get("AETHER_INPUT_DEVICE") or "").strip()
+    if not raw:
+        return None                       # PortAudio default: unchanged behaviour
+
+    try:
+        index = int(raw)
+    except ValueError as exc:
+        raise InputDeviceError(
+            f"AETHER_INPUT_DEVICE={raw!r} is not an integer device index. "
+            "List devices with: python -c \"import sounddevice; print(sounddevice.query_devices())\""
+        ) from exc
+    return _validate_input_device(index, source="AETHER_INPUT_DEVICE")
+
+
+def _validate_input_device(index: int, *, source: str) -> int:
+    try:
+        info = sd.query_devices(index)
+    except Exception as exc:
+        raise InputDeviceError(f"{source} selected device {index}, which does not exist: {exc}") from exc
+    if int(info.get("max_input_channels", 0)) < 1:
+        raise InputDeviceError(
+            f"{source} selected device {index} ({info.get('name','?')}), "
+            "which has no input channels -- that is an output device."
+        )
+    return index
+
+
+def describe_device(index: int | None) -> str:
+    """`[2] Microphone Array (...) @ 44100 Hz` -- the resolved endpoint, not the env var."""
+    try:
+        resolved = index if index is not None else sd.default.device[0]
+        info = sd.query_devices(resolved)
+        return f"[{resolved}] {info['name']} @ {int(info['default_samplerate'])} Hz"
+    except Exception:
+        return f"[{index}] (unavailable)"
+
+
 class MicVAD:
     def __init__(
         self,
@@ -41,6 +96,8 @@ class MicVAD:
         onset_frames: int = 2,        # 40 ms of voiced audio confirms an onset
         offset_frames: int = 25,      # 500 ms of silence ends an utterance
         preroll_frames: int = 15,     # 300 ms kept before onset so STT is not clipped
+        min_speech_ms: float = 250.0, # shorter than this is a blip, not an utterance
+        noise_snr_margin: float = 3.0,# voiced audio must be this much louder than ambient
         device: int | None = None,
     ):
         if frame_ms not in (10, 20, 30):
@@ -52,8 +109,14 @@ class MicVAD:
         self.onset_frames = onset_frames
         self.offset_frames = offset_frames
         self.preroll_frames = preroll_frames
+        self.min_speech_ms = min_speech_ms
+        self.noise_snr_margin = noise_snr_margin
 
         self._vad = webrtcvad.Vad(aggressiveness)
+        # Resolve BEFORE opening, and keep it: `self.device` is the index actually handed to
+        # PortAudio, which is what startup reports.
+        self.device = resolve_input_device(device)
+        device = self.device
         self._stream = sd.InputStream(
             samplerate=samplerate,
             channels=1,
@@ -73,6 +136,13 @@ class MicVAD:
         self._preroll: list[np.ndarray] = []
         self._turn_id: int | None = None
         self._gen: str | None = None
+
+        # Rolling ambient-noise estimate, updated only from unvoiced frames while idle. The
+        # rejection test below is relative to this, so a quiet room and a noisy warehouse get
+        # different bars without anyone tuning an absolute threshold.
+        self._ambient_rms: float | None = None
+        self._voiced_rms_sum = 0.0
+        self._voiced_rms_n = 0
 
         # hand-off
         self.utterances: queue.Queue[tuple[np.ndarray, float]] = queue.Queue()
@@ -123,16 +193,24 @@ class MicVAD:
         except Exception:
             return
 
+        rms = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+
         if voiced:
             if self._voiced_run == 0:
                 self._first_voiced_t = now_ms()
             self._voiced_run += 1
             self._silence_run = 0
+            self._voiced_rms_sum += rms
+            self._voiced_rms_n += 1
         else:
             self._silence_run += 1
             if not self._speech_active:
                 self._voiced_run = 0
                 self._first_voiced_t = None
+                # Track the room only while nobody is talking, so speech never inflates the floor.
+                self._ambient_rms = (
+                    rms if self._ambient_rms is None else 0.95 * self._ambient_rms + 0.05 * rms
+                )
 
         if self._speech_active:
             self._utterance.append(frame)
@@ -166,15 +244,54 @@ class MicVAD:
         if self._speech_active and self._silence_run >= self.offset_frames:
             audio = np.concatenate(self._utterance) if self._utterance else np.zeros(0, np.int16)
             onset_t = self._first_voiced_t or now_ms()
+            voiced_ms = self._voiced_rms_n * self.frame_ms
+            speech_rms = (
+                self._voiced_rms_sum / self._voiced_rms_n if self._voiced_rms_n else 0.0
+            )
+            reject = self._rejection_reason(voiced_ms, speech_rms)
+
             self.trace.emit(
                 EventType.SPEECH_ENDED,
                 turn_id=self._turn_id,
                 gen=self._gen,
                 duration_ms=round(len(audio) / self.samplerate * 1000.0, 1),
+                voiced_ms=round(voiced_ms, 1),
+                speech_rms=round(speech_rms, 1),
+                ambient_rms=round(self._ambient_rms, 1) if self._ambient_rms is not None else None,
+                rejected=reject or None,
             )
             self._speech_active = False
             self._voiced_run = 0
             self._silence_run = 0
             self._first_voiced_t = None
             self._utterance = []
-            self.utterances.put((audio, onset_t))
+            self._voiced_rms_sum = 0.0
+            self._voiced_rms_n = 0
+            if reject is None:
+                self.utterances.put((audio, onset_t))
+
+    def _rejection_reason(self, voiced_ms: float, speech_rms: float) -> str | None:
+        """Why this utterance is not worth transcribing, or None to accept it.
+
+        Two conservative tests, both grounded in observed traces:
+
+        `too_short` -- webrtcvad confirms an onset after 40 ms, which is short enough that a cough
+        or a door becomes an "utterance". Real traces show these reaching STT as `'You'`, `'Oh'`
+        and `''`; base.en genuinely returns `'You'` for digital silence, so the blip does not
+        just waste 4-9 s of STT, it invents words that were never said.
+
+        `below_noise_floor` -- someone talking across the room is speech, so webrtcvad is right to
+        flag it; it is simply not speech aimed at this microphone. Distance shows up as level, so
+        the test is relative to the measured room, not an absolute number that would need retuning
+        per environment.
+
+        Deliberately conservative: when ambient has never been measured, accept. Silence is only
+        preferable to a wrong answer once we are confident (RULES.md R2.3), and dropping real
+        close-range speech is the worse failure here.
+        """
+        if voiced_ms < self.min_speech_ms:
+            return "too_short"
+        if self._ambient_rms is not None and self._ambient_rms > 0:
+            if speech_rms < self._ambient_rms * self.noise_snr_margin:
+                return "below_noise_floor"
+        return None

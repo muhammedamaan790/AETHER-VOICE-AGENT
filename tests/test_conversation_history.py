@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from aether.conversation import ConversationHistory
+from aether.audio.rime_ws import SpeakResult
 from aether.events import EventType
 from aether.llm import _prior_turns
 from aether.spike import Day1Spike
@@ -60,15 +61,28 @@ class SlowLLM:
 
 class RecordingRime:
     name = "rime"
+    transport = "fake"
 
     def __init__(self):
         self.calls: list[str] = []
+        self._raises = None
         self.config = type("cfg", (), {"model": "mistv2", "voice": "astra"})()
         self.last_latency_ms = 1.0
 
-    def synthesize(self, text, *, target_samplerate, turn_id=None, gen=None):
+    def speak(self, text, *, gate, gen, turn_id=None, is_valid=None):
         self.calls.append(text)
-        return np.zeros(target_samplerate // 10, dtype=np.int16)
+        if self._raises is not None:
+            raise self._raises
+        if is_valid is not None and not is_valid():
+            return SpeakResult(accepted=False, completed=False, reason="fenced_midstream")
+        pcm = np.zeros(gate.samplerate // 10, dtype=np.int16)
+        accepted = gate.enqueue(pcm, turn_id=turn_id, gen=gen)
+        return SpeakResult(
+            accepted=bool(accepted),
+            completed=bool(accepted),
+            samples=len(pcm) if accepted else 0,
+            reason="" if accepted else "gate_refused",
+        )
 
 
 class _FakeGate:
@@ -125,7 +139,7 @@ def make_session(monkeypatch, transcripts, llm):
     monkeypatch.setattr("aether.spike.MicVAD", lambda *a, **k: _FakeMic())
     monkeypatch.setattr("aether.spike.WhisperSTT", lambda *a, **k: _FakeSTT(trace, transcripts))
     monkeypatch.setattr("aether.spike.build_llm", lambda: llm)
-    monkeypatch.setattr("aether.spike.RimeTTS", lambda *a, **k: RecordingRime())
+    monkeypatch.setattr("aether.spike.build_tts", lambda *a, **k: RecordingRime())
     s = Day1Spike(trace)
     s.rime = RecordingRime()
     return s, trace
@@ -227,13 +241,13 @@ def test_fenced_after_llm_before_tts_is_not_committed(monkeypatch):
     llm = RecordingLLM(["An answer that was never heard."])
     s, trace = make_session(monkeypatch, ["a question", "next"], llm)
 
-    real_synthesize = s.rime.synthesize
+    real_speak = s.rime.speak
 
-    def fence_then_synthesize(text, **kw):
+    def fence_then_speak(text, **kw):
         s.gens.mark_fenced(s.gens.active.id)   # interruption lands during synthesis
-        return real_synthesize(text, **kw)
+        return real_speak(text, **kw)
 
-    s.rime.synthesize = fence_then_synthesize
+    s.rime.speak = fence_then_speak
     s.handle_utterance(AUDIO, 0.0)
 
     assert s.history.messages() == []

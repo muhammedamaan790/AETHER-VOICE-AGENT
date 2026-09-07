@@ -162,6 +162,53 @@ Conditions and exclusions:
   policy in `aether/spike.py`. It is a policy number, not a system limit. The system's *reaction*
   time is the duck figure. Day 3's classifier replaces the duration proxy.
 
+**Run `traces/run-20260907T070314Z.jsonl`** — `scripts/bench_turn.py --repeats 3`, the first
+measurement of the **assembled pipeline** rather than of individual components. Same
+`Day1Spike.handle_utterance` the live loop runs, real Gemini, real Rime `/ws3`, real AudioGate.
+n=3, medians:
+
+| Stage | Median |
+|---|---|
+| `stt_ms` (base.en, beam 5) | 888 |
+| `llm_ttft_ms` | 1840 |
+| `tts_ms` / Rime first audio | 552 |
+| `turn_latency_ms` | **3488** |
+
+Conditions and exclusions:
+- **Headless.** Audio is fed from a WAV, so there is no microphone and no VAD. `SpeechEnded` is
+  stamped at hand-off, which makes `stt_ms` real transcription time but means `turn_latency_ms`
+  **excludes VAD endpointing** (~620 ms observed, below). A live turn is that much slower.
+- 3/3 turns spoke. `llm_transport_reused=True`, `llm_raw_chunks=2`.
+- This is the first run in the project where `llm_ttft_ms` and `llm_first_sentence_ms` were
+  populated at all — the sentence-streaming telemetry existed but no harness had ever driven the
+  path, so all 45 earlier traces have those fields empty.
+
+**Model selection, measured 2026-09-07** (3 calls each, same prompt, through `respond_stream`):
+
+| Model | TTFT | Total | Errors |
+|---|---|---|---|
+| `gemini-3.8-flash` (previous default) | n/a | 13809 ms | **2/3 ServerError** |
+| `gemini-3.5-flash-lite` | 978 ms | 978 ms | 0/3 |
+| **`gemini-flash-lite-latest`** (chosen) | **800 ms** | 800 ms | 0/3 |
+| `gemini-2.5-flash-lite` | — | — | 3/3 ClientError |
+| `gemini-2.5-flash` | — | — | 3/3 ClientError |
+
+A full-pipeline turn on `gemini-3.8-flash` recorded `llm_ttft_ms = 23112` and the next turn died
+with `ServerError`. It was not slow, it was failing the majority of calls.
+
+**STT trade-off, measured 2026-09-07** on `tests/fixtures_stt_probe.wav` (3.13 s, n=3 each). Every
+configuration returned the **identical, correct** transcript:
+
+| Model | beam 1 | beam 5 |
+|---|---|---|
+| `tiny.en` | 415 ms | 571 ms |
+| `base.en` (current) | 900 ms | **1058 ms** |
+| `small.en` | 2929 ms | 3104 ms |
+
+**Not acted on, deliberately.** The fixture is clean synthetic speech — the easiest possible case —
+so it cannot justify lowering accuracy settings that exist for noisy live audio. Up to ~640 ms is
+available here, but only a noisy real-mic evaluation can say whether it is safe to take.
+
 **Other measured values** (single observations, not benchmarks):
 - STT: `tiny.en` transcribed a 3.13 s SAPI-generated fixture correctly in **423–430 ms** on CPU.
   (Measured on `tiny.en` with `beam_size=1`. The default is now `base.en` with `beam_size=5`,
@@ -220,6 +267,19 @@ Still `<from_run>` and must not be quoted:
   `False` on refusal, and callers must not emit `ResponseSpoken` when it does.
 - **Fixed Day 1:** a stop no longer leaves a duck/resume pending, which used to emit `AudioDucked`
   *after* `AudioStopped` and make traces read as though audio was ducked after being cut.
+- **Fixed 2026-09-07 — every non-Gemini provider failed 100% of turns.** `RetryingLLM` defined
+  `respond_stream` unconditionally, so the duck-typed `supports_streaming()` answered "yes" for
+  adapters that cannot stream. The pipeline then committed to the streaming path and the wrapper
+  raised `AttributeError` on the first token: every groq / anthropic / openai turn died as
+  `llm_stream_error`. The wrapper now binds `respond_stream` per instance, only when the adapter
+  underneath really streams, so the capability check is honest by construction. Found by running
+  the assembled pipeline for the first time — no unit test caught it, because each half was
+  individually correct.
+- **Fixed 2026-09-07 — `ResponseSpoken.first_audio_ms` meant two different things.** On the
+  blocking path it carried Rime's send → first-chunk *duration*; on the streaming path it carried
+  `timing.first_audio`, an *absolute* monotonic mark. Traces therefore showed "first audio" rising
+  monotonically across a session (7586 → 10869 → 15761 ms). Both paths now report the duration.
+  Any `first_audio_ms` read from a streaming-path trace written before this date is wrong.
 
 ---
 
@@ -272,7 +332,7 @@ Not doable by an agent. Tracked in [RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 2.
 | VAD implementation | **Decided Day 1** — WebRTC VAD (`webrtcvad-wheels`), 20 ms frames, aggressiveness 2 |
 | Audio I/O library | **Decided Day 1** — `sounddevice`/PortAudio, WASAPI preferred on Windows |
 | Trace format on disk | **Decided Day 1** — JSONL, one event per line |
-| LLM provider for the reasoning/knowledge path | **STILL OPEN** — no credential present; stub in use |
+| LLM provider for the reasoning/knowledge path | **Decided 2026-09-07 — `gemini`, model `gemini-flash-lite-latest`**, chosen by measurement (§5). Gemini is currently the *only* working provider: the Groq key does not authenticate and its previous default model `llama-3.3-70b-versatile` is decommissioned (404) |
 | Observability panel form (terminal vs minimal web) | TODO — Day 6; keep minimal per scope rule |
 | Meaningful-interruption threshold (300 ms) | Placeholder — replaced by the Day-3 classifier |
 
