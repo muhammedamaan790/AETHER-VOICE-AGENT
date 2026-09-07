@@ -13,7 +13,7 @@ Configured via environment variables, never hardcoded. See [.env.example](.env.e
 | Setting | Env var | Value |
 |---|---|---|
 | Endpoint | `RIME_API_URL` | `https://users.rime.ai/v1/rime-tts` (VERIFIED) |
-| Model | `RIME_MODEL` | `mistv2` (VERIFIED) |
+| Model | `RIME_MODEL` | **`mistv3`** — measured working, **NOT yet human-verified against the catalog** (see below). `mistv2` remains VERIFIED and is the fallback |
 | Voice | `RIME_VOICE` | `astra` (VERIFIED) |
 | Language | `RIME_LANGUAGE` | `eng` (VERIFIED) |
 | API key | `RIME_API_KEY` | secret — never committed, never shown |
@@ -32,6 +32,68 @@ response that played real audio, and `aether/audio/rime.py` now implements exact
 
 Nothing else is sent. The four non-secret values remain configuration, not literals (R9.4/R9.5).
 There is still no fallback TTS: unconfigured means silence, not substitution.
+
+### Part 1a — model change to `mistv3` (2026-09-07)
+
+Switched from `mistv2` after measuring both through this project's own `/ws3` client, voice
+`astra`, 4 sentences each, warm connection:
+
+| Model | Cold start | Warm first-audio | Audio produced | Speaking rate | Errors |
+|---|---|---|---|---|---|
+| `mistv2` | 2649 ms | 488 ms | 8.05 s | 17.2 chars/s | 0/4 |
+| **`mistv3`** | **1438 ms** | **308 ms** | 10.72 s | 12.9 chars/s | 0/4 |
+| `coda` | 3774 ms | 312 ms | 10.84 s | 12.7 chars/s | 0/4 |
+
+`mistv3` is **180 ms faster to first audio** (37%), which is the quantity `turn_latency_ms`
+measures. The trade is a **33% slower speaking rate** — it takes longer to finish the same text.
+That trade favours AETHER because replies are capped at one short sentence and the demo is about
+interrupting rather than waiting for the agent to finish.
+
+> **⚠ Outstanding human verification (R9.5).** These numbers prove `mistv3` *responds and produces
+> audio*. They do **not** establish that it is a supported or GA model in Rime's catalog — it may
+> be preview or unannounced. A human must confirm it in Rime's live catalog before it can carry
+> the same VERIFIED status `mistv2` has. Until then `mistv2` stays the fallback and is one line
+> away: `RIME_MODEL=mistv2`.
+>
+> Not assessed at all: **audio quality**. Duration was measured; naturalness, clarity and
+> pronunciation were not, and cannot be from sample counts. That judgement needs a human listening.
+
+---
+
+### Part 1b — WebSocket `/ws3` streaming (the default judged transport)
+
+Added 2026-09-06/07. The HTTP contract above still exists and is reachable with
+`RIME_TRANSPORT=http`, but **the default path is now `/ws3`**, because a blocking MP3 request
+cannot start speaking until the whole utterance is synthesised, and cannot stop mid-utterance when
+a generation is fenced. Both transports are Rime, so R9.4 is unaffected — this is a transport
+choice, not a fallback provider.
+
+    wss://users-ws.rime.ai/ws3?speaker=&modelId=&audioFormat=pcm&samplingRate=&lang=
+    header:    Authorization: Bearer <RIME_API_KEY>      (secret; .env only, never committed)
+    send:      {"text": "..."}
+    interrupt: {"operation": "clear"}
+    recv:      {"type": "chunk", "data": <base64>} | {"type": "timestamps"}
+             | {"type": "done"} | {"type": "error"}
+
+`audioFormat=pcm` at the AudioGate's own sample rate means no MP3 decode and no resample — bytes go
+straight to the speaker.
+
+**Executed against the live API.** `scripts/bench_turn.py` drove three end-to-end turns through
+this transport; all three spoke, and the traces carry `provider=rime`, `transport=ws3`,
+`model=mistv2`, `llm_transport_reused=true`.
+
+Two behaviours are measured, not assumed:
+
+- **`{"operation": "eos"}` is deliberately never sent.** Measured 2026-09-06: sending it makes the
+  server close the connection (1005), which forced a fresh handshake every turn. Without it the
+  utterance still synthesises and still ends with `done`.
+- **Connection reuse matters.** Handshake 920 ms vs synthesis 520 ms on a cold socket; reusing the
+  cached connection took a turn's TTS from 2849 ms to 389 ms.
+
+> **Still unverified (human):** whether `mistv2` on `/ws3` accepts `speedAlpha`, `reduceLatency`,
+> or a `time_scale_factor` equivalent. Field names were seen in two third-party repositories but
+> **not** in Rime's documentation, so none is sent. R9.5: catalog values are verified by a human or
+> not used.
 
 > **Still outstanding (human):** organizer preflight, account tier / rate limits, and the Day-6
 > re-check. Those are separate from the contract verification above and have NOT been done.

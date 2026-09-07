@@ -91,9 +91,30 @@ Without Rime credentials the agent runs but cannot speak, and says so. There is 
 
 ## Status
 
-Day 1 scaffolding. No component is implemented yet. **No measurement in this repository is real
-until it carries a `<from_run>` value.** See [MEMORY.md](MEMORY.md) for the authoritative status of
-what is built, what is measured, and what is deferred.
+**The realtime voice path is built and tested; the continuity engine on top of it is not.**
+358 tests pass, 9 are skipped — those 9 are the pre-registered acceptance scenarios, which stay
+skipped until the classifier and supervisor exist.
+
+| Built and tested | Not started |
+|---|---|
+| Always-open mic, WebRTC VAD, noise/duration rejection | Six-class classifier (`aether/classify/`) |
+| Local STT (faster-whisper `base.en`) | Supervisor transitions (`aether/supervisor/`) |
+| Multi-provider LLM with per-sentence streaming | Evaluator (`aether/evaluator/`) |
+| Rime TTS over `/ws3`, persistent connection | Result-side Output Gate, salvage, unsafe mode |
+| AudioGate with generation-tagged audio | Acceptance scenarios A–H (specs exist, all skipped) |
+| Generation registry + barge-in coordinator | |
+| Warehouse fixture + 9 structured tools | |
+| Append-only JSONL trace, per-stage telemetry | |
+| Observation-only web UI | |
+
+Two things are deliberately **not** claimed. The assembled loop has never been run with a live
+microphone and a human — only headless, from a WAV, via `scripts/bench_turn.py`. And the warehouse
+tools are complete but not yet wired into the voice loop, because routing an utterance to a tool is
+classifier work.
+
+**No measurement in this repository is real until it carries a `<from_run>` value.** See
+[MEMORY.md](MEMORY.md) for the authoritative status of what is built, what is measured, and what is
+deferred.
 
 ## Documents
 

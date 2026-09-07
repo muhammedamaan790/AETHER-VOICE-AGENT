@@ -13,14 +13,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] Acceptance tests defined **before** the demo (see [RIME_EVIDENCE.md](RIME_EVIDENCE.md))
 - [x] Architecture and canonical event model
 - [~] Rime eligibility / catalog / preflight human checklist — contract + catalog values verified by a human; organizer preflight and rate limits still outstanding
-- [~] Basic mic → STT → LLM → Rime loop — VAD/STT/**Rime all working end to end offline**; LLM is still a stub (no credential); not yet run with a live mic
+- [x] Basic mic → STT → LLM → Rime loop — VAD/STT/LLM/Rime all working end to end; run headless via `scripts/bench_turn.py` (3/3 turns spoke). **Not yet run with a live mic**
 - [x] Latency measurement harness — `scripts/measure_audio_kill.py` (synthetic + mic modes)
 - [x] Minimal VAD / ducking spike — WebRTC VAD, immediate duck, duration-confirmed stop
 
 **Checkpoint status:** latency instrumentation exists and produced real numbers. **Rime is
-actually used** — the verified contract returns real MP3 audio, which is decoded and played, with
-`provider=rime` in the trace. Remaining gaps: the loop has not been run end-to-end with a live
-microphone, and the LLM is still a stub pending a provider choice.
+actually used** — `/ws3` streaming is the default transport and `provider=rime` appears in the
+trace. The LLM path is live (Gemini). Remaining gap: the loop has not been run end-to-end with a
+**live microphone and a human**; every measurement so far is headless.
 
 First audio-kill measurement happens as soon as the VAD path exists. **Do not fake a Day-1 latency
 number.**
@@ -29,13 +29,13 @@ number.**
 
 ## Day 2 — Realtime loop + warehouse data
 
-- [ ] VAD
-- [ ] Immediate audio duck on speech onset
-- [ ] Full stop on confirmed meaningful interruption
-- [ ] STT integration
-- [ ] Deterministic synthetic warehouse dataset (smallest useful fixture)
-- [ ] Tool interface with injectable delay
-- [ ] Typed / manual interruption tests, before relying on the classifier
+- [x] VAD
+- [x] Immediate audio duck on speech onset
+- [x] Full stop on confirmed meaningful interruption — duration proxy (300 ms), pending the classifier
+- [x] STT integration
+- [x] Deterministic synthetic warehouse dataset (smallest useful fixture) — `aether/warehouse/`
+- [x] Tool interface with injectable delay — `aether/tools/`, fence checked before the tool body runs
+- [x] Typed / manual interruption tests, before relying on the classifier — `tests/test_interruption_recovery.py`, `tests/test_warehouse_tools.py`
 
 Typed interruption injection comes first deliberately: the supervisor must be testable without the
 classifier being correct.
@@ -57,11 +57,11 @@ classifier being correct.
 
 ## Day 4 — Fencing + tools + evidence engine
 
-- [ ] Generation IDs
-- [ ] Generation validity checks
-- [ ] Fencing
-- [ ] Stale-result rejection
-- [ ] `ResultDiscarded`
+- [x] Generation IDs
+- [x] Generation validity checks — `GenerationRegistry.is_active`, consulted by every stage
+- [x] Fencing — audio-side and tool-side; pulled forward from Day 4 to fix real defects
+- [x] Stale-result rejection — LLM, TTS, audio and tool paths
+- [x] `ResultDiscarded`
 - [ ] `ResultLeaked`
 - [ ] `ResultSalvaged`
 - [ ] `CancellationResolved`

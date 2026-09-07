@@ -97,14 +97,58 @@
 
   #conn { font-size: 11px; color: var(--muted); margin-top: 10px; }
   #conn.bad { color: var(--stale); }
+
+/* Push-to-talk. Deliberately the largest thing on the page: in a demo it has to be findable
+   without looking, and it is the only control the browser has. */
+#ptt-bar { display:flex; flex-direction:column; align-items:center; gap:10px;
+           padding:20px 16px 8px; }
+#ptt { width:min(680px, 92vw); min-height:104px; cursor:pointer;
+       border:2px solid #e0533d; border-radius:16px;
+       background:linear-gradient(180deg,#f2604a,#d8412c); color:#fff;
+       display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+       font: inherit; letter-spacing:.14em;
+       box-shadow:0 8px 26px rgba(216,65,44,.30); transition:transform .06s ease, filter .12s ease; }
+#ptt:hover { filter:brightness(1.06); }
+#ptt:active, #ptt.pressed { transform:translateY(2px); filter:brightness(.94); }
+#ptt:focus-visible { outline:3px solid #fff; outline-offset:3px; }
+.ptt-main { font-size:30px; font-weight:800; }
+.ptt-sub  { font-size:12px; letter-spacing:.06em; opacity:.92; text-transform:none; }
+#ptt-state { font-size:12px; letter-spacing:.12em; text-transform:uppercase; opacity:.75; }
+#ptt-state.live { color:#e0533d; font-weight:700; opacity:1; }
+
+/* Standby: deliberately smaller than INTERRUPT. Different job, different weight -- one stops the
+   agent talking, the other stops the mic listening, and they must not look interchangeable. */
+#standby { display:flex; align-items:center; gap:9px; cursor:pointer;
+           padding:9px 18px; border-radius:999px; font: inherit; font-size:12px;
+           letter-spacing:.14em; font-weight:700;
+           border:1px solid rgba(128,128,128,.45); background:transparent; color:inherit;
+           opacity:.85; transition:opacity .12s ease, border-color .12s ease; }
+#standby:hover { opacity:1; }
+#standby:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
+#standby-dot { width:9px; height:9px; border-radius:50%; background:#e0533d;
+               box-shadow:0 0 0 4px rgba(224,83,61,.18); }
+#standby[aria-pressed="true"] { border-color:rgba(128,128,128,.8); opacity:.6; }
+#standby[aria-pressed="true"] #standby-dot { background:#8a8a8a; box-shadow:none; }
 </style>
 </head>
 <body data-phase="listening">
 
 <header>
   <h1>AETHER</h1>
-  <span class="sub">live engine view &middot; observation only</span>
+  <span class="sub">live engine view &middot; push to talk</span>
 </header>
+
+<div id="ptt-bar">
+  <button id="ptt" type="button" aria-label="Interrupt the agent and start listening">
+    <span class="ptt-main">INTERRUPT</span>
+    <span class="ptt-sub">stop the agent &amp; speak &middot; or press SPACE</span>
+  </button>
+  <button id="standby" type="button" aria-pressed="false"
+          aria-label="Microphone standby: stop listening without stopping the agent">
+    <span id="standby-dot"></span><span id="standby-label">MIC LIVE</span>
+  </button>
+  <div id="ptt-state">listening</div>
+</div>
 
 <div class="grid">
   <section class="card">
@@ -286,10 +330,25 @@ function renderTimeline(steps) {
   });
 }
 
+// The mic indicator is driven by the engine's REAL listening state, never by what the page
+// assumed after a click -- a control that lies about whether you are being heard is worse than
+// no control at all.
+function renderMic(listening) {
+  if (listening === undefined) return;
+  const btn = document.getElementById("standby");
+  const state = document.getElementById("ptt-state");
+  btn.setAttribute("aria-pressed", listening ? "false" : "true");
+  document.getElementById("standby-label").textContent = listening ? "MIC LIVE" : "MIC STANDBY";
+  state.textContent = listening ? "listening" : "standby — not listening";
+  state.classList.toggle("live", Boolean(listening));
+}
+
 function onState(s) {
   document.body.dataset.phase = s.phase || "listening";
   stateTextEl.textContent = PHASE_LABEL[s.phase] || s.phase || "—";
   stateNoteEl.textContent = s.turn_id ? `turn ${s.turn_id}` : "";
+
+  renderMic(s.listening);
 
   setText("mGen", s.generation);
   setText("mPrev", s.previous_generation);
@@ -323,6 +382,42 @@ function connect() {
     setTimeout(connect, 1000);
   };
   ws.onerror = () => ws.close();
+  // --- push-to-talk -----------------------------------------------------------------
+  // One message, one action. The page cannot fence, enqueue or steer anything else; the bridge
+  // accepts exactly {"action":"interrupt"} and ignores everything else.
+  const pttBtn = document.getElementById('ptt');
+  const pttState = document.getElementById('ptt-state');
+
+  function interrupt() {
+    if (ws.readyState !== WebSocket.OPEN) { pttState.textContent = 'not connected'; return; }
+    ws.send(JSON.stringify({ action: 'interrupt' }));
+    pttBtn.classList.add('pressed');
+    setTimeout(() => pttBtn.classList.remove('pressed'), 140);
+    pttState.textContent = 'listening — speak now';
+    pttState.classList.add('live');
+    // The authoritative value arrives with the next state frame; this is only optimistic echo.
+  }
+
+  pttBtn.addEventListener('click', interrupt);
+
+  // --- standby -----------------------------------------------------------------------
+  // Separate control, separate meaning: this mutes the MIC and fences nothing. The label is
+  // driven by the engine's real mic state below, never by what we optimistically assumed here.
+  const standbyBtn = document.getElementById('standby');
+  standbyBtn.addEventListener('click', () => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ action: 'standby' }));
+  });
+
+  // Space is the hands-free equivalent; ignored while typing so it cannot fire by accident.
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || e.repeat) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    e.preventDefault();
+    interrupt();
+  });
+
   ws.onmessage = (m) => {
     let msg;
     try { msg = JSON.parse(m.data); } catch { return; }

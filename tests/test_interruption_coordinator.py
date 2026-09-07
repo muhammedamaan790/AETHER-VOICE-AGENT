@@ -114,7 +114,9 @@ def test_the_audio_thread_callbacks_emit_no_trace_events(rig):
     barge.on_voiced_progress(MEANINGFUL)
 
     assert len(trace.events) == before, "no event may be emitted from the audio thread"
-    assert barge.drain_fenced() == [gen.id], "it is deferred to the main thread instead"
+    assert barge.drain_fenced() == [(gen.id, "voiced_duration_confirmed")], (
+        "it is deferred to the main thread instead, and carries WHY it was fenced"
+    )
 
 
 def test_drain_fenced_is_emptied_by_reading(rig):
@@ -122,7 +124,7 @@ def test_drain_fenced_is_emptied_by_reading(rig):
     barge.begin_turn(turn_id=1)
     barge.fence_now(reason="test")
 
-    assert barge.drain_fenced() == ["G1"]
+    assert barge.drain_fenced() == [("G1", "test")], "the reason given to fence_now travels with it"
     assert barge.drain_fenced() == [], "a fence is reported once, not on every turn"
 
 
@@ -131,7 +133,9 @@ def test_rapid_consecutive_interruptions_are_each_recorded(rig):
     barge.begin_turn(turn_id=1); barge.fence_now(reason="one"); barge.end_turn()
     barge.begin_turn(turn_id=2); barge.fence_now(reason="two"); barge.end_turn()
 
-    assert barge.drain_fenced() == ["G1", "G2"], "neither may overwrite the other"
+    assert barge.drain_fenced() == [("G1", "one"), ("G2", "two")], (
+        "neither may overwrite the other, and each keeps its own reason"
+    )
 
 
 # --- arming rules ----------------------------------------------------------------------------
@@ -184,7 +188,9 @@ def test_the_fence_is_applied_once_per_barge_in(rig):
     for ms in (MEANINGFUL, MEANINGFUL + 100, MEANINGFUL + 900):
         barge.on_voiced_progress(ms)
 
-    assert barge.drain_fenced() == [gen.id], "continued speech must not fence repeatedly"
+    assert barge.drain_fenced() == [(gen.id, "voiced_duration_confirmed")], (
+        "continued speech must not fence repeatedly"
+    )
 
 
 def test_end_turn_disarms_so_a_finished_turn_is_not_fenced_later(rig):

@@ -138,7 +138,19 @@ class WebBridge:
     through, and so it can be tested without an engine.
     """
 
-    def __init__(self, phase_source=None, http_port: int = 8760, ws_port: int = 8761):
+    def __init__(self, phase_source=None, http_port: int = 8760, ws_port: int = 8761,
+                 on_interrupt=None, on_standby=None, listening_source=None):
+        # The single permitted write. A zero-argument callable, injected rather than reached for,
+        # so the bridge cannot widen its own access later without this signature changing.
+        self._on_interrupt = on_interrupt
+        # Second, and still injected rather than reached for. Standby mutes the microphone; it is
+        # NOT a fence and touches no generation. Kept separate from `on_interrupt` so the bridge
+        # cannot conflate "stop talking" with "stop listening" -- the exact conflation that made
+        # push-to-talk require a press before the user could speak at all.
+        self._on_standby = on_standby
+        # Read-only, like phase: the UI must show whether the mic is ACTUALLY open, never just
+        # what it optimistically assumed after a click.
+        self._listening_source = listening_source
         self.state = UiState()
         self.http_port = http_port
         self.ws_port = ws_port
@@ -212,13 +224,51 @@ class WebBridge:
         try:
             # A browser that connects mid-session must not see an empty screen.
             connection.send(json.dumps({"kind": "state", **self.current_state()}))
-            for _ in connection:
-                pass          # observation-only: inbound messages are ignored in this pass
+            for raw in connection:
+                self._handle_inbound(raw)
         except Exception:
             pass
         finally:
             with self._clients_lock:
                 self._clients.discard(connection)
+
+    def _handle_inbound(self, raw) -> None:
+        """The browser's only writes into the pipeline: interrupt, and standby.
+
+        The bridge was observation-only, and these are deliberate, narrow exceptions rather than
+        the start of a control API. Exactly TWO actions are accepted -- `interrupt` (fence the
+        active task) and `standby` (mute the mic) -- and anything else is ignored without
+        complaint, because an unrecognised message from a page someone left open must never become
+        a pipeline action.
+
+        They are separate on purpose. "Stop talking" and "stop listening" are independent
+        intentions, and a single control that did both would recreate the bug where the user had
+        to press something before the agent could hear them at all.
+
+        What they can reach is equally narrow. Both are injected callables, so the bridge still
+        holds no reference to the registry, the gate or the coordinator, and still cannot enqueue
+        audio, allocate a generation or drive the gate directly. It can ask for a fence or a mute,
+        and that is all. The structural guard in tests/test_web_bridge.py pins exactly that.
+
+        Runs on the websocket thread, never on a realtime audio thread.
+        """
+        try:
+            message = json.loads(raw)
+        except (TypeError, ValueError):
+            return
+        if not isinstance(message, dict):
+            return
+
+        handler = {"interrupt": self._on_interrupt, "standby": self._on_standby}.get(
+            message.get("action")
+        )
+        if handler is None:
+            return                      # unknown action, or no callback wired: ignore silently
+        try:
+            handler()
+        except Exception:
+            # A failing control must not kill the socket loop or the voice session.
+            pass
 
     def _pump(self) -> None:
         """Drain the queue, serialise, broadcast. The only thread that touches sockets."""
@@ -241,6 +291,11 @@ class WebBridge:
             try:
                 phase = self._phase_source()
                 snap["phase"] = getattr(phase, "value", phase)
+            except Exception:
+                pass
+        if self._listening_source is not None:
+            try:
+                snap["listening"] = bool(self._listening_source())
             except Exception:
                 pass
         snap["dropped_events"] = self.dropped_events

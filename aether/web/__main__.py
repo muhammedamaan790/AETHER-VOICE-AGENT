@@ -6,8 +6,9 @@ The engine is the SAME `Day1Spike` the CLI runs -- constructed once, run on a ba
 Nothing is duplicated and nothing is re-implemented; the browser subscribes to the trace that the
 run already produces. `python -m aether.spike` is untouched and keeps working exactly as before.
 
-Observation only in this pass: the browser cannot start, stop or steer the engine. The microphone
-and speaker belong to this process, so speak to this machine and watch the page follow.
+The browser has exactly ONE control: interrupt. It cannot start, stop or otherwise steer the
+engine, and it never touches audio -- the microphone and speaker belong to this process. In
+push-to-talk mode the mic is closed until you press it.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import threading
 import webbrowser
 
 from ..config import RuntimeConfig
-from ..spike import Day1Spike
+from ..spike import HANDS_FREE, INPUT_MODES, PUSH_TO_TALK, Day1Spike
 from ..trace import Trace
 from .server import WebBridge
 
@@ -30,6 +31,8 @@ def main() -> None:
     ap.add_argument("--input-device", type=int, default=None)
     ap.add_argument("--output-device", type=int, default=None)
     ap.add_argument("--no-open", action="store_true", help="do not open a browser")
+    ap.add_argument("--input-mode", choices=INPUT_MODES, default=HANDS_FREE,
+                    help="hands_free (default): just speak; the button stops the agent.")
     args = ap.parse_args()
 
     from dotenv import load_dotenv
@@ -43,11 +46,18 @@ def main() -> None:
         stt_model=args.stt_model,
         input_device=args.input_device,
         output_device=args.output_device,
+        input_mode=args.input_mode,
     )
 
     # `phase` is read through a callable so the bridge never holds anything it could write to.
     bridge = WebBridge(
         phase_source=lambda: spike.barge.phase,
+        listening_source=lambda: spike.mic.listening,
+        # The one permitted write. Routed through `spike.interrupt`, which reaches the same
+        # `fence_now` the voice path reaches -- a different trigger, never a different fence.
+        on_interrupt=lambda: spike.interrupt(source="button"),
+        # Standby is a separate control: it mutes the mic and fences nothing.
+        on_standby=lambda: spike.toggle_standby(),
         http_port=args.http_port,
         ws_port=args.ws_port,
     )

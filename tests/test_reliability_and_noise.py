@@ -220,16 +220,31 @@ def test_rejection_reason_logic_directly():
     vad = make_vad()
     vad._ambient_rms = 100.0
 
-    assert vad._rejection_reason(voiced_ms=100.0, speech_rms=5000.0) == "too_short"
-    assert vad._rejection_reason(voiced_ms=800.0, speech_rms=150.0) == "below_noise_floor"
-    assert vad._rejection_reason(voiced_ms=800.0, speech_rms=5000.0) is None
+    assert vad._rejection_reason(voiced_ms=100.0, peak_rms=5000.0) == "too_short"
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=150.0) == "below_noise_floor"
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=5000.0) is None
 
 
-def test_gate_is_permissive_when_the_room_was_never_measured():
-    """Fail open: dropping real speech is worse than letting one quiet turn through."""
+def test_gate_is_permissive_for_plausible_speech_when_the_room_was_never_measured():
+    """Fail open for anything that could be speech, but not for digital silence.
+
+    CHANGED 2026-09-07, deliberately. The old contract was "when ambient has never been measured,
+    accept unconditionally", asserted here with `speech_rms=1.0`. Live runs showed why that is too
+    permissive: ambient tracked to 0.5-9.7 RMS on a quiet microphone, so the relative bar was ~2,
+    and background noise at RMS 10-40 cleared it twentyfold while real speech sat at 60-2800. The
+    floor is now clamped by `ambient_floor_min`, so a bar derived from a near-silent microphone is
+    not believed.
+
+    The spirit is unchanged -- dropping real close-range speech is still the worse failure, and
+    the clamp sits far below every real utterance observed.
+    """
     vad = make_vad()
     vad._ambient_rms = None
-    assert vad._rejection_reason(voiced_ms=800.0, speech_rms=1.0) is None
+
+    # Plausible speech still passes with no measured room.
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=200.0) is None
+    # Digital silence does not. RMS 1.0 for 800 ms is not a quiet talker, it is nothing.
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=1.0) == "below_noise_floor"
 
 
 def test_speech_ended_records_the_measurements_behind_the_decision():

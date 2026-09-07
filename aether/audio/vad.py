@@ -32,6 +32,26 @@ from ..events import EventType
 from ..trace import Trace, now_ms
 
 
+# Conservative default. Chosen from THIS machine's traces, where the quietest utterance that
+# transcribed as real speech peaked well above it and the observed room floor sat at 0.5-16.3 RMS.
+# It is a starting point for an uncalibrated microphone, not a claim about microphones in general.
+DEFAULT_SPEECH_FLOOR = 12.0
+
+
+def _resolve_speech_floor(explicit: float | None) -> float:
+    """Argument, then AETHER_SPEECH_FLOOR, then the default. A bad env value is ignored loudly."""
+    if explicit is not None:
+        return float(explicit)
+    raw = (os.environ.get("AETHER_SPEECH_FLOOR") or "").strip()
+    if not raw:
+        return DEFAULT_SPEECH_FLOOR
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[vad] AETHER_SPEECH_FLOOR={raw!r} is not a number; using {DEFAULT_SPEECH_FLOOR}")
+        return DEFAULT_SPEECH_FLOOR
+
+
 class InputDeviceError(RuntimeError):
     """A microphone was explicitly requested and cannot be used. Never silently substituted."""
 
@@ -98,6 +118,7 @@ class MicVAD:
         preroll_frames: int = 15,     # 300 ms kept before onset so STT is not clipped
         min_speech_ms: float = 250.0, # shorter than this is a blip, not an utterance
         noise_snr_margin: float = 3.0,# voiced audio must be this much louder than ambient
+        speech_floor: float | None = None,  # absolute peak a voiced run must reach
         device: int | None = None,
     ):
         if frame_ms not in (10, 20, 30):
@@ -111,6 +132,13 @@ class MicVAD:
         self.preroll_frames = preroll_frames
         self.min_speech_ms = min_speech_ms
         self.noise_snr_margin = noise_snr_margin
+        # Absolute floor, resolved once: argument, then AETHER_SPEECH_FLOOR, then the default.
+        #
+        # DEFAULT_SPEECH_FLOOR is a conservative starting point, NOT a universal constant. Run
+        # `python scripts/calibrate_mic.py` to derive the value for a given microphone. A previous
+        # hardcoded floor of 60 rejected genuine speech on this machine because it was calibrated
+        # from a single session's sample -- the exact failure this module's docstring warned about.
+        self.speech_floor_abs = _resolve_speech_floor(speech_floor)
 
         self._vad = webrtcvad.Vad(aggressiveness)
         # Resolve BEFORE opening, and keep it: `self.device` is the index actually handed to
@@ -143,6 +171,7 @@ class MicVAD:
         self._ambient_rms: float | None = None
         self._voiced_rms_sum = 0.0
         self._voiced_rms_n = 0
+        self._voiced_rms_peak = 0.0
 
         # hand-off
         self.utterances: queue.Queue[tuple[np.ndarray, float]] = queue.Queue()
@@ -171,6 +200,44 @@ class MicVAD:
     def set_context(self, *, turn_id: int | None = None, gen: str | None = None) -> None:
         self._turn_id = turn_id
         self._gen = gen
+
+    @property
+    def listening(self) -> bool:
+        return self._enabled.is_set()
+
+    def set_listening(self, listening: bool) -> None:
+        """Open or close the microphone without touching the PortAudio stream.
+
+        The stream stays open for the whole session either way -- stopping and restarting it costs
+        device-negotiation time and can fail outright, which is not something to do on every turn.
+        This flips the flag the callback already checks, so a closed mic costs one boolean test per
+        frame and captures nothing.
+
+        Why this exists: in push-to-talk mode an always-open mic cannot tell "talking to the agent"
+        from "talking to a colleague", and no amount of level or duration tuning fixes that -- it
+        needs speaker identity, which AETHER does not have. Closing the mic answers the question
+        by construction.
+
+        Detector state is reset on the closing edge so a half-captured utterance can never be
+        stitched onto the next time the mic opens.
+        """
+        if listening:
+            self._enabled.set()
+            return
+        self._enabled.clear()
+        self._reset_detector()
+
+    def _reset_detector(self) -> None:
+        """Drop any in-progress utterance. Callback-thread state only, no IO."""
+        self._voiced_run = 0
+        self._silence_run = 0
+        self._speech_active = False
+        self._first_voiced_t = None
+        self._utterance = []
+        self._preroll = []
+        self._voiced_rms_sum = 0.0
+        self._voiced_rms_n = 0
+        self._voiced_rms_peak = 0.0
 
     # --- callback -------------------------------------------------------------------
 
@@ -202,6 +269,13 @@ class MicVAD:
             self._silence_run = 0
             self._voiced_rms_sum += rms
             self._voiced_rms_n += 1
+            # Peak matters more than the mean. Speech carries vowel peaks far above its own
+            # average, while low-level noise is flat -- and a mean is dragged down by the quiet
+            # voiced frames every longer utterance contains, which penalised exactly the
+            # utterances worth keeping (rejected at 880-1640 ms, while shorter comparable speech
+            # at the same distance was accepted).
+            if rms > self._voiced_rms_peak:
+                self._voiced_rms_peak = rms
         else:
             self._silence_run += 1
             if not self._speech_active:
@@ -237,8 +311,23 @@ class MicVAD:
                 self.on_onset(onset_t)   # must be realtime-safe (e.g. gate.request_duck)
 
         # --- ongoing voiced progress (drives the Day-1 meaningfulness window) ---
+        #
+        # Gated on credibility, and the gate has to be HERE rather than at the offset.
+        #
+        # `_rejection_reason` runs when the utterance ends, which is ~500 ms of trailing silence
+        # after the fence has already been applied at 300 ms of voiced audio. Measured on real
+        # runs: 6 of 7 rejected utterances had already ducked, stopped or fenced audio by the time
+        # the gate declared them noise. So the gate decided correctly and arrived far too late --
+        # background noise killed the turn, and the trace recorded a clean "too_short" over the
+        # wreckage. That is the bug behind "it treats surrounding noise as an interruption".
+        #
+        # Duck is deliberately still unconditional (locked decision 6: duck is not stop). Ducking
+        # on a door slam is cheap and self-correcting -- `should_resume_after_short_utterance`
+        # puts the volume back. Fencing on a door slam destroys the answer. So the expensive,
+        # irreversible half now requires the same level evidence that acceptance requires.
         if self._speech_active and self.on_voiced_progress is not None and self._first_voiced_t:
-            self.on_voiced_progress(now_ms() - self._first_voiced_t)
+            if self._is_credible_speech():
+                self.on_voiced_progress(now_ms() - self._first_voiced_t)
 
         # --- offset ---
         if self._speech_active and self._silence_run >= self.offset_frames:
@@ -248,7 +337,7 @@ class MicVAD:
             speech_rms = (
                 self._voiced_rms_sum / self._voiced_rms_n if self._voiced_rms_n else 0.0
             )
-            reject = self._rejection_reason(voiced_ms, speech_rms)
+            reject = self._rejection_reason(voiced_ms, self._voiced_rms_peak)
 
             self.trace.emit(
                 EventType.SPEECH_ENDED,
@@ -257,6 +346,8 @@ class MicVAD:
                 duration_ms=round(len(audio) / self.samplerate * 1000.0, 1),
                 voiced_ms=round(voiced_ms, 1),
                 speech_rms=round(speech_rms, 1),
+                speech_peak_rms=round(self._voiced_rms_peak, 1),
+                speech_floor=round(self.speech_floor(), 1),
                 ambient_rms=round(self._ambient_rms, 1) if self._ambient_rms is not None else None,
                 rejected=reject or None,
             )
@@ -267,10 +358,11 @@ class MicVAD:
             self._utterance = []
             self._voiced_rms_sum = 0.0
             self._voiced_rms_n = 0
+            self._voiced_rms_peak = 0.0
             if reject is None:
                 self.utterances.put((audio, onset_t))
 
-    def _rejection_reason(self, voiced_ms: float, speech_rms: float) -> str | None:
+    def _rejection_reason(self, voiced_ms: float, peak_rms: float) -> str | None:
         """Why this utterance is not worth transcribing, or None to accept it.
 
         Two conservative tests, both grounded in observed traces:
@@ -285,13 +377,40 @@ class MicVAD:
         the test is relative to the measured room, not an absolute number that would need retuning
         per environment.
 
-        Deliberately conservative: when ambient has never been measured, accept. Silence is only
-        preferable to a wrong answer once we are confident (RULES.md R2.3), and dropping real
-        close-range speech is the worse failure here.
+        The floor is clamped by `ambient_floor_min`, and that clamp is what makes the relative
+        test work at all on a quiet microphone. Measured on real runs: ambient tracked to
+        0.5-9.7 RMS, so `ambient x 3` was a bar of ~2, and faint noise at RMS 10-40 cleared it by
+        20x while real speech sat at 60-2800. A relative test against a near-zero floor is not a
+        test. Clamping says: a microphone reporting near-silence is describing its own noise
+        floor, not the room, so do not believe a bar derived from it.
+
+        Still conservative in the direction that matters -- the clamp is far below observed real
+        speech, and dropping genuine close-range speech remains the worse failure (RULES.md R2.3).
         """
         if voiced_ms < self.min_speech_ms:
             return "too_short"
-        if self._ambient_rms is not None and self._ambient_rms > 0:
-            if speech_rms < self._ambient_rms * self.noise_snr_margin:
-                return "below_noise_floor"
+        if peak_rms < self.speech_floor():
+            return "below_noise_floor"
         return None
+
+    def speech_floor(self) -> float:
+        """The level a voiced run must clear to count as speech aimed at this microphone.
+
+        One definition, used by BOTH the acceptance gate and the fence-time credibility check, so
+        the two can never disagree about what counts as speech.
+        """
+        relative = (self._ambient_rms or 0.0) * self.noise_snr_margin
+        return max(relative, self.speech_floor_abs)
+
+    def _is_credible_speech(self) -> bool:
+        """Is the voiced run so far loud enough to justify FENCING a generation?
+
+        Uses the running mean of voiced frames, which is available continuously -- unlike the
+        offset-time statistics, which arrive after the fence would already have been applied.
+
+        Returns True while no voiced frames have been measured yet, so the very first frames of a
+        genuine utterance are never suppressed by an empty average.
+        """
+        if self._voiced_rms_n == 0:
+            return True
+        return self._voiced_rms_peak >= self.speech_floor()

@@ -34,7 +34,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from aether.audio.vad import MicVAD
+from aether.audio.vad import DEFAULT_SPEECH_FLOOR, MicVAD
 from aether.events import EventType
 from aether.trace import Trace
 
@@ -286,3 +286,235 @@ def test_an_unmeasured_room_never_rejects_on_the_floor():
 
     ended = vad.trace.last(EventType.SPEECH_ENDED)
     assert ended.fields["rejected"] != "below_noise_floor"
+
+
+# ============================ the fence-time credibility gate ============================
+#
+# Regression for the failure a user hit live: "it is catching external noise and taking it as an
+# interruption". Measured on real runs beforehand: 6 of 7 utterances the noise gate rejected had
+# ALREADY ducked, stopped or fenced audio. The gate ran at the offset; the fence was applied at
+# 300 ms of voiced audio, roughly 800 ms earlier. It decided correctly and arrived far too late.
+
+def _progress_probe(vad):
+    """Record every voiced-progress callback, i.e. every chance to fence."""
+    seen = []
+    vad.on_voiced_progress = lambda ms: seen.append(ms)
+    return seen
+
+
+def test_background_noise_never_reaches_the_fence_callback():
+    """The fix: quiet noise may duck, but must never drive a fence."""
+    vad = MicVAD(Trace())
+    fences = _progress_probe(vad)
+
+    for f in room_frames(0.0005, n=ROOM_FRAMES):        # near-silent room
+        vad.process_frame(f)
+    for i in range(SPEECH_FRAMES):                       # long, but far below the speech floor
+        vad.process_frame(voiced_frame(i * FRAME, amp=0.0008))
+    for _ in range(40):
+        vad.process_frame(SILENCE)
+
+    assert fences == [], (
+        "noise below the speech floor must never reach on_voiced_progress, because that callback "
+        "is what promotes a duck into a fence and kills the in-flight turn"
+    )
+
+
+def test_real_speech_still_reaches_the_fence_callback():
+    """The control. If this breaks, barge-in is dead and the product with it."""
+    vad = MicVAD(Trace())
+    fences = _progress_probe(vad)
+
+    for f in room_frames(0.0005, n=ROOM_FRAMES):
+        vad.process_frame(f)
+    for i in range(SPEECH_FRAMES):
+        vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
+    for _ in range(40):
+        vad.process_frame(SILENCE)
+
+    assert fences, "close-range speech must still be able to interrupt the agent"
+    assert len(fences) >= SPEECH_FRAMES - vad.onset_frames, (
+        "the gate must stay open for the whole utterance, not just its first frames"
+    )
+    # Note: the value passed is wall-clock elapsed since the first voiced frame, so an offline
+    # harness that feeds 800 ms of audio in ~2 ms sees single-digit milliseconds here. Whether it
+    # crosses MEANINGFUL_SPEECH_MS is a real-time property, covered by
+    # scripts/measure_audio_kill.py, which paces frames. What this file pins is *whether the
+    # callback is reached at all* -- which is precisely what the credibility gate decides.
+
+
+def test_ducking_is_still_unconditional():
+    """Duck is not stop (MEMORY.md locked decision 6).
+
+    The credibility gate deliberately guards only the fence. Ducking on a door slam is cheap and
+    self-correcting; refusing to duck would make the agent talk over a real interruption's opening
+    syllable while it waited for proof.
+    """
+    vad = MicVAD(Trace())
+    onsets = []
+    vad.on_onset = lambda t: onsets.append(t)
+
+    for f in room_frames(0.0005, n=ROOM_FRAMES):
+        vad.process_frame(f)
+    for i in range(SPEECH_FRAMES):
+        vad.process_frame(voiced_frame(i * FRAME, amp=0.0008))   # same noise as above
+    for _ in range(40):
+        vad.process_frame(SILENCE)
+
+    assert onsets, "onset (and therefore the duck) still fires on anything voiced"
+
+
+def test_the_speech_floor_is_never_derived_from_a_silent_microphone():
+    """A mic reporting near-zero ambient describes itself, not the room.
+
+    Without the absolute floor the bar would be 0.5 x 3 = 1.5, which admits anything.
+    """
+    vad = MicVAD(Trace())
+    vad._ambient_rms = 0.5                    # the level observed on real runs
+    assert vad.speech_floor() == vad.speech_floor_abs
+    assert vad.speech_floor() > 0.5 * vad.noise_snr_margin, "the raw bar of ~1.5 is not believed"
+
+
+def test_a_loud_room_still_raises_the_floor_above_the_absolute_minimum():
+    """The absolute floor is a minimum, not a replacement -- a loud room still dominates."""
+    vad = MicVAD(Trace())
+    vad._ambient_rms = 2000.0
+    assert vad.speech_floor() == 2000.0 * vad.noise_snr_margin
+
+
+def test_the_floor_is_configurable_per_microphone():
+    """The regression that caused this rewrite: a hardcoded floor cannot suit every mic.
+
+    A floor of 60, calibrated from one session, rejected genuine speech measured at 37-59 on the
+    same machine in a later session. The value must be settable, not baked in.
+    """
+    assert MicVAD(Trace(), speech_floor=5.0).speech_floor_abs == 5.0
+    assert MicVAD(Trace(), speech_floor=99.0).speech_floor_abs == 99.0
+
+
+def test_the_floor_can_be_set_from_the_environment(monkeypatch):
+    monkeypatch.setenv("AETHER_SPEECH_FLOOR", "7.5")
+    assert MicVAD(Trace()).speech_floor_abs == 7.5
+
+
+# ---- the configured demo floor ----
+#
+# The demo microphone is calibrated to 35 in .env. `.env` is gitignored, so these tests set the
+# variable explicitly rather than depending on a file that does not exist on a fresh clone -- what
+# is pinned is that a configured value is *honoured all the way to a rejection decision*, not that
+# any particular machine happens to be set up.
+
+DEMO_FLOOR = 35.0
+
+
+def test_a_configured_floor_reaches_the_rejection_decision(monkeypatch):
+    """Configuration that never reaches the decision is decoration. This is the end-to-end path."""
+    monkeypatch.setenv("AETHER_SPEECH_FLOOR", str(DEMO_FLOOR))
+    vad = MicVAD(Trace())
+    vad._ambient_rms = 0.5                    # quiet room: the absolute floor is what binds
+
+    assert vad.speech_floor_abs == DEMO_FLOOR
+    assert vad.speech_floor() == DEMO_FLOOR, "the relative bar of 1.5 must not win"
+    # Long enough to clear min_speech_ms either way, so only the level is under test.
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=DEMO_FLOOR + 1) is None
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=DEMO_FLOOR - 1) == "below_noise_floor"
+
+
+def test_the_configured_floor_admits_the_speech_that_was_wrongly_rejected(monkeypatch):
+    """Regression for the live failure this value was chosen to fix.
+
+    Peaks measured live at 37.3-59.7 were rejected against a floor of 60. Scored here by those
+    same figures -- which were MEANS, so the real peaks are higher and the margin is wider still.
+    """
+    monkeypatch.setenv("AETHER_SPEECH_FLOOR", str(DEMO_FLOOR))
+    vad = MicVAD(Trace())
+    for observed, ambient in [(37.3, 1.9), (52.6, 0.8), (52.7, 4.9), (55.3, 9.3), (59.7, 12.0)]:
+        vad._ambient_rms = ambient
+        assert vad._rejection_reason(voiced_ms=800.0, peak_rms=observed) is None, (
+            f"peak {observed} with ambient {ambient} must be accepted at floor {DEMO_FLOOR}"
+        )
+
+
+def test_a_loud_room_still_overrides_the_configured_floor(monkeypatch):
+    """Configuring an absolute floor must not disable the relative test in a noisy room."""
+    monkeypatch.setenv("AETHER_SPEECH_FLOOR", str(DEMO_FLOOR))
+    vad = MicVAD(Trace())
+    vad._ambient_rms = 40.0                   # relative bar 120, well above the configured 35
+
+    assert vad.speech_floor() == 120.0
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=60.0) == "below_noise_floor", (
+        "a level fine in a quiet room is not fine against a loud one"
+    )
+
+
+def test_the_configured_floor_does_not_touch_the_duration_gate(monkeypatch):
+    """Short commands must still interrupt: this change is to level, never to duration."""
+    monkeypatch.setenv("AETHER_SPEECH_FLOOR", str(DEMO_FLOOR))
+    vad = MicVAD(Trace())
+    assert vad.min_speech_ms == 250.0, "duration threshold is untouched"
+    # Loud but brief is still too short, exactly as before.
+    assert vad._rejection_reason(voiced_ms=100.0, peak_rms=5000.0) == "too_short"
+    # And a short real command that clears min_speech_ms still passes.
+    assert vad._rejection_reason(voiced_ms=300.0, peak_rms=DEMO_FLOOR + 50) is None
+
+
+def test_a_bad_environment_value_falls_back_loudly(monkeypatch, capsys):
+    monkeypatch.setenv("AETHER_SPEECH_FLOOR", "loud-ish")
+    vad = MicVAD(Trace())
+    assert vad.speech_floor_abs == DEFAULT_SPEECH_FLOOR
+    assert "AETHER_SPEECH_FLOOR" in capsys.readouterr().out, "a bad value must not fail silently"
+
+
+# ---- peak vs mean: the length bias that rejected real speech ----
+
+def test_the_gate_uses_the_peak_not_the_mean():
+    """Root cause of the live rejection: a MEAN is dragged down by long utterances.
+
+    Real speech carries vowel peaks far above its own average, and every extra word adds quiet
+    voiced frames (inter-word gaps, trailing consonants) that lower the mean. Measured live:
+    utterances of 880-1640 ms were rejected at mean 52-59 while shorter, comparable speech at the
+    same distance was accepted. Gating on the peak removes the length dependence entirely.
+    """
+    vad = MicVAD(Trace(), speech_floor=50.0)
+    # A long run whose MEAN is under the floor but which contains clear speech peaks.
+    for _ in range(30):
+        vad.process_frame(voiced_frame(0, amp=0.001))      # quiet inter-word frames
+    vad._voiced_rms_peak = 400.0                            # one loud vowel
+    vad._voiced_rms_sum, vad._voiced_rms_n = 30 * 10.0, 30  # mean 10, far below the floor
+
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=vad._voiced_rms_peak) is None, (
+        "a peak well above the floor must pass even when the mean is below it"
+    )
+    assert vad._is_credible_speech() is True
+
+
+def test_flat_low_level_noise_has_no_peak_and_is_still_rejected():
+    """The other half: noise is flat, so it has no peak to save it."""
+    vad = MicVAD(Trace(), speech_floor=50.0)
+    vad._voiced_rms_peak = 12.0
+    vad._voiced_rms_sum, vad._voiced_rms_n = 10 * 11.0, 10
+
+    assert vad._rejection_reason(voiced_ms=800.0, peak_rms=vad._voiced_rms_peak) == "below_noise_floor"
+    assert vad._is_credible_speech() is False
+
+
+def test_the_trace_records_the_peak_and_the_floor_it_was_judged_against():
+    """A decision the trace cannot explain is not evidence."""
+    vad = MicVAD(Trace())
+    for f in room_frames(0.0005, n=ROOM_FRAMES):
+        vad.process_frame(f)
+    for i in range(SPEECH_FRAMES):
+        vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
+    for _ in range(40):
+        vad.process_frame(SILENCE)
+
+    ended = vad.trace.last(EventType.SPEECH_ENDED)
+    assert ended.fields["speech_peak_rms"] >= ended.fields["speech_rms"], "peak >= mean, always"
+    # The floor is recorded as it stood AT THE DECISION. Reading `speech_floor()` afterwards gives
+    # a different number, because ambient keeps tracking through the trailing silence -- so the
+    # assertion is that the recorded floor explains the recorded verdict, not that it still matches.
+    assert ended.fields["speech_floor"] >= vad.speech_floor_abs
+    assert ended.fields["rejected"] is None
+    assert ended.fields["speech_peak_rms"] >= ended.fields["speech_floor"], (
+        "an accepted utterance must have cleared the floor it was actually judged against"
+    )

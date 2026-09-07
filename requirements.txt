@@ -2,7 +2,9 @@
 # Installed and exercised on Windows 11 / Python 3.13.2.
 
 python-dotenv>=1.0
-httpx>=0.27           # Rime HTTP client
+httpx>=0.27           # Rime HTTP client (RIME_TRANSPORT=http)
+websockets>=13.0      # Rime /ws3 streaming -- the DEFAULT TTS transport -- and the web UI's
+                      # broadcast socket. Uses the `websockets.sync` API, so 13.0 or newer.
 numpy>=2.0
 sounddevice>=0.4      # PortAudio mic capture + playback
 webrtcvad-wheels>=2.0 # VAD (prebuilt wheels; the original `webrtcvad` needs a C toolchain)
