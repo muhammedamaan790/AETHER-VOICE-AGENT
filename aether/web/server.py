@@ -66,10 +66,32 @@ class UiState:
     latency: dict[str, Any] = field(default_factory=dict)
     timeline: list[dict[str, Any]] = field(default_factory=list)   # G17 -> FENCED -> G18
 
+    # The conversation, folded from the same canonical events. Held HERE rather than in the
+    # browser so a reconnecting tab is handed the history instead of an empty screen, and so the
+    # page has no second copy of the truth to drift from.
+    transcript: list[dict[str, Any]] = field(default_factory=list)
+    # The last interruption judgement, so the evidence strip can show it without the browser
+    # having to interpret the event stream itself.
+    last_class: str | None = None
+    last_class_rule: str | None = None
+    # Stale output that reached a listener anyway. The number the whole design exists to keep at
+    # zero, so it is surfaced rather than buried in the timeline.
+    leaks: int = 0
+    # Whether the caller is talking RIGHT NOW, folded from the same VAD events the engine emits.
+    # Held here rather than derived in the browser so the orb and the engine cannot disagree about
+    # who is speaking -- there is one source of truth, and it is this one.
+    speech_active: bool = False
+
     def apply(self, ev: dict[str, Any]) -> None:
         kind = ev.get("type")
 
-        if kind == "GenerationChanged":
+        if kind == "SpeechOnset":
+            self.speech_active = True
+
+        elif kind == "SpeechEnded":
+            self.speech_active = False
+
+        elif kind == "GenerationChanged":
             self.previous_generation = ev.get("from_gen")
             self.generation = ev.get("to_gen")
             self.turn_id = ev.get("turn_id")
@@ -83,6 +105,33 @@ class UiState:
         elif kind == "ResultDiscarded":
             self.last_discard = ev.get("reason")
             self._push_timeline("discarded", ev.get("gen"), ev.get("reason"))
+            # An answer that was produced and never heard. Recorded as its own transcript entry
+            # rather than silently dropped: "AETHER started answering and was cut off" is the
+            # single most important thing this product has to make visible, and a UI that just
+            # omitted it would present an interrupted turn as though it never happened.
+            self._push_turn("aether", None, ev, status="interrupted", reason=ev.get("reason"))
+
+        elif kind == "TranscriptFinal":
+            text = (ev.get("text") or "").strip()
+            if text:
+                self._push_turn("customer", text, ev, status="said")
+
+        elif kind == "InterruptionClassified":
+            self.last_class = ev.get("interruption_class")
+            self.last_class_rule = ev.get("rule")
+            self._push_timeline("classified", ev.get("gen"), ev.get("interruption_class"))
+
+        elif kind == "BackchannelDetected":
+            self._push_timeline("backchannel", ev.get("gen"), ev.get("text"))
+
+        elif kind == "CancellationResolved":
+            self._push_timeline("cancelled", ev.get("gen"), "cancelled_by_caller")
+
+        elif kind == "ResultLeaked":
+            # RULES.md R1.4. Counted, never hidden -- a demo that quietly dropped this number
+            # would be claiming a guarantee it had just broken.
+            self.leaks += 1
+            self._push_timeline("leaked", ev.get("gen"), ev.get("reason"))
 
         elif kind == "ResponseSpoken":
             self.rime_provider = ev.get("provider")
@@ -99,6 +148,23 @@ class UiState:
                 if ev.get(key) is not None
             }
             self._push_timeline("spoken", ev.get("gen"), None)
+            self._push_turn("aether", ev.get("text"), ev, status="spoken")
+
+    def _push_turn(self, role: str, text: str | None, ev: dict[str, Any],
+                   *, status: str, reason: str | None = None) -> None:
+        """Append one conversation line.
+
+        `status` is the honest part: "said" for the caller, and for AETHER either "spoken" -- the
+        gate accepted the audio, so it really was heard -- or "interrupted", meaning the words
+        existed but never reached anybody. The UI must render those two differently, because
+        showing an interrupted answer as a completed one is exactly the lie this product is built
+        to avoid.
+        """
+        self.transcript.append({
+            "role": role, "text": text, "status": status, "reason": reason,
+            "turn_id": ev.get("turn_id"), "gen": ev.get("gen"), "seq": ev.get("seq"),
+        })
+        del self.transcript[:-60]
 
     def _push_timeline(self, kind: str, gen: str | None, detail: str | None) -> None:
         self.timeline.append({"kind": kind, "gen": gen, "detail": detail})
@@ -120,6 +186,11 @@ class UiState:
             "llm_provider": self.llm_provider,
             "latency": dict(self.latency),
             "timeline": list(self.timeline),
+            "transcript": list(self.transcript),
+            "last_class": self.last_class,
+            "last_class_rule": self.last_class_rule,
+            "leaks": self.leaks,
+            "speech_active": self.speech_active,
         }
 
 
@@ -139,7 +210,8 @@ class WebBridge:
     """
 
     def __init__(self, phase_source=None, http_port: int = 8760, ws_port: int = 8761,
-                 on_interrupt=None, on_standby=None, listening_source=None):
+                 on_interrupt=None, on_standby=None, listening_source=None,
+                 on_listening=None):
         # The single permitted write. A zero-argument callable, injected rather than reached for,
         # so the bridge cannot widen its own access later without this signature changing.
         self._on_interrupt = on_interrupt
@@ -148,6 +220,15 @@ class WebBridge:
         # cannot conflate "stop talking" with "stop listening" -- the exact conflation that made
         # push-to-talk require a press before the user could speak at all.
         self._on_standby = on_standby
+        # THE LISTENING TOGGLE. Takes the desired state as a boolean rather than flipping, so the
+        # browser cannot get out of step with the engine: two clicks racing each other converge on
+        # what the second one asked for instead of cancelling out. The button's label is derived
+        # from the state the engine reports back, never from what the click assumed.
+        #
+        # It is emphatically NOT an interrupt. It changes whether inbound audio is processed and
+        # touches no generation, so pressing STOP LISTENING while AETHER is mid-answer leaves the
+        # answer playing and the call connected.
+        self._on_listening = on_listening
         # Read-only, like phase: the UI must show whether the mic is ACTUALLY open, never just
         # what it optimistically assumed after a click.
         self._listening_source = listening_source
@@ -186,17 +267,22 @@ class WebBridge:
         self._spawn(self._pump, "aether-web-pump")
 
     def stop(self) -> None:
+        """Stop serving and RELEASE THE PORTS.
+
+        `shutdown()` alone stops the serve loop but leaves the listening socket bound, so a second
+        session -- the next phone call starting its own console -- would fail to bind and lose its
+        UI with no obvious cause. Closing is separate from stopping in `http.server`, and both are
+        needed.
+        """
         self._running = False
-        if self._http is not None:
-            try:
-                self._http.shutdown()
-            except Exception:
-                pass
-        if self._ws is not None:
-            try:
-                self._ws.shutdown()
-            except Exception:
-                pass
+        for server in (self._http, self._ws):
+            if server is None:
+                continue
+            for step in ("shutdown", "server_close"):
+                try:
+                    getattr(server, step)()
+                except Exception:
+                    pass
 
     def _spawn(self, target, name: str) -> None:
         thread = threading.Thread(target=target, name=name, daemon=True)
@@ -233,13 +319,17 @@ class WebBridge:
                 self._clients.discard(connection)
 
     def _handle_inbound(self, raw) -> None:
-        """The browser's only writes into the pipeline: interrupt, and standby.
+        """The browser's only writes into the pipeline: interrupt, and the listening toggle.
 
         The bridge was observation-only, and these are deliberate, narrow exceptions rather than
-        the start of a control API. Exactly TWO actions are accepted -- `interrupt` (fence the
-        active task) and `standby` (mute the mic) -- and anything else is ignored without
-        complaint, because an unrecognised message from a page someone left open must never become
-        a pipeline action.
+        the start of a control API. Exactly THREE actions are accepted:
+
+            interrupt              fence the active task. Listening is not touched.
+            listening {on: bool}   the one START/STOP toggle. No generation is touched.
+            standby                the same toggle, flipped, kept for the terminal listener.
+
+        Anything else is ignored without complaint, because an unrecognised message from a page
+        someone left open must never become a pipeline action.
 
         They are separate on purpose. "Stop talking" and "stop listening" are independent
         intentions, and a single control that did both would recreate the bug where the user had
@@ -259,12 +349,18 @@ class WebBridge:
         if not isinstance(message, dict):
             return
 
-        handler = {"interrupt": self._on_interrupt, "standby": self._on_standby}.get(
-            message.get("action")
-        )
-        if handler is None:
-            return                      # unknown action, or no callback wired: ignore silently
+        action = message.get("action")
         try:
+            if action == "listening":
+                if self._on_listening is None:
+                    return
+                # Absent means "start". A malformed value must not silently mute the caller, so
+                # anything that is not an explicit false is read as on.
+                self._on_listening(message.get("on", True) is not False)
+                return
+            handler = {"interrupt": self._on_interrupt, "standby": self._on_standby}.get(action)
+            if handler is None:
+                return                  # unknown action, or no callback wired: ignore silently
             handler()
         except Exception:
             # A failing control must not kill the socket loop or the voice session.
@@ -298,6 +394,9 @@ class WebBridge:
                 snap["listening"] = bool(self._listening_source())
             except Exception:
                 pass
+        # Derived here, not in the browser, so "is there anything to interrupt?" has exactly one
+        # answer. The INTERRUPT button is emphasised on this, and is a safe no-op when it is false.
+        snap["interruptible"] = snap.get("phase") in ("thinking", "speaking")
         snap["dropped_events"] = self.dropped_events
         return snap
 

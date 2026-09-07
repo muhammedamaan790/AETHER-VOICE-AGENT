@@ -187,4 +187,15 @@ class BargeInCoordinator:
             return Phase.INTERRUPTED
         if self._turn_in_flight:
             return Phase.SPEAKING if self.gate.is_playing else Phase.THINKING
+        if self.gate.is_playing and self.gens.active is not None:
+            # THE AUDIO OUTLIVES THE TURN FUNCTION. `rime.speak` returns once audio is ENQUEUED,
+            # not once it has been heard, so `handle_utterance` finishes and clears the in-flight
+            # flag while several seconds of answer are still playing out of the gate. Reporting
+            # LISTENING there told the UI the agent was idle while it was mid-sentence, and told
+            # the INTERRUPT button there was nothing to interrupt at the exact moment there was.
+            # Still derived, still never branched on: the gate and the registry are the ones
+            # being asked. The registry half matters -- queued audio belonging to a FENCED
+            # generation is about to be flushed, and calling that "speaking" would name a sound
+            # nobody is going to hear.
+            return Phase.SPEAKING
         return Phase.LISTENING

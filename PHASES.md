@@ -44,14 +44,26 @@ classifier being correct.
 
 ## Day 3 — Classification + supervisor
 
-- [ ] `BACKCHANNEL`
-- [ ] `REFINEMENT`
-- [ ] `REPLACEMENT`
-- [ ] `STATUS_QUERY`
-- [ ] `CANCEL`
-- [ ] `NEW_TASK`
-- [ ] Supervisor state transitions (ARCHITECTURE.md §6)
-- [ ] Low-confidence safe fallback: prefer fencing over allowing stale output
+- [x] `BACKCHANNEL` — withholds a turn; the answer in flight is never fenced
+- [x] `REFINEMENT` — labelled, and fences (nothing to salvage)
+- [x] `REPLACEMENT` — the safe fallback for anything unrecognised
+- [x] `STATUS_QUERY` — withholds a turn; **not** answered aloud, see below
+- [x] `CANCEL` — fences with no successor task, emits `CancellationResolved`
+- [x] `NEW_TASK` — an ordinary turn with nothing displaced
+- [x] Supervisor state transitions (ARCHITECTURE.md §6) — at the turn boundary, not as a module
+- [x] Safe fallback: prefer fencing over allowing stale output
+
+Landed 2026-09-08 in `aether/classify/`. Three deviations from the plan, recorded here rather than
+made silently:
+
+1. **No confidence score, so no threshold.** The classifier is closed-set and whole-utterance: it
+   either matches a table exactly or falls through to `REPLACEMENT`, which fences. The "low-
+   confidence safe fallback" is therefore the *default* branch rather than a comparison against
+   `AETHER_CLASSIFIER_CONFIDENCE_THRESHOLD`, which is now marked dead in `.env.example`.
+2. **Classification runs BEFORE the generation is allocated.** Allocation is what fences, so
+   classifying afterwards would classify a task that had already been destroyed. Two real defects
+   came from the original ordering — see MEMORY.md §7.
+3. **`STATUS_QUERY` protects the task instead of speaking.** ARCHITECTURE.md §6 explains why.
 
 ---
 
@@ -62,24 +74,39 @@ classifier being correct.
 - [x] Fencing — audio-side and tool-side; pulled forward from Day 4 to fix real defects
 - [x] Stale-result rejection — LLM, TTS, audio and tool paths
 - [x] `ResultDiscarded`
-- [ ] `ResultLeaked`
-- [ ] `ResultSalvaged`
-- [ ] `CancellationResolved`
-- [ ] Controlled delayed-result tests
-- [ ] Test-only unsafe mode
+- [x] `ResultLeaked` — defined, asserted absent in every safe-mode scenario, and surfaced in the UI
+- [~] `ResultSalvaged` — **CUT.** No partial-result store exists, so `records_reused` would be 0 on
+      every run for ever. `TaskReplaced.records_salvaged` carries the honest zero instead (R8)
+- [x] `CancellationResolved`
+- [x] Controlled delayed-result tests — fence forced mid-lookup, acceptance scenario G safe mode
+- [ ] Test-only unsafe mode — **specified, not built.** `AETHER_UNSAFE_MODE` is parsed and honoured
+      nowhere; building a real bypass through the gate purely to fail a control test is not a trade
+      worth making (R11). Its acceptance test is skipped rather than passing
 - [ ] Evaluator implementation started
 
 ---
 
 ## Day 5 — Hardening
 
-- [ ] Integrate all paths
-- [ ] Run acceptance tests A–G
-- [ ] Fix race conditions
-- [ ] Verify full-duplex behavior
-- [ ] Verify stale results cannot speak
-- [ ] Improve salvage
-- [ ] Improve the warehouse scenario
+- [x] Integrate all paths — hotel tools, router, classifier and controls are wired into the one loop
+- [x] Run acceptance tests A–G — six of eight execute; the two skips name the missing feature
+- [x] Verify stale results cannot speak — asserted at the LLM, tool, TTS and gate layers
+- [~] Fix race conditions — the console's port release and the post-turn `phase` window were fixed
+      (MEMORY.md §7). Concurrency across two simultaneous calls remains unexercised
+- [ ] Verify full-duplex behavior — **blocked on a real call**
+- [~] Improve salvage — cut, see Day 4
+- [x] Improve the scenario — replaced by the hotel menu, which is the product
+
+### Beyond the original plan (2026-09-08)
+
+- [x] Hotel menu fixture, 8 read-only tools, deterministic routing — `aether/hotel/`
+- [x] LiveKit↔AETHER audio bridges, synthetic-verified — `aether/bridge/`
+- [x] Telephony worker: lifecycle, greeting, teardown — `aether/telephony/`
+- [x] One listening toggle + separate INTERRUPT, through the real bridge
+- [x] Siri-style console: nine orb states, transcript, evidence strip, reconnect recovery
+- [x] Call failure-stage diagnostics — `aether/telephony/diagnostics.py`
+- [x] Process prewarm, measured — `aether/prewarm.py`
+- [ ] **One real phone call.** Nothing above is evidence about telephony (RIME_EVIDENCE Part 6)
 - [ ] *(optional)* Spoken-prefix recovery — only if the core is already solid
 - [ ] *(optional)* Single-slot suspend/resume — only if the core is already solid
 

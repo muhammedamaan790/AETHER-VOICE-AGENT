@@ -377,3 +377,113 @@ def test_the_http_server_serves_the_ui(running_bridge):
         body = resp.read().decode("utf-8")
     assert resp.status == 200
     assert "AETHER" in body and "transcript" in body
+
+
+# ============================ transcript and reconnect ============================
+#
+# The transcript lives in `UiState`, not in the browser. That is what lets a reconnecting tab be
+# handed the conversation instead of an empty screen, and it is why there is no second copy of the
+# truth to drift out of step.
+
+def fold(*events) -> UiState:
+    state = UiState()
+    for ev in events:
+        state.apply(ev)
+    return state
+
+
+def test_a_customer_utterance_becomes_a_transcript_line():
+    state = fold({"type": "TranscriptFinal", "text": "what starters do you have",
+                  "turn_id": 1, "gen": None, "seq": 3})
+    assert state.transcript == [{
+        "role": "customer", "text": "what starters do you have", "status": "said",
+        "reason": None, "turn_id": 1, "gen": None, "seq": 3,
+    }]
+
+
+def test_an_empty_transcript_is_not_shown_as_a_turn():
+    """A noise burst that transcribed to nothing is not something the caller said."""
+    assert fold({"type": "TranscriptFinal", "text": "   "}).transcript == []
+
+
+def test_a_spoken_answer_and_an_interrupted_one_are_distinguishable():
+    """The single most important thing this UI has to make visible."""
+    state = fold(
+        {"type": "TranscriptFinal", "text": "what starters do you have", "turn_id": 1},
+        {"type": "ResponseSpoken", "text": "For starters we have...", "turn_id": 1, "gen": "G1"},
+        {"type": "TranscriptFinal", "text": "what desserts do you have", "turn_id": 2},
+        {"type": "ResultDiscarded", "reason": "stale_generation_llm", "turn_id": 2, "gen": "G2"},
+    )
+    assert [row["role"] for row in state.transcript] == [
+        "customer", "aether", "customer", "aether"]
+    assert state.transcript[1]["status"] == "spoken"
+    assert state.transcript[3]["status"] == "interrupted"
+    assert state.transcript[3]["reason"] == "stale_generation_llm"
+    assert state.transcript[3]["text"] is None, (
+        "an interrupted answer has no spoken text; inventing one would present a turn that "
+        "never happened"
+    )
+
+
+def test_the_interruption_class_reaches_the_evidence_strip():
+    state = fold({"type": "InterruptionClassified", "interruption_class": "BACKCHANNEL",
+                  "rule": "closed_set", "gen": "G1"})
+    assert state.last_class == "BACKCHANNEL"
+    assert state.last_class_rule == "closed_set"
+    assert state.snapshot()["last_class"] == "BACKCHANNEL"
+
+
+def test_a_stale_leak_is_counted_and_surfaced():
+    """RULES.md R1.4. The number the whole design exists to keep at zero is never hidden."""
+    assert fold().snapshot()["leaks"] == 0
+    state = fold({"type": "ResultLeaked", "gen": "G1", "reason": "test"})
+    assert state.snapshot()["leaks"] == 1
+
+
+def test_who_is_speaking_is_folded_from_the_engine_not_guessed_by_the_page():
+    state = fold({"type": "SpeechOnset"})
+    assert state.snapshot()["speech_active"] is True
+    state.apply({"type": "SpeechEnded"})
+    assert state.snapshot()["speech_active"] is False
+
+
+def test_the_transcript_is_bounded():
+    """A long call must not grow the snapshot without limit."""
+    state = UiState()
+    for i in range(200):
+        state.apply({"type": "TranscriptFinal", "text": f"line {i}", "turn_id": i})
+    assert len(state.transcript) == 60
+    assert state.transcript[-1]["text"] == "line 199"
+
+
+def test_a_reconnecting_browser_is_handed_the_conversation_not_an_empty_screen():
+    """The snapshot a new socket receives must carry the history the engine already has."""
+    bridge = WebBridge()
+    for ev in ({"type": "TranscriptFinal", "text": "what starters do you have", "turn_id": 1},
+               {"type": "ResponseSpoken", "text": "For starters we have...", "gen": "G1"}):
+        bridge.state.apply(ev)
+
+    snapshot = bridge.current_state()
+    assert len(snapshot["transcript"]) == 2
+    assert snapshot["transcript"][0]["text"] == "what starters do you have"
+    assert "interruptible" in snapshot and "listening" not in snapshot, (
+        "listening is only reported when a real source is wired -- never assumed"
+    )
+
+
+def test_the_snapshot_is_json_serialisable():
+    """It crosses a websocket. A value that cannot be serialised would silently break the UI."""
+    bridge = WebBridge(phase_source=lambda: "speaking", listening_source=lambda: True)
+    bridge.state.apply({"type": "TranscriptFinal", "text": "hello", "turn_id": 1})
+    json.dumps({"kind": "state", **bridge.current_state()})
+
+
+def test_the_ui_renders_the_one_toggle_and_a_separate_interrupt():
+    """Never both START and STOP at once, and never Interrupt as the way to begin speaking."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert "Start Listening" in html and "Stop Listening" in html
+    assert 'id="listenBtn"' in html and 'id="interruptBtn"' in html
+    assert html.count('id="listenBtn"') == 1, "exactly one listening toggle"
+    assert "push to talk" not in html.lower() and "push-to-talk" not in html.lower()
+    for key in ("transcript", "interruptible", "last_class", "leaks", "speech_active"):
+        assert key in html, f"{key} should drive the UI"

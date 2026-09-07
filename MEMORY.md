@@ -88,8 +88,13 @@ full stop are distinguishable and separately measurable; no separate `ToolCallSt
 
 ## 4. Implementation status
 
-The realtime voice path is built and tested. The continuity engine on top of it — classifier,
-supervisor transitions, result-side Output Gate, evaluator — is still untouched, by design.
+The realtime voice path is built and tested, and the continuity engine on top of it now exists:
+the classifier is implemented and wired, the transitions it implies are emitted, and the hotel
+product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
+path, and the evaluator.
+
+**Updated 2026-09-08: 653 tests pass, 2 skipped.** Both skips are features that do not exist, and
+each names itself.
 
 | Component | Status |
 |---|---|
@@ -108,16 +113,20 @@ supervisor transitions, result-side Output Gate, evaluator — is still untouche
 | `aether/timing.py` — per-turn latency | **Implemented, tested.** Rides on the existing `ResponseSpoken` event; no new event types |
 | `aether/interruption/` — BargeInCoordinator | **Implemented, tested.** Owns *when* a barge-in becomes a fence; arms on a turn in flight, not only on audible playback |
 | `aether/tools/`, `aether/warehouse/` — tools + fixture | **Implemented, tested** (see row below) |
-| `aether/web/` — observation-only UI | **Implemented, tested.** Folds the canonical event stream into a snapshot; the emitting thread only does `put_nowait`, and nothing can fence, enqueue or allocate |
+| `aether/web/` — the AETHER console | **Implemented, tested.** Folds the canonical event stream into a snapshot including the transcript, so a reconnecting browser is handed the conversation rather than an empty screen. The emitting thread only does `put_nowait`, and the bridge still cannot fence, enqueue or allocate — it holds exactly two injected callables. Siri-style animated orb with nine states, one listening toggle, a separate INTERRUPT, and an evidence strip |
 | `aether/supervisor/generations.py` — generation IDs | **Implemented, tested.** Monotonic allocation plus `mark_fenced` / `is_active`, which is the authority every stage consults. The *supervisor transitions* built on top of it are still Day 3 |
-| `aether/spike.py` — the voice loop | Implemented and **run end to end headless** (`scripts/bench_turn.py`: WAV → STT → Gemini → Rime WS3 → AudioGate, 3/3 turns spoke). **Still never run with a live microphone and a human** |
-| Classifier | Not started (Day 3) |
-| Supervisor transitions | Not started (Day 3) |
+| `aether/spike.py` — the voice loop | Implemented and **run end to end headless** (`scripts/bench_turn.py`: WAV → STT → Gemini → Rime WS3 → AudioGate, 3/3 turns spoke), and since run with a live microphone. Now also carries the classifier hook and the listening controls. **Never run over a real phone call** |
+| `aether/classify/` — six-class classifier | **Implemented, tested, wired (2026-09-08).** Closed sets, whole-utterance matching, no model, no confidence score. Runs after STT and **before** `begin_turn`, because allocation is what fences. `BACKCHANNEL` and `STATUS_QUERY` withhold a turn entirely; `CANCEL` fences with no successor; the other three proceed and label `TaskReplaced`. Anything unrecognised falls to `REPLACEMENT`, which fences |
+| Supervisor transitions | **Implemented for all six classes** in `Day1Spike.handle_utterance` / `_resolve_without_a_turn`, emitting `InterruptionClassified`, `BackchannelDetected`, `TaskReplaced` and `CancellationResolved`. There is still no separate supervisor *module*: the transitions live at the turn boundary, and `GenerationRegistry` remains the authority. **Salvage is not implemented and is not faked** |
+| `aether/hotel/` — menu fixture, tools, router | **Implemented, tested, wired (2026-09-07/08).** 29 dishes across four categories with price, diet, spice, allergens and availability; 8 read-only tools through the existing `ToolRunner`; deterministic keyword/slot routing with spoken templates. Menu facts never reach the LLM |
+| `aether/bridge/`, `aether/telephony/` — LiveKit transport | **Implemented, tested against synthetic audio only.** `InboundBridge`/`OutboundBridge` carry a transport into the unchanged pipeline; the worker uses `livekit.rtc` directly and never `AgentSession`. **No successful phone call has been made** |
+| `aether/prewarm.py` — process warm-up | **Implemented, measured.** 3810 ms cold, 672 ms warm; run before the worker registers |
+| `aether/telephony/diagnostics.py` — failure-stage report | **Implemented, tested.** Names the first stage that produced nothing, from bridge counters and the trace |
 | Fencing / Output Gate | **Audio-side fencing landed early** (pulled forward from Day 4 to fix a real defect): the AudioGate tags every queued chunk with its generation, refuses `enqueue` for a non-active generation, flushes on fence, and drops in-flight chunks in the callback — each recorded as `ResultDiscarded`. The *result*-side Output Gate (tool results, salvage, unsafe mode) is still Day 4 |
 | Warehouse dataset + tools | **Implemented, tested** (2026-09-07). `aether/warehouse/` holds the deterministic fixture (7 products, 7 bins, 12 orders — 8 high priority, 3 of them in aisle 9) plus `WarehouseStore`, the only mutable state. `aether/tools/` holds 9 structured tools and `ToolRunner`, with an injectable delay and a fence check placed **after** the delay and **before** the tool body — so a fenced generation's `skip`/`cancel`/`select` never reaches the store at all, not merely its output. Emits `TaskStarted` → `ResultReceived` \| `ResultDiscarded`; no new event types. **Not yet wired into `spike.py`** — routing an utterance to a tool is classifier/supervisor work (Day 3) |
 | Evaluator | Not started (Day 4) |
 | Observability panel | Not started (Day 6) |
-| Acceptance tests A–H | Pre-registered as specs and skipped stubs; none executed |
+| Acceptance tests A–H | **Six of eight now execute** (2026-09-08): A, B, C, D, E, F and safe-mode G run against a real pipeline with fake IO. G's unsafe control and H's salvage case stay skipped because neither feature exists. Three original assertions were narrowed rather than dropped, each recorded in its test docstring and in RIME_EVIDENCE Part 3 |
 
 ### Conversation history: Level 1 (implemented) vs Level 2 (not implemented)
 
@@ -264,6 +273,38 @@ Still `<from_run>` and must not be quoted:
 
 ## 7. Known bugs and limitations
 
+### Fixed 2026-09-08, recorded so the reasoning is not lost
+
+- **A backchannel killed the answer it was encouraging.** `handle_utterance` allocated a generation
+  before transcribing, and allocation is what fences the previous generation. So "mm-hm" said over
+  an answer destroyed it. Fixed by transcribing and classifying **before** `begin_turn`.
+  `TranscriptFinal` now carries `gen: null`, because at the moment STT runs the generation this
+  utterance belongs to does not exist yet — and may never exist.
+- **A noise burst that transcribed to nothing killed the answer too**, by exactly the same
+  mechanism: the empty-transcript check returned early, but the generation had already been
+  allocated on the way in. Same fix.
+- **`in_flight` is not `turn_in_flight`.** `rime.speak` returns once audio is *enqueued*, not once
+  it has been heard, so `handle_utterance` finishes and clears the flag while several seconds of a
+  menu answer are still playing. `Phase` reported LISTENING mid-sentence, which told the console
+  the agent was idle and told the INTERRUPT button there was nothing to interrupt at the exact
+  moment there was. Both now also ask the gate — `phase` additionally requires an **active**
+  generation, so audio about to be flushed after a fence is not called "speaking".
+- **`WebBridge.stop()` left its ports bound.** `shutdown()` stops the serve loop; `server_close()`
+  releases the socket, and only the first was being called. The second call in a process — the next
+  phone call starting its own console — would fail to bind with no obvious cause.
+
+### Standing limitations
+
+- **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is
+  laptop-derived and expected to need re-deriving on telephony audio.
+- **Salvage does not exist.** A refinement reuses nothing, so it behaves exactly as a replacement
+  and only the `TaskReplaced.reason` differs. `ResultSalvaged` is never emitted (RULES.md R8).
+- **`AETHER_UNSAFE_MODE` is inert.** Parsed into `RuntimeConfig` and read by nothing, so the
+  unsafe control condition for acceptance scenario G cannot be run and that test is skipped.
+- **A status query is not answered aloud.** It protects the task in flight; speaking over it would
+  need a second audio path able to bypass the gate's single active generation.
+- **One caller at a time is the tested case.** Each call builds its own pipeline and its own menu
+  store, so calls share no state, but concurrency has not been exercised.
 - **No acoustic echo cancellation.** The mic stays open while the agent speaks, so on open
   speakers the agent's own output can retrigger the VAD. Headphones are required for the Day-1
   spike and the demo. Deliberately not solved on Day 1.

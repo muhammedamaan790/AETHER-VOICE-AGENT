@@ -6,9 +6,13 @@ The engine is the SAME `Day1Spike` the CLI runs -- constructed once, run on a ba
 Nothing is duplicated and nothing is re-implemented; the browser subscribes to the trace that the
 run already produces. `python -m aether.spike` is untouched and keeps working exactly as before.
 
-The browser has exactly ONE control: interrupt. It cannot start, stop or otherwise steer the
-engine, and it never touches audio -- the microphone and speaker belong to this process. In
-push-to-talk mode the mic is closed until you press it.
+The browser has exactly TWO controls, and they mean different things:
+
+    START / STOP LISTENING   whether the microphone is open. Fences nothing, ends nothing.
+    INTERRUPT                fence whatever AETHER is doing. Does not close the microphone.
+
+It cannot otherwise steer the engine, and it never touches audio -- the microphone and speaker
+belong to this process.
 """
 
 from __future__ import annotations
@@ -58,6 +62,9 @@ def main() -> None:
         on_interrupt=lambda: spike.interrupt(source="button"),
         # Standby is a separate control: it mutes the mic and fences nothing.
         on_standby=lambda: spike.toggle_standby(),
+        # THE LISTENING TOGGLE. Takes the desired state, so the button and the engine cannot end
+        # up disagreeing about which way the toggle is pointing.
+        on_listening=lambda on: spike.set_listening(on),
         http_port=args.http_port,
         ws_port=args.ws_port,
     )
@@ -66,7 +73,8 @@ def main() -> None:
 
     url = f"http://127.0.0.1:{args.http_port}/index.html?ws={args.ws_port}"
     print(f"\nAETHER web view: {url}")
-    print("Observation only -- the mic and speaker belong to this process.\n")
+    print("Two controls: the listening toggle, and INTERRUPT. "
+          "The mic and speaker belong to this process.\n")
     if not args.no_open:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
 
