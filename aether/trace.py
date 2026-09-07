@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections.abc import Callable
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -54,12 +55,34 @@ class Trace:
         self._seq = 0
         self.events: list[Event] = []
         self.echo = echo
+        # Observers of the event stream (the web UI). Never part of the pipeline: a subscriber
+        # cannot change an event, and cannot stop one being written.
+        self._subscribers: list[Callable[[Event], None]] = []
         self.path: Path | None = None
         self._fh = None
         if path is not None:
             self.path = Path(path)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._fh = self.path.open("a", encoding="utf-8")
+
+    def subscribe(self, callback: Callable[[Event], None]) -> Callable[[], None]:
+        """Observe every event as it is emitted. Returns an unsubscribe callable.
+
+        CONTRACT, and it is not negotiable: `callback` is invoked on whichever thread emitted the
+        event, which includes the PortAudio callback thread. It must do nothing but hand the event
+        to a queue -- `queue.put_nowait()`. No sockets, no JSON, no file IO, no locks. Anything
+        slower risks a glitch in the audio the agent is speaking (MEMORY.md locked decision 14).
+
+        Subscribers are dispatched outside the trace lock and each is wrapped, so a failing or slow
+        observer degrades only itself: the trace is still written and the pipeline still runs.
+        """
+        self._subscribers.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self._subscribers:
+                self._subscribers.remove(callback)
+
+        return unsubscribe
 
     @classmethod
     def new_run(cls, trace_dir: str | Path = "traces", echo: bool = False) -> "Trace":
@@ -103,6 +126,14 @@ class Trace:
                 if text:
                     line += f'  "{text}"'
                 print(line, flush=True)
+
+        # Dispatched AFTER the lock is released: an observer must never be able to hold up the
+        # next emit, and must never be able to break the run.
+        for subscriber in tuple(self._subscribers):
+            try:
+                subscriber(ev)
+            except Exception:
+                pass
         return ev
 
     # --- read helpers (used by tests and the latency harness) ----------------------

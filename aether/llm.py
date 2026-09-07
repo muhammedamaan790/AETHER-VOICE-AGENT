@@ -22,10 +22,12 @@ caller re-checks the fence before anything reaches Rime.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Protocol
 
 from .conversation import Message
+from .sentences import SentenceAccumulator
+from .trace import now_ms
 
 # Voice-first. The model is instructed to be brief rather than having its output truncated after
 # the fact: truncation cuts mid-sentence, which sounds broken when spoken aloud.
@@ -49,11 +51,26 @@ REQUEST_TIMEOUT_S = 30.0
 PROVIDER_ORDER = ("groq", "anthropic", "openai", "gemini")
 
 # provider -> (api key env var, model env var, default model)
+#
+# The Gemini default is a MEASURED choice, not a preference. Measured 2026-09-07 against this
+# adapter's own `respond_stream`, 3 calls per model, same prompt:
+#
+#     gemini-3.8-flash          ttft   n/a     total 13809 ms   2/3 ServerError   <- previous default
+#     gemini-3.5-flash-lite     ttft   978 ms  total   978 ms   0/3 errors
+#     gemini-flash-lite-latest  ttft   800 ms  total   800 ms   0/3 errors        <- chosen
+#     gemini-2.5-flash-lite     3/3 ClientError
+#     gemini-2.5-flash          3/3 ClientError
+#
+# `gemini-3.8-flash` was not merely slow, it was failing the majority of calls: a full-pipeline
+# bench turn on it recorded llm_ttft_ms = 23112 and the next turn died with ServerError. For a
+# realtime voice agent that is not a latency regression, it is an outage.
+#
+# Overridable with GEMINI_MODEL as before -- this changes only what happens when nothing is set.
 PROVIDER_ENV: dict[str, tuple[str, str, str]] = {
     "groq": ("GROQ_API_KEY", "GROQ_MODEL", "llama-3.3-70b-versatile"),
     "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "claude-opus-5"),
     "openai": ("OPENAI_API_KEY", "OPENAI_MODEL", "gpt-4o-mini"),
-    "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL", "gemini-3.8-flash"),
+    "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL", "gemini-flash-lite-latest"),
 }
 
 
@@ -85,6 +102,16 @@ class LLM(Protocol):
     name: str
 
     def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str: ...
+
+
+def supports_streaming(llm: object) -> bool:
+    """Whether this provider can stream sentences.
+
+    A capability check, not a provider check: the pipeline asks the object, so a provider that
+    gains or loses streaming needs no change anywhere else. `respond()` remains the contract every
+    provider must satisfy; streaming is strictly additional.
+    """
+    return callable(getattr(llm, "respond_stream", None))
 
 
 class StubLLM:
@@ -171,13 +198,42 @@ class AnthropicLLM:
 class GeminiLLM:
     def __init__(self, api_key: str, model: str):
         from google import genai
+        from google.genai import types
 
         self.name = f"gemini:{model}"
         self.model = model
         self._genai = genai
-        self._client = genai.Client(api_key=api_key)
+        # Groq, OpenAI and Anthropic all bound their requests; Gemini alone did not, so a wedged
+        # call could block the voice loop indefinitely. HttpOptions.timeout is in milliseconds.
+        # Construction is timed because it is a plausible per-turn cost if anything ever
+        # recreates the client. It is built ONCE per session here; `transport_reused` on each
+        # stream reports whether that stayed true.
+        _t0 = now_ms()
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=int(REQUEST_TIMEOUT_S * 1000)),
+        )
+        self.client_init_ms = round(now_ms() - _t0, 3)
+        # Identity of the SDK's persistent httpx transport. httpx pools keep-alive connections,
+        # so a stable id across turns means no new TCP/TLS handshake per request.
+        self._transport_id = self._httpx_transport_id()
+        self.requests_made = 0
+        self.last_stream_timing: dict[str, float | int | bool | None] | None = None
+        # Measured token usage from the last call, kept for production diagnosis.
+        # No thinking_config is set, and that is a measured decision: an interleaved A/B with
+        # history (3 questions per arm, all correct in both) gave thinking-default median 2270 ms
+        # vs thinking_budget=0 median 2236 ms -- a 34 ms gap with overlapping ranges. Latency is
+        # dominated by server-side variance, not by thinking.
+        self.last_usage: dict[str, int] | None = None
 
-    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
+    def _httpx_transport_id(self) -> int | None:
+        """Identity of the SDK's underlying sync httpx client, or None if it is not exposed."""
+        try:
+            return id(self._client._api_client._httpx_client)
+        except Exception:
+            return None
+
+    def _build_contents(self, user_text: str, history: Sequence[Message] | None):
         from google.genai import types
 
         # Gemini names the assistant role "model"; everything else is the same role/text pairs.
@@ -189,7 +245,12 @@ class GeminiLLM:
             for m in _prior_turns(history)
         ]
         contents.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
+        return contents
 
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
+        from google.genai import types
+
+        contents = self._build_contents(user_text, history)
         resp = self._client.models.generate_content(
             model=self.model,
             contents=contents,
@@ -198,7 +259,79 @@ class GeminiLLM:
                 max_output_tokens=MAX_OUTPUT_TOKENS,
             ),
         )
+        self._record_usage(getattr(resp, "usage_metadata", None))
         return (resp.text or "").strip()
+
+    def respond_stream(
+        self, user_text: str, history: Sequence[Message] | None = None
+    ) -> Iterator[str]:
+        """Yield sentences as the model produces them.
+
+        Deliberately separate from `respond()`: that path keeps the retry wrapper and the settled
+        reliability behaviour, and nothing about it changes. This one trades retry for the chance
+        to start speaking before generation finishes -- a stream cannot be transparently retried
+        once its first sentence has already been sent to the speaker.
+
+        Measured caveat, recorded so nobody expects more than it gives: on 2026-09-06 streaming a
+        one-sentence reply showed first_text 2889 ms vs total 2891 ms. Gemini does not stream
+        thinking as text, so a short answer still arrives as a single chunk after thinking ends.
+        This pays off for multi-sentence replies, not for the current one-sentence voice prompt.
+        """
+        from google.genai import types
+
+        contents = self._build_contents(user_text, history)
+
+        # TTFT is measured on the RAW provider chunk, not on the first assembled sentence. The
+        # accumulator deliberately holds text back until a boundary, so timing it there would
+        # blame the accumulator for the provider's latency (or vice versa). Both are recorded.
+        request_sent_ms = now_ms()
+        self.requests_made += 1
+        stream = self._client.models.generate_content_stream(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+            ),
+        )
+
+        accumulator = SentenceAccumulator()
+        last = None
+        ttft_ms: float | None = None
+        raw_chunks = 0
+        try:
+            for chunk in stream:
+                text = chunk.text or ""
+                if text and ttft_ms is None:
+                    ttft_ms = round(now_ms() - request_sent_ms, 3)
+                if text:
+                    raw_chunks += 1
+                last = getattr(chunk, "usage_metadata", None) or last
+                yield from accumulator.feed(text)
+            tail = accumulator.flush()
+            if tail:
+                yield tail
+        finally:
+            # Recorded even when the consumer stops early (a fence closes the generator), so a
+            # fenced turn still reports how long the provider actually took.
+            self.last_stream_timing = {
+                "request_sent_ms": round(request_sent_ms, 3),
+                "ttft_ms": ttft_ms,
+                "total_ms": round(now_ms() - request_sent_ms, 3),
+                "raw_chunks": raw_chunks,
+                "transport_reused": self._httpx_transport_id() == self._transport_id,
+                "client_init_ms": self.client_init_ms,
+                "requests_made": self.requests_made,
+            }
+        self._record_usage(last)
+
+    def _record_usage(self, usage) -> None:
+        if usage is not None:
+            self.last_usage = {
+                "prompt_tokens": usage.prompt_token_count or 0,
+                "thoughts_tokens": usage.thoughts_token_count or 0,
+                "output_tokens": usage.candidates_token_count or 0,
+            }
 
 
 _BUILDERS = {
@@ -207,6 +340,115 @@ _BUILDERS = {
     "openai": _build_openai,
     "gemini": GeminiLLM,
 }
+
+
+# Transient provider failures, retried. Measured against gemini-3.8-flash on 2026-09-06: 2 of 6
+# calls returned 503 UNAVAILABLE ("this model is currently experiencing high demand"). That is
+# server-side capacity, not a bug here, and a turn lost to it is a turn the user has to repeat.
+TRANSIENT_STATUS = (429, 500, 502, 503, 504)
+
+# NOTE on 429 RESOURCE_EXHAUSTED "you exceeded your current quota": Google uses that same wording
+# for a per-minute rate limit as for a hard plan quota, and measurement showed it IS recoverable --
+# calls succeeded again at +0 s, +35 s and +70 s after a burst exhausted the window. So a 429 stays
+# retryable. An earlier reading of "6 of 6 failed within seconds" was wrong: those six calls were
+# one burst inside a single one-minute window, not proof of a permanent failure.
+#
+# Caveat worth knowing: the backoff below (0.5 s / 1.0 s) is far shorter than a one-minute window,
+# so a retry will not rescue an RPM-limited turn. Lengthening it trades against a caller sitting in
+# silence, and that trade has not been measured -- left alone deliberately.
+TRANSIENT_MARKERS = ("unavailable", "overloaded", "timeout", "timed out", "temporarily",
+                     "try again", "connection reset", "connection aborted", "rate limit")
+
+# Deliberately short: this is a voice loop, and a caller waiting in silence is the thing being
+# traded against. Worst case adds ~1.5 s before the turn is given up on.
+RETRY_BACKOFF_S = (0.5, 1.0)
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Transient == worth retrying. Auth and malformed-request failures are not.
+
+    Status code first (every SDK here exposes one somewhere), message text only as a fallback, so
+    a provider that words its errors differently still degrades to "don't retry" rather than
+    retrying something hopeless.
+    """
+    for attr in ("status_code", "code", "http_status"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value in TRANSIENT_STATUS
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    text = str(exc).lower()
+    if any(str(code) in text for code in TRANSIENT_STATUS):
+        return True
+    return any(marker in text for marker in TRANSIENT_MARKERS)
+
+
+class RetryingLLM:
+    """Retries transient provider failures. Wraps any adapter without knowing which one.
+
+    Applied once in `build_llm()`, so no adapter and no provider-selection logic changes. It never
+    substitutes a different provider and never invents a response: if every attempt fails, the
+    exception propagates and the caller's existing `ResultDiscarded` path handles it.
+    """
+
+    def __init__(self, inner: LLM, backoff: tuple[float, ...] = RETRY_BACKOFF_S):
+        self._inner = inner
+        self._backoff = backoff
+        self.name = inner.name
+        self.last_attempts = 0
+        # Capability MIRRORING, and it has to be per-instance rather than a method on the class.
+        #
+        # `supports_streaming()` is deliberately a duck-type check -- it asks the object it was
+        # handed, so a provider that gains or loses streaming needs no change anywhere else. A
+        # wrapper that unconditionally defines `respond_stream` breaks exactly that contract: it
+        # answers "yes" on behalf of an adapter that cannot stream, the pipeline commits to the
+        # streaming path, and the turn dies on the first token.
+        #
+        # That was not theoretical. Every non-Gemini provider (groq, anthropic, openai) failed
+        # 100% of turns with `llm_stream_error` (AttributeError) because this wrapper claimed a
+        # capability the adapter underneath did not have. Binding the attribute only when the
+        # inner adapter really streams makes the wrapper honest by construction.
+        if callable(getattr(inner, "respond_stream", None)):
+            self.respond_stream = self._respond_stream
+
+    def _respond_stream(
+        self, user_text: str, history: Sequence[Message] | None = None
+    ) -> Iterator[str]:
+        """Delegate streaming, WITHOUT retrying it.
+
+        Retrying a stream is not transparent: by the time a failure appears, earlier sentences may
+        already have been spoken, and replaying them would repeat audio the user has heard. A
+        failed stream is surfaced to the caller, which discards the turn exactly as it discards any
+        other failure. Non-streaming `respond()` keeps its retry behaviour untouched.
+
+        Only reachable when `__init__` bound it, so the inner adapter is known to stream.
+        """
+        return self._inner.respond_stream(user_text, history)
+
+    @property
+    def last_stream_timing(self):
+        """Pass through the wrapped adapter's stream measurements, if it takes any."""
+        return getattr(self._inner, "last_stream_timing", None)
+
+    @property
+    def last_usage(self) -> dict[str, int] | None:
+        """Pass through whatever the wrapped adapter measured, if anything."""
+        return getattr(self._inner, "last_usage", None)
+
+    def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
+        import time
+
+        last: Exception | None = None
+        for attempt in range(len(self._backoff) + 1):
+            self.last_attempts = attempt + 1
+            try:
+                return self._inner.respond(user_text, history)
+            except Exception as exc:
+                last = exc
+                if attempt >= len(self._backoff) or not _is_transient(exc):
+                    raise
+                time.sleep(self._backoff[attempt])
+        raise last  # unreachable; keeps the type checker honest
 
 
 def _env(name: str) -> str:
@@ -253,7 +495,8 @@ def build_llm() -> LLM:
     key_var, model_var, default_model = PROVIDER_ENV[provider]
     model = _env(model_var) or default_model
     try:
-        return _BUILDERS[provider](_env(key_var), model)
+        # Retry wraps the chosen provider; it never changes which provider was chosen.
+        return RetryingLLM(_BUILDERS[provider](_env(key_var), model))
     except ImportError as exc:
         raise LLMConfigurationError(
             f"LLM_PROVIDER={provider!r} needs its SDK installed: {exc}. "

@@ -21,6 +21,7 @@ gap is visible rather than hidden. See MEMORY.md for this limitation.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections import deque
 
@@ -38,7 +39,17 @@ def preferred_output_device() -> int | None:
 
     That residual is audio already queued past the callback, so it directly bounds how quickly the
     user actually stops hearing the agent. Returns None (PortAudio default) if WASAPI is absent.
+
+    `AETHER_OUTPUT_DEVICE` overrides this. That matters: WASAPI's default endpoint is not
+    necessarily the one Windows is sending your audio to, and picking it silently is a good way to
+    play a perfect reply into a speaker nobody is listening to.
     """
+    override = (os.environ.get("AETHER_OUTPUT_DEVICE") or "").strip()
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            return None
     try:
         for host in sd.query_hostapis():
             if host["name"] == "Windows WASAPI" and host["default_output_device"] >= 0:
@@ -46,6 +57,44 @@ def preferred_output_device() -> int | None:
     except Exception:
         pass
     return None
+
+
+def negotiate_output(device: int | None, preferred_rate: int | None = None) -> tuple[int | None, int]:
+    """Find a (device, samplerate) pair the machine will actually accept.
+
+    A hardcoded rate is a real hazard here. WASAPI shared mode only opens at the endpoint's own
+    native rate -- measured on this machine, the WASAPI speaker accepts 48000 and REFUSES 44100 --
+    so a device whose native rate is 44100 (headphones commonly are) would make a fixed 48000 raise
+    at startup and take the whole agent down with it.
+
+    So: ask the device what it wants, try that, and fall back to the PortAudio default rather than
+    failing. Rime is then asked for whatever rate we settled on -- 44100 and 48000 are both in its
+    verified supported list -- which keeps the format matched end to end instead of resampling.
+    """
+    candidates: list[tuple[int | None, int]] = []
+    for dev in (device, None):
+        rates: list[int] = []
+        if preferred_rate:
+            rates.append(preferred_rate)
+        try:
+            native = int(round(sd.query_devices(dev if dev is not None else sd.default.device[1])
+                               ["default_samplerate"]))
+            rates.append(native)
+        except Exception:
+            pass
+        rates += [48000, 44100]
+        for rate in dict.fromkeys(rates):          # de-dup, order preserved
+            candidates.append((dev, rate))
+
+    for dev, rate in candidates:
+        try:
+            probe = sd.OutputStream(samplerate=rate, channels=1, dtype="int16", device=dev,
+                                    blocksize=rate // 100, latency="low")
+            probe.close()
+            return dev, rate
+        except Exception:
+            continue
+    return device, preferred_rate or 48000
 
 
 class AudioGate:
@@ -64,8 +113,13 @@ class AudioGate:
     ):
         if device is None:
             device = preferred_output_device()
+        # Negotiate rather than assert: a device that cannot open at `samplerate` would otherwise
+        # raise on open() and kill the session before a single word is spoken.
+        device, samplerate = negotiate_output(device, samplerate)
+        blocksize = max(1, samplerate // 100)      # keep the 10 ms block regardless of rate
         self.trace = trace
         self.samplerate = samplerate
+        self.device = device
         self.blocksize = blocksize
         self.duck_gain = duck_gain
 
