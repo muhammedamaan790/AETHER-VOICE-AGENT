@@ -32,6 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 
+from ..errors import ToolLookupError
+
 
 class OrderStatus(str, Enum):
     """Pick lifecycle. Deliberately four states -- there is no partial-pick model."""
@@ -127,7 +129,7 @@ _PRODUCTS_BY_SKU = {p.sku: p for p in PRODUCTS}
 _BINS_BY_ID = {b.bin_id: b for b in BINS}
 
 
-class UnknownRecord(KeyError):
+class UnknownRecord(ToolLookupError):
     """A lookup for something the fixture does not contain. Never guessed at."""
 
 

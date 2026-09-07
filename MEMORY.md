@@ -3,8 +3,9 @@
 Authoritative state of the project. Read this first after any context loss. If this file disagrees
 with anyone's recollection, this file wins until it is updated with evidence.
 
-**Last updated:** Day 1 (2026-09-06) — voice spike built; audio path measured; **Rime verified,
-connected and speaking**.
+**Last updated:** 2026-09-07 — Rime WS3 streaming, interruption subdomain, warehouse + tools,
+adverse-audio sweep, and two credential-disclosure fixes. The realtime voice path is built and
+tested; the continuity engine (classifier, supervisor, evaluator) is not started.
 
 ---
 
@@ -87,7 +88,8 @@ full stop are distinguishable and separately measurable; no separate `ToolCallSt
 
 ## 4. Implementation status
 
-Day 1 built the voice spike. The continuity engine is still untouched, by design.
+The realtime voice path is built and tested. The continuity engine on top of it — classifier,
+supervisor transitions, result-side Output Gate, evaluator — is still untouched, by design.
 
 | Component | Status |
 |---|---|
@@ -98,11 +100,17 @@ Day 1 built the voice spike. The continuity engine is still untouched, by design
 | `aether/audio/vad.py` — always-open mic + WebRTC VAD | **Implemented, tested** |
 | `aether/audio/player.py` — AudioGate duck/stop/resume | **Implemented, tested**; now also **generation-aware** (see below) |
 | `aether/stt.py` — faster-whisper (local, `base.en`) | **Implemented, tested on a speech fixture** |
-| `aether/llm.py` — reasoning path | Interface implemented; **only the stub has run** (no credential) |
+| `aether/llm.py` — reasoning path | **Implemented, tested, and executed against the live API.** Four providers (groq/anthropic/openai/gemini), `RetryingLLM`, and Gemini sentence streaming via `respond_stream`. Gemini is the only provider with a working credential — the Groq key does not authenticate. Default model `gemini-flash-lite-latest`, chosen by measurement (§5) |
 | `aether/conversation.py` — session history (Level 1) | **Implemented, tested.** In-memory, session-scoped, committed only at the completed/spoken boundary |
-| `aether/audio/rime.py` — Rime TTS client | **Implemented and executed against the live API** — real MP3 audio returned, decoded and played |
-| `aether/supervisor/generations.py` — generation IDs | ID allocation only, tested. **No fencing logic** |
-| `aether/spike.py` — Day-1 loop | Implemented; **not run end-to-end with a live mic** |
+| `aether/audio/rime.py` — Rime HTTP client | **Implemented and executed against the live API** — real MP3 audio returned, decoded and played. Now the fallback transport (`RIME_TRANSPORT=http`) |
+| `aether/audio/rime_ws.py` — Rime `/ws3` streaming | **Implemented, tested, and the default judged transport.** PCM at the gate's own rate (no MP3 decode, no resample), persistent socket reused across turns, `{"operation":"clear"}` on fence. Deliberately never sends `eos` — measured, it closes the socket |
+| `aether/sentences.py` — sentence accumulator | **Implemented, tested.** Streams whole sentences to TTS; handles decimals, abbreviations, ellipses |
+| `aether/timing.py` — per-turn latency | **Implemented, tested.** Rides on the existing `ResponseSpoken` event; no new event types |
+| `aether/interruption/` — BargeInCoordinator | **Implemented, tested.** Owns *when* a barge-in becomes a fence; arms on a turn in flight, not only on audible playback |
+| `aether/tools/`, `aether/warehouse/` — tools + fixture | **Implemented, tested** (see row below) |
+| `aether/web/` — observation-only UI | **Implemented, tested.** Folds the canonical event stream into a snapshot; the emitting thread only does `put_nowait`, and nothing can fence, enqueue or allocate |
+| `aether/supervisor/generations.py` — generation IDs | **Implemented, tested.** Monotonic allocation plus `mark_fenced` / `is_active`, which is the authority every stage consults. The *supervisor transitions* built on top of it are still Day 3 |
+| `aether/spike.py` — the voice loop | Implemented and **run end to end headless** (`scripts/bench_turn.py`: WAV → STT → Gemini → Rime WS3 → AudioGate, 3/3 turns spoke). **Still never run with a live microphone and a human** |
 | Classifier | Not started (Day 3) |
 | Supervisor transitions | Not started (Day 3) |
 | Fencing / Output Gate | **Audio-side fencing landed early** (pulled forward from Day 4 to fix a real defect): the AudioGate tags every queued chunk with its generation, refuses `enqueue` for a non-active generation, flushes on fence, and drops in-flight chunks in the callback — each recorded as `ResultDiscarded`. The *result*-side Output Gate (tool results, salvage, unsafe mode) is still Day 4 |
@@ -209,6 +217,23 @@ configuration returned the **identical, correct** transcript:
 so it cannot justify lowering accuracy settings that exist for noisy live audio. Up to ~640 ms is
 available here, but only a noisy real-mic evaluation can say whether it is safe to take.
 
+**Push-to-talk interrupt latency, measured 2026-09-07** (n=20, real `AudioGate`, real
+`BargeInCoordinator`, real output callback):
+
+| Mark | Median | Max |
+|---|---|---|
+| press → generation fenced | 0.004 ms | 0.006 ms |
+| press → gate stops emitting samples | 0.011 ms | 0.017 ms |
+
+Against the voice path's measured **321 ms** (`onset → AudioStopped`), which is dominated by the
+deliberate 300 ms `MEANINGFUL_SPEECH_MS` confirmation. A deliberate press needs no confirmation,
+so that entire cost disappears.
+
+Excluded, and material: the browser click → websocket → Python hop (local, unmeasured), and the
+~22 ms of audio already buffered past the callback (`stream_output_latency_ms` on WASAPI). Real
+press-to-silence is therefore roughly **25 ms**, not 0.01 ms — still about an order of magnitude
+faster than the voice path, but the sub-millisecond figure is the software path only.
+
 **Other measured values** (single observations, not benchmarks):
 - STT: `tiny.en` transcribed a 3.13 s SAPI-generated fixture correctly in **423–430 ms** on CPU.
   (Measured on `tiny.en` with `beam_size=1`. The default is now `base.en` with `beam_size=5`,
@@ -275,6 +300,46 @@ Still `<from_run>` and must not be quoted:
   underneath really streams, so the capability check is honest by construction. Found by running
   the assembled pipeline for the first time — no unit test caught it, because each half was
   individually correct.
+- **Fixed 2026-09-07 — background noise was fencing turns, and the noise gate ran too late to
+  stop it.** Reported live as "it is catching external noise and taking it as an interruption".
+  The ordering was the bug: `on_onset` ducks at 40 ms, `on_voiced_progress` promotes that to a
+  **fence** at 300 ms, but `_rejection_reason` only ran at the utterance *offset*, ~800 ms later.
+  Measured on real runs: **6 of 7 rejected utterances had already ducked, stopped or fenced audio**
+  before the gate declared them noise. The gate decided correctly and arrived after the turn was
+  already dead. Fix: `on_voiced_progress` is now gated by `_is_credible_speech()`, which applies
+  the same level test acceptance uses. **Ducking stays unconditional** (locked decision 6 — duck
+  is not stop; ducking on a door slam is cheap and self-correcting, fencing on one is not).
+- **Fixed 2026-09-07 (second pass) — the absolute floor I added rejected genuine speech.**
+  Live runs showed real speech at 37-59 RMS being rejected as `below_noise_floor` against a floor
+  of 60. Three compounding causes. (1) **My error:** `ambient_floor_min = 20` (floor 60) was
+  calibrated from one session in which every *transcribed* utterance measured 61+; that is exactly
+  the "absolute number that would need retuning per environment" this module's docstring warned
+  against. (2) **`speech_rms` was a MEAN over voiced frames**, which is biased against long
+  utterances — every extra word adds quiet voiced frames (inter-word gaps, trailing consonants)
+  that drag the mean down, so 880-1640 ms utterances measured 52-59 while shorter comparable
+  speech at the same distance measured 61-68 and passed. (3) Across all 47 transcribed
+  utterances, real speech (61-2818) and junk (19-1315) **overlap on level**, so no absolute
+  threshold separates them; duration separates far better (real min 500 ms, junk median 680 ms).
+  Fixes: gate on **peak** voiced RMS rather than the mean (speech has vowel peaks, low-level noise
+  is flat, and peak has no length bias); make the floor **configurable and calibratable**
+  (`AETHER_SPEECH_FLOOR`, `MicVAD(speech_floor=...)`, `scripts/calibrate_mic.py`) with a low
+  conservative default of 12.0; and record `speech_peak_rms` and `speech_floor` on `SpeechEnded`
+  so a rejection can be explained from the trace. Replayed against the six wrongly-rejected
+  utterances: **all six now accepted**, even scoring them by the pessimistic mean. The fence-time
+  credibility gate is unchanged — and in push-to-talk it is moot for fencing anyway, because the
+  mic is closed for the whole of the agent's turn, so external noise cannot fence a generation
+  regardless of the floor.
+- **Fixed 2026-09-07 — the relative noise floor was meaningless on a quiet microphone.**
+  Live runs measured ambient at **0.5–9.7 RMS**, so `ambient x 3` was a bar of ~2, and background
+  noise at RMS 10–40 cleared it twentyfold while real speech sat at 60–2800. A relative test
+  against a near-zero floor is not a test. `speech_floor()` now clamps ambient by
+  `ambient_floor_min = 20.0`, on the reasoning that a microphone reporting near-silence is
+  describing its own noise floor rather than the room. The clamp is a *minimum*, so a genuinely
+  loud room still dominates. Replayed against the real traces: **5 of the 6 turn-killing noise
+  events no longer fence, and no genuine utterance is lost** (the single flagged loss was the
+  Whisper hallucination `'This. This. This. This.'` at RMS 21.9). This **changes** the previous
+  "when ambient has never been measured, accept unconditionally" contract; the test that encoded
+  it was updated deliberately, not weakened.
 - **Known limitation, found 2026-09-07 by the adverse-audio sweep — the noise floor disables
   itself in a loud room.** `_ambient_rms` is only updated on frames webrtcvad reports as *not*
   voiced. Once room noise is loud enough that the detector calls it speech, that branch stops
@@ -343,14 +408,17 @@ Not doable by an agent. Tracked in [RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 2.
 4. **Fallback disclosure decision** — decide whether any TTS fallback exists and disclose it
    explicitly if so.
 5. **Credentials** — obtain and place API keys in a local `.env`. Never committed.
-   **Rime: DONE** — `.env` exists, the key is set, and the client has executed against the live API.
-   **LLM: still blocking** — no LLM credential, so the real reasoning path has never executed.
+   **Rime: DONE** — `.env` exists, the key is set, and both the HTTP and `/ws3` clients have
+   executed against the live API.
+   **LLM: DONE for Gemini** — `GEMINI_API_KEY` is set and the reasoning path has executed end to
+   end. `GROQ_API_KEY` is present but does **not** authenticate; anthropic/openai are unset.
 6. **Live demo recording** — real mic, real speech, real interruption.
 7. **Secrets sweep before recording** — no credential visible in any frame.
 8. **Run the live-microphone latency measurement** — `python scripts/measure_audio_kill.py
    --mode mic --repeats 5`, wearing headphones. Needs a person to speak; the synthetic-mode number
    does not substitute for it.
-9. **Choose an LLM provider** and set `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY`. Until then
+9. **~~Choose an LLM provider~~** — DONE (2026-09-07): `LLM_PROVIDER=gemini`, model
+   `gemini-flash-lite-latest`, chosen by measurement (§5). Historical note: until then
    `aether/llm.py` runs a labelled stub that cannot answer general questions.
 
 ---

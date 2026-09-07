@@ -163,8 +163,34 @@ def test_system_prompt_demands_short_spoken_answers():
     p = SYSTEM_PROMPT.lower()
     assert "one short sentence" in p
     assert "spoken aloud" in p
-    for banned in ("markdown", "lists", "as an ai"):
+    for banned in ("markdown", "lists"):
         assert banned in p, f"system prompt should forbid {banned!r}"
+
+
+def test_the_prompt_forbids_text_assistant_self_description():
+    """Reported live: AETHER introduced itself as "a text-based assistant".
+
+    The prompt already said "a voice assistant... spoken aloud" at the time, and the model reached
+    for its default self-description anyway. A positive role statement was not enough, so the
+    denial is now explicit -- and this pins each prohibition individually rather than one phrasing.
+    """
+    p = SYSTEM_PROMPT.lower()
+    for denial in ("text-based", "chatbot", "language model"):
+        assert denial in p, f"the prompt must explicitly deny being {denial!r}"
+    assert "never" in p, "stated as a prohibition, not merely as a preferred role"
+
+
+def test_the_prompt_gives_a_concrete_identity_to_fall_back_on():
+    """Forbidding an answer without supplying one leaves the model to improvise."""
+    p = SYSTEM_PROMPT.lower()
+    assert "hotel" in p and "manager" in p
+
+
+def test_the_prompt_forbids_inventing_menu_facts():
+    """Prices and allergens are looked up. An invented allergen could genuinely hurt someone."""
+    p = SYSTEM_PROMPT.lower()
+    assert "never invent" in p
+    assert "allergen" in p
 
 
 def test_brevity_is_instructed_not_truncated():

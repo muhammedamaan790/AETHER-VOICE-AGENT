@@ -35,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..errors import ToolLookupError
 from ..events import EventType
 from ..trace import Trace, now_ms
 from ..warehouse import OrderStatus, Priority, UnknownRecord, WarehouseStore, describe_order
@@ -192,13 +193,21 @@ class ToolRunner:
     def __init__(
         self,
         trace: Trace,
-        store: WarehouseStore,
+        store: Any,
         *,
+        tools: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] | None = None,
         delay_ms: float = 0.0,
         sleep: Callable[[float], None] = time.sleep,
     ):
         self.trace = trace
         self.store = store
+        # The registry is injectable so a second domain (the hotel menu) reuses this runner rather
+        # than growing a parallel one. Everything worth having here -- the fence check placed after
+        # the delay and before the tool body, task/generation/state identity on every result, the
+        # canonical events -- is domain-agnostic, and duplicating it would mean two places for a
+        # stale mutation to slip through. `store` is typed loosely for the same reason: the runner
+        # only ever passes it to a tool body, never inspects it.
+        self.tools = TOOLS if tools is None else tools
         self.delay_ms = delay_ms
         self._sleep = sleep
         self._n = 0
@@ -218,9 +227,9 @@ class ToolRunner:
         Never raises for a missing record or an unknown tool: a voice turn must survive both. The
         failure is reported in the result and in the trace, and the caller decides what to say.
         """
-        fn_entry = TOOLS.get(name)
+        fn_entry = self.tools.get(name)
         if fn_entry is None:
-            raise UnknownTool(f"no such tool: {name}. Known: {', '.join(sorted(TOOLS))}")
+            raise UnknownTool(f"no such tool: {name}. Known: {', '.join(sorted(self.tools))}")
         fn, mutates = fn_entry
 
         self._n += 1
@@ -270,7 +279,10 @@ class ToolRunner:
 
         try:
             records, summary = fn(self.store, **params)
-        except UnknownRecord as exc:
+        except ToolLookupError as exc:
+            # A live question with no answer in the fixture. Caught as the SHARED base so
+            # every domain behaves the same: catching one domain's class by name would let
+            # another domain's lookup failure escape and drop the caller's turn.
             # A live question with no answer in the fixture. Not stale, so it may still be spoken:
             # "there is no such order" is true and useful. Never invented into a plausible record.
             self.trace.emit(

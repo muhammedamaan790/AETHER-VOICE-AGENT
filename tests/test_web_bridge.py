@@ -237,16 +237,90 @@ def test_a_broken_phase_source_does_not_break_the_snapshot():
     assert snap["phase"] == "listening", "falls back to the folded default rather than crashing"
 
 
-def test_the_bridge_never_writes_to_the_pipeline():
-    """Structural guard: an observer must not be able to fence, enqueue or allocate."""
+def test_the_bridge_may_only_ask_for_a_fence_or_a_mute():
+    """Structural guard, NARROWED (not removed) when the interrupt button landed.
+
+    The bridge was observation-only. Push-to-talk gave it exactly one write: request an interrupt.
+    The guard therefore changes from "may not write at all" to "may request a fence, and may do
+    nothing else" -- which is still worth pinning, because the failure mode is a control API
+    growing one convenient method at a time.
+
+    It must still be unable to fence directly, enqueue audio, allocate a generation, or drive the
+    gate. It reaches the pipeline only through the injected `on_interrupt` callable.
+    """
     import inspect
 
     import aether.web.server as mod
 
     code = " ".join(line.split("#", 1)[0] for line in inspect.getsource(mod).splitlines())
     for forbidden in ("mark_fenced", "fence_generation", "allocate(", "enqueue(",
-                      "request_stop", "request_duck", "set_active_generation"):
-        assert forbidden not in code, f"the bridge must never call {forbidden}"
+                      "request_stop", "request_duck", "set_active_generation", "set_listening"):
+        assert forbidden not in code, f"the bridge must never call {forbidden} itself"
+    assert "_on_interrupt" in code and "_on_standby" in code, (
+        "its only pipeline writes are the two injected callables"
+    )
+
+
+def test_only_the_two_known_actions_are_accepted():
+    """An unrecognised message from a stale open tab must never become a pipeline action."""
+    interrupts, standbys = [], []
+    bridge = WebBridge(on_interrupt=lambda: interrupts.append(1),
+                       on_standby=lambda: standbys.append(1))
+
+    bridge._handle_inbound('{"action":"interrupt"}')
+    bridge._handle_inbound('{"action":"standby"}')
+    assert (len(interrupts), len(standbys)) == (1, 1)
+
+    for payload in ['{"action":"speak"}', '{"action":"fence"}', '{"action":"mute"}', "not json",
+                    "[]", '{"cmd":"interrupt"}', '{}', '"interrupt"', 'null']:
+        bridge._handle_inbound(payload)
+    assert (len(interrupts), len(standbys)) == (1, 1), (
+        "only the two known actions may reach the pipeline"
+    )
+
+
+def test_interrupt_and_standby_are_separate_controls():
+    """They mean different things -- one must never trigger the other.
+
+    Conflating "stop talking" with "stop listening" is the bug that made push-to-talk require a
+    press before the user could speak at all.
+    """
+    interrupts, standbys = [], []
+    bridge = WebBridge(on_interrupt=lambda: interrupts.append(1),
+                       on_standby=lambda: standbys.append(1))
+
+    bridge._handle_inbound('{"action":"interrupt"}')
+    assert (len(interrupts), len(standbys)) == (1, 0), "interrupt must not touch listening"
+
+    bridge._handle_inbound('{"action":"standby"}')
+    assert (len(interrupts), len(standbys)) == (1, 1), "standby must not fence"
+
+
+def test_a_failing_standby_does_not_break_the_socket_loop():
+    def explodes():
+        raise RuntimeError("mic gone")
+
+    WebBridge(on_standby=explodes)._handle_inbound('{"action":"standby"}')   # must not raise
+
+
+def test_the_snapshot_reports_the_real_mic_state():
+    """The UI must show whether the user is actually being heard, not what it assumed."""
+    bridge = WebBridge(listening_source=lambda: False)
+    assert bridge.current_state()["listening"] is False
+    assert WebBridge(listening_source=lambda: True).current_state()["listening"] is True
+
+
+def test_a_bridge_with_no_interrupt_callback_ignores_the_action():
+    bridge = WebBridge()          # observation-only, as before
+    bridge._handle_inbound('{"action":"interrupt"}')   # must not raise
+
+
+def test_a_failing_interrupt_does_not_break_the_socket_loop():
+    def explodes():
+        raise RuntimeError("pipeline gone")
+
+    bridge = WebBridge(on_interrupt=explodes)
+    bridge._handle_inbound('{"action":"interrupt"}')   # must not raise
 
 
 # ============================ static serving ============================

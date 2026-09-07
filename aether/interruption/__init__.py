@@ -68,7 +68,11 @@ class BargeInCoordinator:
         self._armed = False            # a barge-in is in progress
         self._fence_applied = False    # ...and has already been promoted to a fence
         self._turn_in_flight = False
-        self._fenced: list[str | None] = []   # awaiting FenceRequested emission
+        # (generation, reason) awaiting FenceRequested emission. The reason travels with the
+        # id because the pipeline cannot reconstruct it later: a fence from sustained voice
+        # and a fence from a deliberate button press are different facts, and the evidence
+        # must not conflate them.
+        self._fenced: list[tuple[str | None, str]] = []
 
     # --- realtime-safe: called from the input callback --------------------------------
 
@@ -107,7 +111,7 @@ class BargeInCoordinator:
         # Set here, not only on the voiced-progress path: a fence applied by any route must be
         # reflected in `phase`, or the derived view would contradict the registry.
         self._fence_applied = True
-        self._fenced.append(fenced)
+        self._fenced.append((fenced, reason))
         self.gens.mark_fenced(fenced)          # no trace IO: realtime-safe
         self.gate.fence_generation(fenced, reason=reason)
         return fenced
@@ -133,7 +137,7 @@ class BargeInCoordinator:
         self._turn_in_flight = False
         self._armed = False
 
-    def drain_fenced(self) -> list[str | None]:
+    def drain_fenced(self) -> list[tuple[str | None, str]]:
         """Hand back every generation fenced since the last drain, oldest first.
 
         A list rather than one slot: two interruptions in quick succession must both be
