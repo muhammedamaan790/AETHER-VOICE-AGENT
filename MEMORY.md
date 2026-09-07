@@ -106,7 +106,7 @@ Day 1 built the voice spike. The continuity engine is still untouched, by design
 | Classifier | Not started (Day 3) |
 | Supervisor transitions | Not started (Day 3) |
 | Fencing / Output Gate | **Audio-side fencing landed early** (pulled forward from Day 4 to fix a real defect): the AudioGate tags every queued chunk with its generation, refuses `enqueue` for a non-active generation, flushes on fence, and drops in-flight chunks in the callback — each recorded as `ResultDiscarded`. The *result*-side Output Gate (tool results, salvage, unsafe mode) is still Day 4 |
-| Warehouse dataset + tools | Not started (Day 2) |
+| Warehouse dataset + tools | **Implemented, tested** (2026-09-07). `aether/warehouse/` holds the deterministic fixture (7 products, 7 bins, 12 orders — 8 high priority, 3 of them in aisle 9) plus `WarehouseStore`, the only mutable state. `aether/tools/` holds 9 structured tools and `ToolRunner`, with an injectable delay and a fence check placed **after** the delay and **before** the tool body — so a fenced generation's `skip`/`cancel`/`select` never reaches the store at all, not merely its output. Emits `TaskStarted` → `ResultReceived` \| `ResultDiscarded`; no new event types. **Not yet wired into `spike.py`** — routing an utterance to a tool is classifier/supervisor work (Day 3) |
 | Evaluator | Not started (Day 4) |
 | Observability panel | Not started (Day 6) |
 | Acceptance tests A–H | Pre-registered as specs and skipped stubs; none executed |
@@ -275,6 +275,37 @@ Still `<from_run>` and must not be quoted:
   underneath really streams, so the capability check is honest by construction. Found by running
   the assembled pipeline for the first time — no unit test caught it, because each half was
   individually correct.
+- **Known limitation, found 2026-09-07 by the adverse-audio sweep — the noise floor disables
+  itself in a loud room.** `_ambient_rms` is only updated on frames webrtcvad reports as *not*
+  voiced. Once room noise is loud enough that the detector calls it speech, that branch stops
+  running, ambient stays `None`, and `_rejection_reason` takes its documented
+  "never measured → accept" path. So the `below_noise_floor` gate contributes nothing in exactly
+  the loud room it exists for, and only `min_speech_ms` still filters. Measured: at room sigma
+  0.02 ambient tracks to ~679 RMS and the gate works; at 0.05 and above ambient is never measured
+  at all. **Not fixed** — the VAD architecture is deliberately untouched, and choosing between an
+  energy-based floor, a decaying estimate or a warm-up sample needs real-room evidence rather than
+  synthetic tone. Pinned by `tests/test_adverse_audio.py` so it is visible rather than surprising.
+  Headphones and a close mic remain required for the demo.
+  **Three fixes were attempted on 2026-09-07 and all three reverted** — minimum statistics over a
+  trailing RMS window (landed on the offset silence, floor ~0); snapshotting the floor at onset
+  (in a loud room webrtcvad flags the room as voiced from frame 1, so onset fires with two frames
+  of history and never fires again); and a silence-filtered window minimum (engaged the floor, but
+  made the gate **non-monotonic** — at sigma 0.05, amp 0.02 accepted while amp 0.35 was rejected,
+  which is worse than the permissive default). Root cause, measured: **from sigma 0.02 upward
+  webrtcvad calls 100% of room-noise frames voiced** (50/50 at 0.02, 0.05, 0.10), so `speech_rms`
+  is contaminated by room noise and any floor from the same frames is contaminated by speech. No
+  RMS statistic can separate signals the detector has already merged. A fix needs a *different
+  signal* — AEC, spectral features, or a separate noise estimator — plus real-room evidence.
+- **Fixed 2026-09-07 — two credential-disclosure paths.** (1) All three config dataclasses held
+  `api_key` as an ordinary field, so `repr(RimeConfig.from_env())` rendered the live Rime key in
+  plaintext — any traceback or log line carrying a config would have put it on screen, against the
+  PHASES.md Day 6 rule. Fixed with `field(repr=False)`. (2) That was **not sufficient**:
+  `Event.to_json` flattens the payload with `asdict()`, which recursively expands nested
+  dataclasses and re-includes fields excluded from `repr`, so passing a config as an event field
+  wrote the key into `traces/*.jsonl` — a file the evaluator reads and that gets quoted as
+  evidence. Fixed with `aether.trace.redact()`, applied at the single point every event passes
+  through; it replaces the value and preserves structure, so traces stay valid JSONL. Both pinned
+  by `tests/test_secret_redaction.py` using a sentinel, so no real credential is involved.
 - **Fixed 2026-09-07 — `ResponseSpoken.first_audio_ms` meant two different things.** On the
   blocking path it carried Rime's send → first-chunk *duration*; on the streaming path it carried
   `timing.first_audio`, an *absolute* monotonic mark. Traces therefore showed "first audio" rising

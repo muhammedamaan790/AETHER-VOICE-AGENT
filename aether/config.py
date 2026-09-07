@@ -7,7 +7,7 @@ language in particular have NOT been checked against the live catalog -- see RIM
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _env(name: str) -> str | None:
@@ -22,7 +22,11 @@ class RimeConfig:
     TODO: verify against Rime live catalog + organizer preflight (human task, Day 1).
     """
 
-    api_key: str | None = None
+    # repr=False: a dataclass repr prints every field, so a traceback, a log line or a
+    # config object landing in a trace field would render the key in plaintext. PHASES.md
+    # Day 6: "Never show credentials, not even for one frame." Presence is still
+    # reportable -- `missing_config()` answers by NAME, never by value.
+    api_key: str | None = field(default=None, repr=False)
     api_url: str | None = None      # TODO: verify against Rime live catalog
     model: str | None = None        # TODO: verify against Rime live catalog
     voice: str | None = None        # TODO: verify against Rime live catalog
@@ -44,7 +48,11 @@ class SttConfig:
     """TODO: provider not yet chosen (Day 1/2 decision)."""
 
     provider: str | None = None
-    api_key: str | None = None
+    # repr=False: a dataclass repr prints every field, so a traceback, a log line or a
+    # config object landing in a trace field would render the key in plaintext. PHASES.md
+    # Day 6: "Never show credentials, not even for one frame." Presence is still
+    # reportable -- `missing_config()` answers by NAME, never by value.
+    api_key: str | None = field(default=None, repr=False)
     model: str | None = None
 
     @classmethod
@@ -64,7 +72,11 @@ class LlmConfig:
     """
 
     provider: str | None = None
-    api_key: str | None = None
+    # repr=False: a dataclass repr prints every field, so a traceback, a log line or a
+    # config object landing in a trace field would render the key in plaintext. PHASES.md
+    # Day 6: "Never show credentials, not even for one frame." Presence is still
+    # reportable -- `missing_config()` answers by NAME, never by value.
+    api_key: str | None = field(default=None, repr=False)
     model: str | None = None
 
     @classmethod
