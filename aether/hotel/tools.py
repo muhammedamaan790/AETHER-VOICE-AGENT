@@ -29,6 +29,7 @@ from . import (
     UnknownDish,
     describe_dish,
     say_list,
+    say_number,
     say_price,
 )
 
@@ -66,6 +67,28 @@ def _parse_diet(value: str) -> Diet:
     if spoken in ("non veg", "non-veg", "nonveg", "non vegetarian", "non-vegetarian", "meat"):
         return Diet.NON_VEG
     raise UnknownDish(f"no such dietary preference: {value}")
+
+
+# Exactly the allergens the fixture actually records. A closed set on purpose: an allergen this
+# menu does not track must raise rather than quietly return "nothing contains it", which is the
+# one wrong answer here that could put somebody in hospital.
+_ALLERGEN_ALIASES = {
+    "nut": "nuts", "nuts": "nuts", "peanut": "nuts", "peanuts": "nuts", "tree nut": "nuts",
+    "dairy": "dairy", "milk": "dairy", "lactose": "dairy", "cream": "dairy", "cheese": "dairy",
+    "gluten": "gluten", "wheat": "gluten",
+    "shellfish": "shellfish", "prawn": "shellfish", "prawns": "shellfish", "shrimp": "shellfish",
+    "crab": "shellfish",
+    "fish": "fish", "seafood": "fish",
+    "egg": "eggs", "eggs": "eggs",
+}
+
+
+def _parse_allergen(value: str) -> str:
+    spoken = " ".join(value.lower().split())
+    try:
+        return _ALLERGEN_ALIASES[spoken]
+    except KeyError as exc:
+        raise UnknownDish(f"no such allergen on our menu: {value}") from exc
 
 
 # --- tool bodies -------------------------------------------------------------------------
@@ -126,6 +149,41 @@ def _find_by_spice(store: MenuStore, *, spice: str,
                   "category": parsed_category.value if parsed_category else None}
 
 
+def _spice_of(store: MenuStore, *, dish: str) -> tuple[list, dict]:
+    """"Is the chicken kebab spicy?"
+
+    A separate tool rather than a field on the price answer, because it is a separate question. It
+    used to fall through to `price_of` -- the router saw a dish name and no price words and treated
+    it as "tell me about it" -- so a caller asking about heat was quoted a number instead.
+    """
+    found = store.find(dish)
+    return [describe_dish(found)], {"name": found.name, "spice": found.spice}
+
+
+def _safe_for(store: MenuStore, *, allergen: str,
+              category: str | None = None) -> tuple[list, dict]:
+    """"I have a nut allergy, what can I eat?" -- the inverse of `check_allergens`.
+
+    `check_allergens` answers about a dish the caller already named. This answers when they have
+    named only the allergen, which is how the question is actually asked on a phone. Both read the
+    same fixture; neither infers anything.
+
+    The dishes to AVOID travel in the summary alongside the safe ones, because the honest spoken
+    answer needs both: a suggestion, and how much of the menu is off limits.
+    """
+    wanted = _parse_allergen(allergen)
+    parsed_category = _parse_category(category) if category else None
+    in_scope = [d for d in store.dishes()
+                if d.available and (parsed_category is None or d.category is parsed_category)]
+    safe = [d for d in in_scope if wanted not in d.allergens]
+    avoid = [d.name for d in in_scope if wanted in d.allergens]
+    return [describe_dish(d) for d in safe], {
+        "allergen": wanted,
+        "category": parsed_category.value if parsed_category else None,
+        "avoid": avoid,
+    }
+
+
 # name -> (function, mutates?). None of these mutate: a caller asking about the menu must never be
 # able to change it. Availability edits are staff-side and deliberately absent from this registry.
 HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
@@ -135,16 +193,33 @@ HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     "check_availability": (_check_availability, False),
     "check_allergens": (_check_allergens, False),
     "find_by_spice": (_find_by_spice, False),
+    "spice_of": (_spice_of, False),
+    "safe_for": (_safe_for, False),
 }
 
 
 # --- spoken templates ---------------------------------------------------------------------
 
+# A telephone is not a printed menu. Reading eight dish names aloud is a wall of speech the caller
+# cannot hold in their head and cannot interrupt politely, so long lists are capped and the
+# remainder is COUNTED rather than dropped -- the caller is told there is more, and can ask.
+_SPOKEN_LIST_MAX = 6
+
+
+def _say_names(rows: list) -> str:
+    names = [r["name"] for r in rows]
+    if len(names) <= _SPOKEN_LIST_MAX:
+        return say_list(names)
+    rest = len(names) - _SPOKEN_LIST_MAX
+    more = "one more" if rest == 1 else f"{say_number(rest)} more"
+    return f"{say_list(names[:_SPOKEN_LIST_MAX])}, plus {more}"
+
+
 def _speak_list_category(result) -> str:
     rows, category = result.records, result.summary.get("category", "menu")
     if not rows:
         return f"I am sorry, we have nothing on the {category} menu right now."
-    names = say_list([r["name"] for r in rows])
+    names = _say_names(rows)
     lead = f"For {category} we have {names}."
     if len(rows) == 1:
         return f"{lead} It is {say_price(rows[0]['price'])}."
@@ -167,7 +242,7 @@ def _speak_find_by_diet(result) -> str:
     scope = f"{diet} {category}" if category else diet
     if not rows:
         return f"I am sorry, we have no {scope} options available today."
-    return f"Yes. For {scope} we have {say_list([r['name'] for r in rows])}."
+    return f"Yes. For {scope} we have {_say_names(rows)}."
 
 
 def _speak_check_availability(result) -> str:
@@ -191,7 +266,50 @@ def _speak_find_by_spice(result) -> str:
     label = "not spicy at all" if spice == "none" else spice
     if not rows:
         return f"I am sorry, we have nothing {label} available today."
-    return f"For something {label} we have {say_list([r['name'] for r in rows])}."
+    return f"For something {label} we have {_say_names(rows)}."
+
+
+def _speak_spice_of(result) -> str:
+    dish = result.records[0]
+    return {
+        "none": f"The {dish['name']} is not spicy at all.",
+        "mild": f"The {dish['name']} is mild.",
+        "medium": f"The {dish['name']} is medium spiced.",
+        "hot": f"The {dish['name']} is hot. That is the spiciest we do.",
+    }.get(dish["spice"], f"The {dish['name']} is {dish['spice']}.")
+
+
+def _speak_safe_for(result) -> str:
+    """Suggest, then warn. Never read twenty dish names down a telephone.
+
+    Most of the menu is safe for most allergens -- twenty-two dishes contain no nuts -- so listing
+    the safe ones would be an unusable answer. One suggestion per course, plus the size of what to
+    avoid, is what a duty manager would actually say. Deterministic: the picks are menu order, not
+    a choice.
+    """
+    allergen = result.summary.get("allergen", "")
+    rows = result.records
+    if not rows:
+        return f"I am sorry, everything we have on today contains {allergen}."
+
+    picks: list[str] = []
+    seen: set = set()
+    for row in rows:
+        if row["category"] not in seen:
+            seen.add(row["category"])
+            picks.append(row["name"])
+        if len(picks) == 3:
+            break
+
+    lead = f"If you are avoiding {allergen}, I would suggest {say_list(picks)}."
+    avoid = result.summary.get("avoid") or []
+    if not avoid:
+        return f"{lead} Nothing on our menu today contains {allergen}."
+    count = say_number(len(avoid))
+    dishes = "dish" if len(avoid) == 1 else "dishes"
+    return (f"{lead} {count.capitalize()} other {dishes} on the menu "
+            f"{'contains' if len(avoid) == 1 else 'contain'} {allergen}, "
+            f"so do check with me before you order.")
 
 
 SPEAK: dict[str, Callable[..., str]] = {
@@ -201,6 +319,8 @@ SPEAK: dict[str, Callable[..., str]] = {
     "check_availability": _speak_check_availability,
     "check_allergens": _speak_check_allergens,
     "find_by_spice": _speak_find_by_spice,
+    "spice_of": _speak_spice_of,
+    "safe_for": _speak_safe_for,
 }
 
 # Spoken when a tool ran but could not answer -- an unknown dish, an unrecognised category. A true

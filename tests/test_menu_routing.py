@@ -292,3 +292,81 @@ def test_a_fenced_menu_lookup_speaks_nothing(monkeypatch):
     assert rime.spoken == [], "a fenced turn must not reach Rime"
     assert trace.all(EventType.RESULT_LEAKED) == []
     assert spike.history.messages() == [], "and must not be remembered"
+
+
+# ============================ the two questions the phrase list exposed ============================
+#
+# Both were real defects found by walking the demo's required phrases rather than by testing what
+# was already built. "Is the chicken kebab spicy?" named a dish with no price words, so the
+# bare-dish rule answered a question about heat with a price. "I have a nut allergy, what can I
+# eat?" named no dish at all, so it fell through to the model -- which is the one class of menu
+# question that must never be answered from model knowledge.
+
+@pytest.mark.parametrize("said", [
+    "is the chicken kebab spicy",
+    "how hot is the chicken kebab",
+    "is the chicken kebab mild",
+])
+def test_asking_how_hot_a_dish_is_no_longer_returns_its_price(said):
+    decision = route(said)
+    assert decision is not None and decision.tool == "spice_of"
+    assert decision.params["dish"] == "chicken kebab"
+
+
+@pytest.mark.parametrize(("said", "allergen"), [
+    ("i have a nut allergy what can i eat", "nuts"),
+    ("im allergic to shellfish", "shellfish"),
+    ("i cannot eat gluten", "gluten"),
+    ("is there anything without dairy", "dairy"),
+])
+def test_an_allergy_with_no_dish_named_routes_to_safe_for(said, allergen):
+    decision = route(said)
+    assert decision is not None and decision.tool == "safe_for"
+    assert decision.params["allergen"] == allergen
+
+
+def test_an_allergen_alone_is_not_an_allergy_question():
+    """"Do you have any fish?" is a menu browse. Requiring an avoidance cue keeps them apart."""
+    assert route("do you have any fish") is None
+    assert route("what fish do you have") is None
+
+
+def test_naming_a_dish_still_wins_over_the_allergy_rule():
+    """"Does the butter chicken contain nuts" is about that dish, not about the whole menu."""
+    decision = route("does the butter chicken contain nuts")
+    assert decision.tool == "check_allergens"
+
+
+def test_an_allergy_question_can_still_be_narrowed_to_a_category():
+    decision = route("i cannot eat gluten what mains do you have")
+    assert decision.tool == "safe_for"
+    assert decision.params["category"] == "mains"
+
+
+def test_is_the_chicken_kebab_spicy(monkeypatch):
+    spike, _t, rime, llm = build(monkeypatch, "is the chicken kebab spicy")
+    spike.handle_utterance(AUDIO, 0.0)
+    assert rime.spoken == ["The chicken kebab is medium spiced."]
+    assert llm.calls == [], "a menu fact must not reach the model"
+
+
+def test_a_nut_allergy_is_answered_from_the_fixture_not_the_model(monkeypatch):
+    """The one menu answer that could actually hurt somebody. It never goes to a language model."""
+    spike, _t, rime, llm = build(monkeypatch, "i have a nut allergy what can i eat")
+    spike.handle_utterance(AUDIO, 0.0)
+
+    said = rime.spoken[0]
+    assert llm.calls == []
+    assert "avoiding nuts" in said
+    for unsafe in ("mushroom galouti", "beetroot carpaccio", "butter chicken",
+                   "jackfruit rendang", "paneer butter masala", "pistachio kulfi"):
+        assert unsafe not in said, f"{unsafe} contains nuts and must not be suggested"
+
+
+def test_a_long_menu_answer_is_capped_so_it_can_be_said_on_a_phone(monkeypatch):
+    """Eight dish names read aloud is a wall of speech. The remainder is counted, not dropped."""
+    spike, _t, rime, _llm = build(monkeypatch, "what starters do you have")
+    spike.handle_utterance(AUDIO, 0.0)
+    said = rime.spoken[0]
+    assert "plus two more" in said
+    assert "chilli garlic squid" not in said, "the tail is summarised, not read out"

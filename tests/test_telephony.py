@@ -378,3 +378,236 @@ def test_a_failing_greeting_does_not_end_the_call():
     spike = Boom()
     assert speak_greeting(spike) is False, "it reports failure rather than raising"
     assert spike.ended is True, "and still closes the turn it opened"
+
+
+# ============================ identity: the words a caller actually hears ============================
+#
+# Reported from a live session: AETHER introduced itself as "I am a text-based assistant." The
+# SYSTEM_PROMPT already said "a voice assistant... spoken aloud" at the time, so a positive role
+# statement was not enough. `tests/test_llm_providers.py` pins the prompt's denials; this pins the
+# GREETING, which is the very first thing a caller hears and is not model-generated at all.
+
+BANNED_SELF_DESCRIPTIONS = (
+    "text-based", "text based", "chatbot", "chat bot", "language model",
+    "as an ai", "i am an ai", "virtual assistant", "software", "program",
+    "type", "typing", "message", "text me",
+)
+
+
+def test_the_greeting_never_describes_a_text_interaction():
+    from aether.telephony.agent import GREETING
+
+    spoken = GREETING.lower()
+    for banned in BANNED_SELF_DESCRIPTIONS:
+        assert banned not in spoken, f"the greeting must never say {banned!r}"
+
+
+def test_the_greeting_identifies_aether_as_the_hotel_manager():
+    """A caller must know who picked up, in the first sentence."""
+    from aether.telephony.agent import GREETING
+
+    spoken = GREETING.lower()
+    assert "aether" in spoken
+    assert "manager" in spoken, "the role, not a generic assistant"
+
+
+def test_the_greeting_is_short_enough_to_interrupt_comfortably():
+    """It is spoken down a phone line, and a caller in a hurry will talk over it."""
+    from aether.telephony.agent import GREETING
+
+    assert len(GREETING.split()) <= 20, "a long greeting is a bad phone greeting"
+    assert GREETING.strip().endswith("?"), "it should hand the turn back to the caller"
+
+
+def test_the_greeting_is_speakable():
+    """No digits or symbols: it goes straight to Rime."""
+    import re
+
+    from aether.telephony.agent import GREETING
+
+    assert not re.search(r"[\d*_`#|<>{}\[\]]", GREETING), f"not speakable: {GREETING!r}"
+
+
+# ============================ call diagnostics ============================
+#
+# "AETHER never replied" was the entire report from the first real call, and it is six different
+# faults wearing the same coat. These tests pin that each one is named distinctly, because the
+# value of the report is precisely that it does not say "something went wrong".
+
+class _DiagMic:
+    def __init__(self, listening=True):
+        self.on_onset = None
+        self.on_voiced_progress = None
+        self.listening = listening
+        self.samplerate = 16000
+        self.frame_samples = 320
+
+    def set_listening(self, value):
+        self.listening = bool(value)
+
+    def set_context(self, **k): ...
+
+    def speech_floor(self):
+        return 35.0
+
+    def process_frame(self, frame): ...
+
+
+def _diag_bridges(listening=True, blocks=4):
+    """An inbound bridge fed real audio, and an outbound bridge that has published silence."""
+    import numpy as np
+
+    from aether.audio.player import AudioGate
+    from aether.bridge import AudioChunk, InboundBridge, OutboundBridge
+    from aether.trace import Trace
+
+    inbound = InboundBridge(_DiagMic(listening), source_rate=48000)
+    rng = np.random.default_rng(3)
+    for _ in range(blocks):
+        inbound.push(AudioChunk(data=rng.normal(0, 4000, 960).astype(np.int16), sample_rate=48000))
+    outbound = OutboundBridge(AudioGate(Trace()), sink_rate=48000)
+    outbound.pull()
+    return inbound, outbound
+
+
+def test_no_inbound_audio_is_named_as_such():
+    from aether.bridge import InboundBridge
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    report = diagnose(Trace(), inbound=InboundBridge(_DiagMic()))
+    assert report["stage"] == "inbound_audio"
+    assert report["inbound"]["samples_received"] == 0
+
+
+def test_audio_that_arrived_while_not_listening_is_not_reported_as_silence():
+    """The distinction that matters most: "nobody spoke" and "we were not listening" are different."""
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    inbound, _out = _diag_bridges(listening=False)
+    report = diagnose(Trace(), inbound=inbound)
+    assert report["stage"] == "listening_gate"
+    assert inbound.samples_received > 0
+    assert inbound.frames_delivered == 0
+    assert "listening was off" in report["detail"]
+
+
+def test_vad_rejection_reports_the_levels_it_rejected():
+    """The numbers needed to re-derive a threshold from real call audio, and nothing more."""
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    inbound, _out = _diag_bridges()
+    report = diagnose(Trace(), inbound=inbound)
+    assert report["stage"] == "vad"
+    assert "peak rms" in report["detail"] and "speech_floor" in report["detail"]
+    assert inbound.frames_delivered > 0
+
+
+def test_stt_failure_is_distinguished_from_vad_failure():
+    from aether.events import EventType
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    trace = Trace()
+    trace.emit(EventType.SPEECH_ONSET)
+    trace.emit(EventType.TRANSCRIPT_FINAL, text="")
+    report = diagnose(trace)
+    assert report["stage"] == "stt"
+    assert report["empty_transcripts"] == 1
+
+
+def test_a_rime_failure_is_named_with_its_reason():
+    from aether.events import EventType
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    trace = Trace()
+    trace.emit(EventType.SPEECH_ONSET)
+    trace.emit(EventType.TRANSCRIPT_FINAL, text="what starters do you have")
+    trace.emit(EventType.RESULT_DISCARDED, stage="tts", reason="tts_error")
+    report = diagnose(trace)
+    assert report["stage"] == "tts"
+    assert "tts_error" in report["detail"]
+
+
+def test_a_reply_that_never_existed_is_not_blamed_on_rime():
+    from aether.events import EventType
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    trace = Trace()
+    trace.emit(EventType.SPEECH_ONSET)
+    trace.emit(EventType.TRANSCRIPT_FINAL, text="what starters do you have")
+    trace.emit(EventType.RESULT_DISCARDED, stage="llm", reason="empty_llm_response")
+    assert diagnose(trace)["stage"] == "reply"
+
+
+def test_a_spoken_turn_that_published_no_audio_is_an_outbound_fault():
+    """The caller heard silence even though everything upstream succeeded."""
+    from aether.events import EventType
+    from aether.telephony.diagnostics import diagnose
+    from aether.trace import Trace
+
+    inbound, outbound = _diag_bridges()
+    trace = Trace()
+    trace.emit(EventType.SPEECH_ONSET)
+    trace.emit(EventType.TRANSCRIPT_FINAL, text="what starters do you have")
+    trace.emit(EventType.RESPONSE_SPOKEN, text="For starters we have...")
+    report = diagnose(trace, inbound=inbound, outbound=outbound)
+    assert report["stage"] == "outbound_audio"
+    assert outbound.blocks_pulled > 0 and outbound.blocks_with_audio == 0
+
+
+def test_a_healthy_call_reports_no_failed_stage():
+    import numpy as np
+
+    from aether.events import EventType
+    from aether.telephony.diagnostics import diagnose, format_report
+    from aether.trace import Trace
+
+    inbound, outbound = _diag_bridges()
+    outbound.gate.set_active_generation("G1")
+    outbound.gate.enqueue(np.full(outbound.gate.blocksize, 900, dtype=np.int16), gen="G1")
+    outbound.pull()
+
+    trace = Trace()
+    trace.emit(EventType.SPEECH_ONSET)
+    trace.emit(EventType.TRANSCRIPT_FINAL, text="what starters do you have")
+    trace.emit(EventType.RESPONSE_SPOKEN, text="For starters we have...")
+
+    report = diagnose(trace, inbound=inbound, outbound=outbound)
+    assert report["stage"] is None
+    assert report["leaks"] == 0
+    assert "verdict  : OK" in format_report(report)
+
+
+def test_the_report_states_measurements_and_never_a_threshold_to_use():
+    """It measures. Deriving a new speech floor is a deliberate act against real call audio."""
+    from aether.telephony.diagnostics import diagnose, format_report
+    from aether.trace import Trace
+
+    inbound, outbound = _diag_bridges()
+    text = format_report(diagnose(Trace(), inbound=inbound, outbound=outbound)).lower()
+    for advice in ("recommend", "should be", "try setting", "increase", "decrease"):
+        assert advice not in text, "the report reports; it does not tune"
+
+
+def test_diagnostics_does_not_import_livekit():
+    """Like the rest of the non-agent telephony modules, so it runs under test."""
+    import inspect
+    import io
+    import tokenize
+
+    import aether.telephony.diagnostics as mod
+
+    # CODE only. The module docstring says "no LiveKit import" in order to explain the boundary,
+    # and a raw-source grep would fail on that explanation rather than on an import.
+    src = inspect.getsource(mod)
+    code = " ".join(
+        tok.string
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline)
+        if tok.type not in (tokenize.COMMENT, tokenize.STRING)
+    ).lower()
+    assert "livekit" not in code

@@ -14,15 +14,33 @@
   [ Classifier ] --InterruptionClassified--> [ SUPERVISOR ] --> [ Output Gate ]
                                                   |                   ^
                                      generations, fencing,            | validity check
-                                     cancellation, salvage            |
+                                          cancellation                |
                                                   |                   |
                                                   v                   |
                                           [ Task Runner ] --ResultReceived
                                                   |
-                                     [ Warehouse tools ] [ LLM knowledge path ]
+                                        [ Menu Router ]
+                                          /                                         [ Hotel tools ]      [ LLM knowledge path ]
 
   every arrow above emits canonical events --> [ Trace ] --> [ Evaluator / Panel ]
+                                                   |
+                                            [ Web Bridge ] --> the AETHER console
 ```
+
+The same brain runs behind two transports. On a phone call the microphone and speaker are replaced
+by LiveKit tracks, and **nothing else changes**:
+
+```
+  PSTN --> LiveKit SIP --> Room --+--> inbound track --> [ InboundBridge ] --> VAD
+                                  |                                            (unchanged)
+                                  +--< published track <-- [ OutboundBridge ] <-- Audio Gate
+```
+
+`InboundBridge` resamples, rebuffers into exact VAD frames, and honours the listening gate;
+`OutboundBridge` drives the real `AudioGate._callback` so generation tagging and flush-on-fence
+happen in their usual place. LiveKit is transport. It is never the brain, and `AgentSession` is
+deliberately not used -- it would supply its own STT, LLM, TTS and turn detection and bypass
+everything this document describes.
 
 The **Supervisor** is the only component allowed to change conversational state. The **Output
 Gate** is the only path to speech, and it is the single place the golden invariant is enforced.
@@ -34,12 +52,15 @@ Gate** is the only path to speech, and it is the single place the golden invaria
 | VAD | Detect speech onset/offset on the always-open mic | Decide meaning |
 | Audio Gate | Duck immediately on onset; full-stop on confirmed interruption; resume after backchannel | Conflate duck with stop |
 | STT | Produce final transcripts | Decide meaning |
-| Classifier | Map a final transcript + current task context to one of six classes + confidence | Mutate state |
-| Supervisor | Own generations, fencing, cancellation, salvage decisions, task transitions | Speak |
-| Task Runner | Execute warehouse tools or the LLM knowledge path for a generation | Speak directly |
+| Classifier | Map a final transcript plus "is anything in flight" to one of six classes | Mutate state, hold state, or fence |
+| Supervisor | Own generations, fencing, cancellation, task transitions | Speak |
+| Menu Router | Name a hotel tool and its arguments for a sentence, or decline | Execute anything |
+| Task Runner | Execute hotel tools or the LLM knowledge path for a generation | Speak directly |
 | Output Gate | Validity-check every result against the active generation, then speak via Rime | Trust its caller |
 | Trace | Append-only canonical event log | Invent events |
 | Evaluator | Read traces, compute metrics, assert invariants | Write to the runtime |
+| Inbound/Outbound Bridge | Carry a transport's audio into and out of the unchanged pipeline | Reimplement VAD, ducking or fencing |
+| Web Bridge | Fan the trace out to browsers; accept exactly two controls | Hold a second copy of conversational truth |
 
 ## 3. Generation model
 
@@ -96,9 +117,9 @@ document and that file, together, and never anywhere else.
 | `SpeechEnded` | VAD detects user speech end | `t` |
 | `TranscriptFinal` | STT emits a final transcript | `text` |
 | `BackchannelDetected` | Utterance judged a backchannel | `text` |
-| `InterruptionClassified` | Classifier produces a class | `class`, `confidence`, `fallback_applied` |
+| `InterruptionClassified` | Classifier produces a class | `interruption_class`, `rule`, `in_flight`, `text` |
 | `TaskStarted` | A task begins under a generation | `gen`, `task`, `params` |
-| `TaskReplaced` | Active task is superseded (refinement, replacement, or new task) | `from_gen`, `to_gen`, `reason` |
+| `TaskReplaced` | Active task is superseded (refinement, replacement, or new task) | `reason`, `interruption_class`, `records_salvaged` |
 | `FenceRequested` | Supervisor asks that a generation be fenced | `gen`, `reason` |
 | `GenerationChanged` | Active generation changes | `from_gen`, `to_gen`, `from_status`, `to_status` |
 | `ResultReceived` | A task result arrives at the Output Gate | `gen`, `record_count` |
@@ -108,7 +129,7 @@ document and that file, together, and never anywhere else.
 | `AudioDucked` | Agent audio ducked on speech onset | `t` |
 | `AudioResumed` | Ducked audio resumed (backchannel path) | `t` |
 | `AudioStopped` | Agent audio fully stopped on confirmed interruption | `t`, `gen` |
-| `CancellationResolved` | A cancel has fully settled | `gen`, `outcome` |
+| `CancellationResolved` | A cancel has fully settled | `gen`, `cancelled`, `had_task_in_flight`, `successor_task` |
 | `ResponseSpoken` | Text was spoken | `gen`, `provider`, `text` |
 
 Every event additionally carries: `seq` (monotonic), `t` (monotonic ms), `turn_id`, and `gen`
@@ -122,18 +143,31 @@ Consolidation notes, recorded so nobody re-adds a synonym:
   distinguishable (PRD FR-2.4) and the duck-latency metric needs its own timestamp.
 - `ResponseSpoken` carries `provider`; that field is how Rime's use is observable.
 - There is no separate `ToolCallStarted`. `TaskStarted` marks the start for tool-latency purposes.
+- `InterruptionClassified` carries **no confidence field**, because the classifier has no
+  confidence to report: it is closed-set and whole-utterance, so it either matches a table exactly
+  or falls through to `REPLACEMENT`. `rule` records *which* table matched, which is the auditable
+  fact a score was meant to stand in for.
+- `TaskReplaced.records_salvaged` is always `0` and `ResultSalvaged` is never emitted. Salvage is
+  not implemented -- AETHER holds no partial-result store -- and the zero is recorded honestly
+  rather than the event being emitted to look like evidence (RULES.md R8).
+- `CancellationResolved.cancelled` distinguishes a cancellation that ended a real task from "stop"
+  said into silence, which is a legal no-op.
+- `FenceRequested.reason` is what separates the triggers that share one fence:
+  `voiced_duration_confirmed` (natural barge-in), `button_interrupt` / `keyboard_interrupt`
+  (deliberate control), `cancelled_by_caller` (the CANCEL class), `call_disconnected` (hangup),
+  and the `stale_*` reasons emitted by the stages that refuse to publish.
 
 ### What the trace must prove
 
 | Question | Answered by |
 |---|---|
 | What did the user say? | `TranscriptFinal.text` |
-| How was it classified? | `InterruptionClassified.class` |
+| How was it classified? | `InterruptionClassified.interruption_class`, and `rule` for why |
 | Which generation was active? | `GenerationChanged`, plus `gen` on every event |
 | When did fencing occur? | `FenceRequested` then `GenerationChanged` |
 | Was a result received? | `ResultReceived` |
 | Was it discarded? | `ResultDiscarded` |
-| Was anything salvaged? | `ResultSalvaged.records_reused` |
+| Was anything salvaged? | Nothing ever is; `TaskReplaced.records_salvaged` is `0` and says so |
 | Did anything leak? | `ResultLeaked` |
 | When did audio duck / stop? | `AudioDucked`, `AudioStopped` |
 | When did cancellation resolve? | `CancellationResolved` |
@@ -145,32 +179,73 @@ Ordered, and the order is part of the contract:
 
 1. VAD detects user speech, emitting `SpeechOnset`.
 2. Agent audio is **ducked immediately**, emitting `AudioDucked`. No classification has happened yet.
+   (Open-mic only -- see the note on modes below.)
 3. STT transcribes, emitting `TranscriptFinal`.
-4. If the utterance is a backchannel: `BackchannelDetected`, `AudioResumed`, and the pipeline stops
-   here. No generation change.
-5. Otherwise the interruption is confirmed meaningful, current speech **fully stops**, emitting
-   `AudioStopped`.
-6. Classifier assigns one of the six classes, emitting `InterruptionClassified`.
-7. Supervisor applies the transition below.
+4. Classifier assigns one of the six classes, emitting `InterruptionClassified`.
+5. If the class **protects the task** -- `BACKCHANNEL` or `STATUS_QUERY` -- the pipeline stops here.
+   No generation is allocated, nothing is fenced, and a `BACKCHANNEL` additionally emits
+   `BackchannelDetected` and `AudioResumed` if a duck is outstanding.
+6. If the class is `CANCEL`, the active generation is fenced with reason `cancelled_by_caller` and
+   **no successor task is started**. `CancellationResolved` records the outcome.
+7. Otherwise a new generation is allocated -- which is what fences the previous one -- and the
+   Supervisor applies the transition below.
 8. Only results belonging to the active generation may be spoken.
+
+### Step 4 comes before step 7, and that is load-bearing
+
+Allocating a generation is what fences the previous one, so classifying *after* allocation would be
+classifying a task that had already been destroyed. Two real defects came from that ordering, and
+both are fixed by taking the transcript before touching the coordinator:
+
+- "mm-hm" said over an answer killed the answer it was encouraging.
+- A noise burst that transcribed to nothing killed the answer too -- the empty transcript returned
+  early, but the generation had already been allocated on the way in.
+
+`TranscriptFinal` therefore carries `gen: null`: at the moment STT runs, the generation this
+utterance belongs to does not exist yet, and may never exist.
+
+### The duck is mode-dependent; the fence is not
+
+Ducking on onset happens only in `open_mic`, where a duck can be promoted to a fence by sustained
+voice. In `hands_free` (the default, and what the phone path runs) neither realtime callback is
+wired, so nothing ducks and the answer plays at full volume until a fence stops it. That is
+deliberate: a ducked-but-never-fenced utterance takes the resume-and-return path and would be
+silently discarded. **Duck only where a fence can follow it.**
+
+All three input modes reach the same `fence_now`, so the generation model, the Audio Gate and every
+stale-result guarantee are identical across them. Only the trigger differs, and the trace records
+which one fired.
 
 ## 6. Supervisor transitions
 
 | Class | Generation | Task | Audio | Distinctive events |
 |---|---|---|---|---|
-| `BACKCHANNEL` | unchanged | unchanged | duck then resume | `BackchannelDetected`, `AudioResumed` |
-| `REFINEMENT` | `Gn` to `Gn+1` | constraint updated | stop | `TaskReplaced(reason=refinement)`, `FenceRequested`, `ResultSalvaged` (may be 0) |
+| `BACKCHANNEL` | unchanged | unchanged | **keeps playing** (resume if ducked) | `BackchannelDetected` |
+| `REFINEMENT` | `Gn` to `Gn+1` | new task, corrected | stop | `TaskReplaced(reason=refinement)`, `FenceRequested` |
 | `REPLACEMENT` | `Gn` to `Gn+1` | new task | stop | `TaskReplaced(reason=replacement)`, `FenceRequested` |
-| `STATUS_QUERY` | **unchanged** | unchanged | stop | `ResponseSpoken` only |
-| `CANCEL` | `Gn` fenced, no successor task | ended | stop | `FenceRequested`, `CancellationResolved` |
-| `NEW_TASK` | `Gn` to `Gn+1` | unrelated task | stop | `TaskReplaced(reason=new_task)`, `FenceRequested` |
+| `STATUS_QUERY` | **unchanged** | unchanged | **keeps playing** | `InterruptionClassified` only |
+| `CANCEL` | `Gn` fenced, no successor task | ended | stop | `FenceRequested(reason=cancelled_by_caller)`, `CancellationResolved` |
+| `NEW_TASK` | fresh `Gn` | unrelated task | nothing was playing | no `TaskReplaced` -- nothing was displaced |
 
 Tier 1 `NEW_TASK` fences the active task mechanically. It does not suspend it. The old task is not
 resumed, and AETHER does not claim it is.
 
-Low-confidence fallback: if classifier confidence is below threshold, the Supervisor takes the safe
-branch — fence — because an unnecessary fence costs a redundant lookup, while a missed fence costs
-a violated invariant.
+Three rows differ from what an earlier draft of this document specified, and the differences are
+deliberate rather than shortfalls:
+
+- **`STATUS_QUERY` does not speak.** Answering aloud would need a second audio path able to bypass
+  the Audio Gate's single active generation. Putting a hole in the mechanism that enforces the
+  golden invariant in order to say "just a moment" is not a trade worth making. The class protects
+  the task; it does not talk over it, and the caller hears the answer they were already waiting for.
+- **`REFINEMENT` salvages nothing**, so it behaves exactly as `REPLACEMENT` does. Only the label on
+  `TaskReplaced` differs. See RULES.md R8.
+- **`NEW_TASK` emits no `TaskReplaced`**, because by definition nothing was in flight to replace.
+  Emitting one would record a displacement that did not happen.
+
+**Uncertain classification falls to `REPLACEMENT`, which fences.** There is no confidence threshold
+to tune: the classifier matches closed sets exactly or it does not match, and not matching means
+falling through to the behaviour AETHER had before the classifier existed. An unnecessary fence
+costs a redundant lookup; a missed fence costs a violated invariant.
 
 ## 7. Output Gate (where the invariant lives)
 
@@ -191,21 +266,47 @@ it must never appear.
 
 ## 8. Test-only unsafe mode
 
-Enabled only by an explicit test/environment switch (`AETHER_UNSAFE_MODE`), never by configuration
-used in the demo. It disables the generation validity check in the Output Gate and nothing else, so
-the safe and unsafe runs of acceptance scenario G differ in exactly one variable.
+**Specified, and NOT built.** `AETHER_UNSAFE_MODE` is parsed into `RuntimeConfig.unsafe_mode` and
+read by nothing: no code path exists that lets a stale result reach output, so there is no check for
+it to disable. Setting it changes no behaviour today.
+
+The design stands: it would disable the generation validity check in the Output Gate and nothing
+else, so the safe and unsafe runs of acceptance scenario G would differ in exactly one variable.
+
+It has not been implemented because building a real bypass through the gate -- the one mechanism the
+golden invariant rests on -- purely so that a control test can fail is not a trade worth making
+(RULES.md R11). `test_unsafe_mode_leaks_stale_result` is therefore **skipped rather than passing**,
+and says so. `test_safe_mode_blocks_the_same_stale_result` runs, forcing a fence mid-lookup and
+asserting the result is discarded, `ResultLeaked` is absent, and nothing enters history.
 
 ## 9. Tasks and tools
 
 Two task paths, one supervisor:
 
-- **Warehouse tools** — deterministic lookups over a small synthetic dataset (orders, priorities,
-  bins, aisles, inventory, pick status). Tools accept an injectable delay so delayed-result races
-  are reproducible.
+- **Hotel menu tools** — deterministic lookups over the structured menu in `aether/hotel/`
+  (category, price, diet, availability, allergens, spice level). Tools accept an injectable delay
+  so delayed-result races are reproducible. A parallel warehouse fixture (`aether/warehouse/`)
+  remains as the second domain that proves the runner is domain-agnostic.
 - **LLM knowledge path** — general Q&A. In controlled tests it is backed by a deterministic stub so
   fixtures are reproducible; the live demo uses the real model.
 
 Both return results tagged with the generation that requested them. Neither speaks directly.
+
+### Which path a sentence takes
+
+`aether/hotel/router.py` decides, by keyword and slot, before the model is consulted. It returns a
+tool name and arguments, or `None`. It never executes anything, so it can never bypass fencing:
+`ToolRunner` runs the tool with the usual fence check, injectable delay and identity stamping, and
+`aether/hotel/tools.py` renders the result through a spoken template.
+
+`None` means the LLM takes the sentence — greeting, chit-chat, clarification, an unknown dish, or
+anything the router is not confident about. **A wrong tool call is worse than a slower answer**, so
+ambiguity always falls through rather than guessing.
+
+Menu facts are kept away from the model for two reasons: the LLM stage measured ~1.8 s that a
+lookup does not, and a model asked to read back a price can still say a number the hotel does not
+charge — or an allergen that could put somebody in hospital. A menu is a fact table, and facts
+belong in a lookup.
 
 ### Two rules for anything the tools return
 

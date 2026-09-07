@@ -1,431 +1,586 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AETHER</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AETHER — Hotel Voice Manager</title>
 <style>
-  /* Palette and shell adapted from the Rime voice-agent reference UI. */
-  :root {
-    --paper: #F0E9DD; --paper-light: #F8F3EA; --paper-dark: #DDD6C9;
-    --ink: #2E2A25; --ink-dark: #24211D; --ink-light: #3C372F;
-    --muted: #6E675B;
-    --aqua: #1DADC7; --yellow: #F0BE4D; --pink: #F08ADD; --green: #60C66A;
-    --accent: #1DADC7; --accent-soft: rgba(29,173,199,.15);
-    --stale: #C9553F;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--paper); color: var(--ink);
-    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
-    padding: 20px 16px 32px;
-  }
-  header { width: 100%; max-width: 1080px; display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
-  h1 { font-size: 20px; letter-spacing: .14em; margin: 0; text-transform: uppercase; }
-  .sub { color: var(--muted); font-size: 12px; }
-  .grid { width: 100%; max-width: 1080px; display: grid; grid-template-columns: 1.35fr .95fr; gap: 16px; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+/* ---------------------------------------------------------------------------------------------
+   AETHER — the duty manager's console.
 
-  .card {
-    background: var(--paper-light); border: 1px solid var(--paper-dark);
-    border-radius: 14px; padding: 14px;
-  }
-  .card h2 {
-    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
-    color: var(--muted); margin: 0 0 10px;
-  }
+   One page, no framework, no build step. The engine owns every fact on this screen; the page
+   renders what arrives and sends exactly two intentions back. The two controls are deliberately
+   different shapes and different colours, because confusing "stop listening to me" with "stop
+   talking" is the specific mistake this layout exists to prevent.
+--------------------------------------------------------------------------------------------- */
+:root {
+  --bg-0:#070910; --bg-1:#0d1220; --bg-2:#141b2e;
+  --ink:#eef2ff; --ink-dim:#9aa6c4; --ink-faint:#5e6a89;
+  --line:rgba(255,255,255,.09);
+  --calm:#5b8dff; --live:#22d3ee; --think:#a78bfa; --speak:#f7b955;
+  --alert:#ff5470; --off:#5a6480; --ok:#34d399;
+  --radius:18px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  --mono:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; font-family:var(--font); color:var(--ink);
+  background:
+    radial-gradient(1100px 620px at 22% -10%, rgba(34,211,238,.10) 0%, transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, rgba(91,141,255,.16) 0%, transparent 55%),
+    radial-gradient(760px 620px at 50% 120%, rgba(167,139,250,.13) 0%, transparent 60%),
+    linear-gradient(180deg,var(--bg-0),var(--bg-1) 55%,var(--bg-0));
+  min-height:100%;
+}
 
-  /* --- conversation ------------------------------------------------------- */
-  #transcript { height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
-  @media (max-width: 900px) { #transcript { height: 300px; } }
-  .bubble { max-width: 86%; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
-  .bubble .blabel { font-size: 9px; letter-spacing: .13em; text-transform: uppercase; opacity: .62; margin-bottom: 3px; }
-  .bubble.user { align-self: flex-end; background: var(--ink); color: var(--paper-light); }
-  .bubble.agent { align-self: flex-start; background: var(--accent-soft); border: 1px solid rgba(29,173,199,.34); }
-  .bubble.agent.stale { background: rgba(201,85,63,.13); border-color: rgba(201,85,63,.4); opacity: .72; }
-  .bubble.agent.stale .blabel { color: var(--stale); }
-  .bubble.system { align-self: center; background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
-  .empty { color: var(--muted); font-size: 12px; margin: auto; }
+/* --- shell ---------------------------------------------------------------------------- */
+.shell{max-width:1220px;margin:0 auto;padding:22px 22px 30px;display:flex;flex-direction:column;gap:18px;min-height:100vh}
 
-  /* --- status ------------------------------------------------------------- */
-  #status { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px;
-            border: 1px solid var(--paper-dark); border-radius: 12px; background: var(--paper-light); }
-  #stateDot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
-  #stateEq { display: none; align-items: flex-end; gap: 3px; height: 14px; }
-  #stateEq i { width: 4px; border-radius: 2px; background: var(--ink); height: 6px; animation: eq .8s ease-in-out infinite; }
-  #stateEq i:nth-child(2) { animation-delay: .18s; }
-  #stateEq i:nth-child(3) { animation-delay: .36s; }
-  @keyframes eq { 0%,100% { height: 5px; } 50% { height: 14px; } }
-  #stateText { font-size: 12px; letter-spacing: .13em; text-transform: uppercase; }
-  #stateNote { color: var(--muted); font-size: 11px; margin-left: auto; text-transform: none; letter-spacing: 0; }
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:13px}
+.mark{
+  width:38px;height:38px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(140deg,var(--calm),var(--think));
+  box-shadow:0 6px 22px rgba(91,141,255,.35); font-weight:700; font-size:17px; letter-spacing:.5px;
+}
+.brand h1{margin:0;font-size:19px;letter-spacing:.16em;font-weight:600}
+.brand p{margin:2px 0 0;font-size:11.5px;color:var(--ink-faint);letter-spacing:.13em;text-transform:uppercase}
 
-  body[data-phase="listening"]   #stateDot { background: var(--green); }
-  body[data-phase="thinking"]    #stateDot { background: var(--yellow); animation: pulse 1.1s ease-in-out infinite; }
-  body[data-phase="speaking"]    #stateDot { background: var(--aqua); }
-  body[data-phase="speaking"]    #stateEq { display: flex; }
-  body[data-phase="interrupted"] #stateDot { background: var(--stale); }
-  body[data-phase="recovering"]  #stateDot { background: var(--pink); animation: pulse .9s ease-in-out infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+.conn{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-dim);
+  border:1px solid var(--line);border-radius:999px;padding:7px 14px;background:rgba(255,255,255,.03)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--off);box-shadow:0 0 0 0 rgba(0,0,0,0)}
+.dot.on{background:var(--ok);box-shadow:0 0 10px rgba(52,211,153,.75)}
+.dot.err{background:var(--alert);box-shadow:0 0 10px rgba(255,84,112,.7)}
 
-  /* --- mic (observation-only in this pass) -------------------------------- */
-  .mic-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-  .round-btn {
-    width: 56px; height: 56px; border-radius: 50%; border: 1px solid var(--paper-dark);
-    background: var(--paper-light); display: grid; place-items: center; flex: none;
-  }
-  .round-btn svg { width: 24px; height: 24px; }
-  body[data-phase="listening"] .round-btn { border-color: var(--green); box-shadow: 0 0 0 4px rgba(96,198,106,.16); }
-  body[data-phase="speaking"]  .round-btn { border-color: var(--aqua);  box-shadow: 0 0 0 4px var(--accent-soft); }
-  .mic-note { color: var(--muted); font-size: 11px; }
+/* --- main grid ------------------------------------------------------------------------ */
+.grid{display:grid;grid-template-columns:minmax(380px,1fr) minmax(340px,.86fr);gap:18px;flex:1;min-height:0}
+@media (max-width:940px){.grid{grid-template-columns:1fr}}
 
-  /* --- metrics + timeline -------------------------------------------------- */
-  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px; }
-  .kv dt { color: var(--muted); letter-spacing: .05em; }
-  .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
-  .none { color: var(--muted); font-style: italic; }
-  .gen { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .gen.stale { color: var(--stale); text-decoration: line-through; }
+.panel{
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
+  backdrop-filter:blur(8px);
+}
 
-  #timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; }
-  .step { padding: 3px 8px; border-radius: 999px; border: 1px solid var(--paper-dark); white-space: nowrap; }
-  .step.generation { background: var(--accent-soft); border-color: rgba(29,173,199,.4); }
-  .step.fenced     { background: rgba(201,85,63,.14); border-color: rgba(201,85,63,.42); color: var(--stale); }
-  .step.discarded  { background: transparent; color: var(--muted); }
-  .step.spoken     { background: rgba(96,198,106,.16); border-color: rgba(96,198,106,.45); }
-  .arrow { color: var(--muted); }
+/* --- stage ---------------------------------------------------------------------------- */
+.stage{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:26px 22px 28px;position:relative;overflow:hidden}
+.orb-wrap{position:relative;width:min(330px,68vw);aspect-ratio:1;display:grid;place-items:center}
+canvas#orb{width:100%;height:100%;display:block}
 
-  #conn { font-size: 11px; color: var(--muted); margin-top: 10px; }
-  #conn.bad { color: var(--stale); }
+.state-line{text-align:center;min-height:56px}
+.state-line .label{font-size:15.5px;font-weight:600;letter-spacing:.03em}
+.state-line .note{margin-top:5px;font-size:12.5px;color:var(--ink-dim);max-width:38ch;line-height:1.5}
 
-/* Push-to-talk. Deliberately the largest thing on the page: in a demo it has to be findable
-   without looking, and it is the only control the browser has. */
-#ptt-bar { display:flex; flex-direction:column; align-items:center; gap:10px;
-           padding:20px 16px 8px; }
-#ptt { width:min(680px, 92vw); min-height:104px; cursor:pointer;
-       border:2px solid #e0533d; border-radius:16px;
-       background:linear-gradient(180deg,#f2604a,#d8412c); color:#fff;
-       display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
-       font: inherit; letter-spacing:.14em;
-       box-shadow:0 8px 26px rgba(216,65,44,.30); transition:transform .06s ease, filter .12s ease; }
-#ptt:hover { filter:brightness(1.06); }
-#ptt:active, #ptt.pressed { transform:translateY(2px); filter:brightness(.94); }
-#ptt:focus-visible { outline:3px solid #fff; outline-offset:3px; }
-.ptt-main { font-size:30px; font-weight:800; }
-.ptt-sub  { font-size:12px; letter-spacing:.06em; opacity:.92; text-transform:none; }
-#ptt-state { font-size:12px; letter-spacing:.12em; text-transform:uppercase; opacity:.75; }
-#ptt-state.live { color:#e0533d; font-weight:700; opacity:1; }
+/* --- controls: one toggle, one interrupt, never confusable ---------------------------- */
+.controls{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%}
+button{font-family:inherit;cursor:pointer;border:none;transition:transform .12s ease,box-shadow .2s ease,background .2s ease,opacity .2s}
+button:active{transform:translateY(1px) scale(.99)}
+button:focus-visible{outline:2px solid var(--live);outline-offset:3px}
 
-/* Standby: deliberately smaller than INTERRUPT. Different job, different weight -- one stops the
-   agent talking, the other stops the mic listening, and they must not look interchangeable. */
-#standby { display:flex; align-items:center; gap:9px; cursor:pointer;
-           padding:9px 18px; border-radius:999px; font: inherit; font-size:12px;
-           letter-spacing:.14em; font-weight:700;
-           border:1px solid rgba(128,128,128,.45); background:transparent; color:inherit;
-           opacity:.85; transition:opacity .12s ease, border-color .12s ease; }
-#standby:hover { opacity:1; }
-#standby:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
-#standby-dot { width:9px; height:9px; border-radius:50%; background:#e0533d;
-               box-shadow:0 0 0 4px rgba(224,83,61,.18); }
-#standby[aria-pressed="true"] { border-color:rgba(128,128,128,.8); opacity:.6; }
-#standby[aria-pressed="true"] #standby-dot { background:#8a8a8a; box-shadow:none; }
+#listenBtn{
+  width:min(320px,86%);padding:16px 22px;border-radius:14px;font-size:15px;font-weight:650;
+  letter-spacing:.07em;text-transform:uppercase;color:#06121c;
+  background:linear-gradient(135deg,var(--live),#59e6f5);
+  box-shadow:0 10px 30px rgba(34,211,238,.28);
+}
+#listenBtn.stop{ background:linear-gradient(135deg,#7d8bb3,#5d6a8e); color:#f2f5ff;
+  box-shadow:0 10px 26px rgba(93,106,142,.28); }
+
+#interruptBtn{
+  width:min(320px,86%);padding:14px 22px;border-radius:14px;font-size:14px;font-weight:650;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--ink-dim);
+  background:transparent;border:1.5px solid rgba(255,84,112,.35);
+}
+#interruptBtn.armed{
+  color:#fff;border-color:transparent;
+  background:linear-gradient(135deg,var(--alert),#ff7d5c);
+  box-shadow:0 10px 30px rgba(255,84,112,.34);
+}
+.hint{font-size:11.5px;color:var(--ink-faint);text-align:center;letter-spacing:.04em;line-height:1.6}
+kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink-dim)}
+
+/* --- conversation --------------------------------------------------------------------- */
+.side{display:flex;flex-direction:column;gap:18px;min-height:0}
+.panel h2{
+  margin:0;padding:14px 18px;font-size:11.5px;letter-spacing:.17em;text-transform:uppercase;
+  color:var(--ink-faint);border-bottom:1px solid var(--line);font-weight:600;
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+}
+#transcript{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:11px;min-height:220px;max-height:52vh}
+.turn{max-width:86%;padding:11px 14px;border-radius:14px;font-size:13.5px;line-height:1.55;position:relative}
+.turn .who{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.65;margin-bottom:5px;font-weight:600}
+.turn.customer{align-self:flex-end;background:rgba(34,211,238,.13);border:1px solid rgba(34,211,238,.26);border-bottom-right-radius:5px}
+.turn.aether{align-self:flex-start;background:rgba(247,185,85,.11);border:1px solid rgba(247,185,85,.24);border-bottom-left-radius:5px}
+.turn.interrupted{background:rgba(255,84,112,.09);border:1px solid rgba(255,84,112,.3);border-style:dashed}
+.turn.interrupted .body{color:var(--ink-dim);font-style:italic}
+.turn .tag{
+  display:inline-block;margin-top:7px;font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--alert);border:1px solid rgba(255,84,112,.4);border-radius:999px;padding:2px 8px;
+}
+.empty{color:var(--ink-faint);font-size:12.5px;text-align:center;margin:auto;padding:26px;line-height:1.7}
+
+/* --- evidence ------------------------------------------------------------------------- */
+.evidence{padding:14px 18px 16px}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:11px}
+.metric{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:11px;padding:9px 11px;min-width:0}
+.metric dt{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px}
+.metric dd{margin:0;font-family:var(--mono);font-size:12.5px;color:var(--ink);overflow-wrap:anywhere}
+.metric dd.zero{color:var(--ok)}
+.metric dd.warn{color:var(--alert)}
+.metric.hidden{display:none}
+#timeline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:13px;font-family:var(--mono);font-size:10.5px}
+#timeline .step{border:1px solid var(--line);border-radius:6px;padding:2px 7px;color:var(--ink-dim);white-space:nowrap}
+#timeline .step.fenced{border-color:rgba(255,84,112,.45);color:var(--alert)}
+#timeline .step.spoken{border-color:rgba(52,211,153,.4);color:var(--ok)}
+#timeline .step.classified{border-color:rgba(167,139,250,.45);color:var(--think)}
+#timeline .arrow{color:var(--ink-faint)}
+.dl{margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:11px}
+footer{font-size:11px;color:var(--ink-faint);text-align:center;letter-spacing:.05em;line-height:1.7}
 </style>
 </head>
-<body data-phase="listening">
+<body>
+<div class="shell">
 
-<header>
-  <h1>AETHER</h1>
-  <span class="sub">live engine view &middot; push to talk</span>
-</header>
-
-<div id="ptt-bar">
-  <button id="ptt" type="button" aria-label="Interrupt the agent and start listening">
-    <span class="ptt-main">INTERRUPT</span>
-    <span class="ptt-sub">stop the agent &amp; speak &middot; or press SPACE</span>
-  </button>
-  <button id="standby" type="button" aria-pressed="false"
-          aria-label="Microphone standby: stop listening without stopping the agent">
-    <span id="standby-dot"></span><span id="standby-label">MIC LIVE</span>
-  </button>
-  <div id="ptt-state">listening</div>
-</div>
-
-<div class="grid">
-  <section class="card">
-    <h2>Conversation</h2>
-    <div id="transcript"><div class="empty">Waiting for the engine&hellip;</div></div>
-
-    <div id="status">
-      <span id="stateDot"></span>
-      <span id="stateEq"><i></i><i></i><i></i></span>
-      <span id="stateText">Listening</span>
-      <span id="stateNote"></span>
-    </div>
-
-    <div class="mic-row">
-      <div class="round-btn" title="The microphone is owned by the Python engine">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-             stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="2" width="6" height="12" rx="3"></rect>
-          <path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v4"></path>
-        </svg>
+  <header>
+    <div class="brand">
+      <div class="mark">Æ</div>
+      <div>
+        <h1>AETHER</h1>
+        <p>Hotel Voice Manager</p>
       </div>
-      <span class="mic-note">Mic and speaker belong to the engine process.<br>Speak to that machine; this view follows.</span>
     </div>
+    <div class="conn"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></div>
+  </header>
 
-    <div id="conn">connecting&hellip;</div>
-  </section>
+  <div class="grid">
 
-  <div style="display:flex; flex-direction:column; gap:16px;">
-    <section class="card">
-      <h2>Generation</h2>
-      <dl class="kv">
-        <dt>active</dt>      <dd id="mGen" class="gen none">&mdash;</dd>
-        <dt>previous</dt>    <dd id="mPrev" class="none">&mdash;</dd>
-        <dt>fenced</dt>      <dd id="mFenced" class="none">&mdash;</dd>
-        <dt>fence reason</dt><dd id="mFenceReason" class="none">&mdash;</dd>
-        <dt>last discard</dt><dd id="mDiscard" class="none">&mdash;</dd>
-      </dl>
+    <!-- ============================ stage ============================ -->
+    <section class="panel stage">
+      <div class="orb-wrap"><canvas id="orb"></canvas></div>
+
+      <div class="state-line">
+        <div class="label" id="phaseLabel">Connecting</div>
+        <div class="note" id="phaseNote">Waiting for the engine.</div>
+      </div>
+
+      <div class="controls">
+        <button id="listenBtn" type="button">Start Listening</button>
+        <button id="interruptBtn" type="button">Interrupt</button>
+        <p class="hint">
+          The toggle controls whether AETHER <em>hears</em> you. Interrupt stops what it is
+          <em>doing</em> — it never closes the microphone.<br>
+          <kbd>Space</kbd> interrupt · <kbd>L</kbd> listening toggle
+        </p>
+      </div>
     </section>
 
-    <section class="card">
-      <h2>Timeline</h2>
-      <div id="timeline"><span class="none">nothing yet</span></div>
-    </section>
+    <!-- ============================ side ============================ -->
+    <div class="side">
+      <section class="panel" style="display:flex;flex-direction:column;min-height:0">
+        <h2><span>Conversation</span><span id="turnCount" style="font-family:var(--mono)"></span></h2>
+        <div id="transcript">
+          <div class="empty">Nothing said yet.<br>Start listening, then ask about the menu.</div>
+        </div>
+      </section>
 
-    <section class="card">
-      <h2>Latency</h2>
-      <dl class="kv" id="mLatency"><dt class="none">no completed turn yet</dt><dd></dd></dl>
-    </section>
-
-    <section class="card">
-      <h2>Speech &amp; reasoning</h2>
-      <dl class="kv">
-        <dt>provider</dt>  <dd id="mProvider" class="none">&mdash;</dd>
-        <dt>transport</dt> <dd id="mTransport" class="none">&mdash;</dd>
-        <dt>model</dt>     <dd id="mModel" class="none">&mdash;</dd>
-        <dt>voice</dt>     <dd id="mVoice" class="none">&mdash;</dd>
-        <dt>llm</dt>       <dd id="mLlm" class="none">&mdash;</dd>
-      </dl>
-    </section>
+      <section class="panel evidence">
+        <h2 style="padding:0 0 12px;border:none">Evidence</h2>
+        <dl class="dl metrics" id="metrics">
+          <div class="metric"><dt>Generation</dt><dd id="mGen">—</dd></div>
+          <div class="metric"><dt>Previous</dt><dd id="mPrev">—</dd></div>
+          <div class="metric"><dt>Phase</dt><dd id="mPhase">—</dd></div>
+          <div class="metric"><dt>Last fence</dt><dd id="mFence">—</dd></div>
+          <div class="metric"><dt>Last discard</dt><dd id="mDiscard">—</dd></div>
+          <div class="metric"><dt>Class</dt><dd id="mClass">—</dd></div>
+          <div class="metric"><dt>Stale leaks</dt><dd id="mLeaks" class="zero">0</dd></div>
+          <div class="metric"><dt>Voice</dt><dd id="mVoice">—</dd></div>
+        </dl>
+        <dl class="dl metrics" id="mLatency" style="margin-top:11px"></dl>
+        <div id="timeline"></div>
+      </section>
+    </div>
   </div>
+
+  <footer>
+    Backend is authoritative — this page renders engine state and sends only Interrupt and the
+    listening toggle. Numbers shown are measured by the run in progress; none are projected.
+  </footer>
 </div>
 
 <script>
-// Every value shown here comes from a real AETHER trace event. Nothing is simulated: a field the
-// engine has not produced stays blank rather than being invented.
+"use strict";
+/* =================================================================================================
+   Backend is the single source of truth.
+
+   Every fact on screen comes from a `state` message: the phase, whether the microphone is open,
+   the transcript, the generation, the fence reason, the latency keys. The page keeps NO parallel
+   model of the conversation -- which is why a reconnect cannot leave it lying, and why the button
+   label can never disagree with the engine. `event` messages are used only for things that are
+   genuinely moments rather than states: a red flash when a fence lands.
+================================================================================================= */
+
 const WS_PORT = Number(new URLSearchParams(location.search).get("ws") || 8761);
 
-const transcriptEl = document.getElementById("transcript");
-const stateTextEl  = document.getElementById("stateText");
-const stateNoteEl  = document.getElementById("stateNote");
-const connEl       = document.getElementById("conn");
-const timelineEl   = document.getElementById("timeline");
-
-const PHASE_LABEL = {
-  listening: "Listening", thinking: "Thinking", speaking: "Speaking",
-  interrupted: "Interrupted", recovering: "Recovering",
+/* ---------------------------------------------------------------------------------------------
+   Orb. Nine visual states, each one a real distinction the engine actually reports.
+--------------------------------------------------------------------------------------------- */
+const ORB = {
+  disconnected: { hue:[90,100,120],  glow:.18, speed:.10, wob:.02, rings:2, label:"Disconnected",
+                  note:"No connection to the engine." },
+  idle:         { hue:[91,141,255],  glow:.42, speed:.32, wob:.05, rings:3, label:"Connected",
+                  note:"Listening is off. Press START LISTENING to begin." },
+  listening:    { hue:[34,211,238],  glow:.62, speed:.55, wob:.10, rings:4, label:"Listening",
+                  note:"Go ahead — ask about the menu." },
+  customer:     { hue:[34,211,238],  glow:.95, speed:1.15, wob:.30, rings:5, label:"You are speaking",
+                  note:"Capturing your question." },
+  processing:   { hue:[167,139,250], glow:.72, speed:1.65, wob:.14, rings:5, label:"Working on it",
+                  note:"Looking that up." },
+  speaking:     { hue:[247,185,85],  glow:.92, speed:.90, wob:.26, rings:5, label:"AETHER speaking",
+                  note:"Speak at any time — you can interrupt." },
+  interrupted:  { hue:[255,84,112],  glow:1.0, speed:1.9, wob:.34, rings:4, label:"Interrupted",
+                  note:"The unfinished answer was discarded, never spoken." },
+  stopped:      { hue:[90,100,128],  glow:.22, speed:.16, wob:.03, rings:2, label:"Not listening",
+                  note:"AETHER cannot hear you. The call stays connected." },
+  error:        { hue:[255,84,112],  glow:.55, speed:.30, wob:.06, rings:3, label:"Error",
+                  note:"Something went wrong — check the console output." },
 };
 
-let emptyShown = true;
-const agentBubbles = new Map();   // generation -> its bubble, so a fence can mark it stale
+const canvas = document.getElementById("orb");
+const ctx = canvas.getContext("2d");
+let orbState = "disconnected";
+let amp = 0;           // eased 0..1 activity level
+let flash = 0;         // 0..1 red interruption flash, decays
+let t0 = performance.now();
 
-function clearEmpty() {
-  if (!emptyShown) return;
-  transcriptEl.innerHTML = "";
-  emptyShown = false;
+function sizeCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(r.width * dpr));
+  canvas.height = Math.max(1, Math.round(r.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
+window.addEventListener("resize", sizeCanvas);
 
-function addBubble(cls, label, text) {
-  clearEmpty();
-  const div = document.createElement("div");
-  div.className = "bubble " + cls;
-  if (label) {
-    const l = document.createElement("div");
-    l.className = "blabel";
-    l.textContent = label;
-    div.appendChild(l);
-  }
-  const body = document.createElement("div");
-  body.textContent = text;
-  div.appendChild(body);
-  transcriptEl.appendChild(div);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
-  return div;
-}
+function rgba(c, a) { return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
 
-function setText(id, value) {
-  const el = document.getElementById(id);
-  const has = value !== null && value !== undefined && value !== "";
-  el.textContent = has ? value : "—";
-  el.classList.toggle("none", !has);
-}
+function drawOrb(now) {
+  const cfg = ORB[orbState] || ORB.idle;
+  const r = canvas.getBoundingClientRect();
+  const w = r.width, h = r.height;
+  if (!w || !h) { requestAnimationFrame(drawOrb); return; }
+  const cx = w / 2, cy = h / 2;
+  const t = (now - t0) / 1000;
 
-function onEvent(ev) {
-  switch (ev.type) {
-    case "TranscriptFinal":
-      if (ev.text) addBubble("user", "YOU", ev.text);
-      break;
+  // Ease toward the target energy so state changes glide instead of snapping.
+  const target = cfg.glow;
+  amp += (target - amp) * 0.07;
+  flash *= 0.94;
 
-    case "ResponseSpoken":
-      if (ev.text) {
-        const b = addBubble("agent", `AETHER · ${(ev.voice || "rime").toUpperCase()}`, ev.text);
-        if (ev.gen) agentBubbles.set(ev.gen, b);
-      }
-      break;
+  const hue = flash > 0.02
+    ? cfg.hue.map((v, i) => v + (ORB.interrupted.hue[i] - v) * Math.min(1, flash))
+    : cfg.hue;
 
-    case "FenceRequested": {
-      // Mark what the user was hearing as abandoned, rather than deleting it: the point of the
-      // demo is that the old answer was cut off, not that it never existed.
-      const b = agentBubbles.get(ev.gen);
-      if (b) b.classList.add("stale");
-      addBubble("system", null, `interrupted — ${ev.gen || "?"} fenced (${ev.reason || "meaningful interruption"})`);
-      break;
+  ctx.clearRect(0, 0, w, h);
+
+  const base = Math.min(w, h) * 0.27;
+  const breathe = 1 + Math.sin(t * cfg.speed * 1.6) * (0.035 + cfg.wob * 0.22);
+
+  // Outer halo.
+  const halo = ctx.createRadialGradient(cx, cy, base * 0.35, cx, cy, base * 2.5);
+  halo.addColorStop(0, rgba(hue, 0.28 * amp));
+  halo.addColorStop(0.55, rgba(hue, 0.07 * amp));
+  halo.addColorStop(1, rgba(hue, 0));
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, w, h);
+
+  // Concentric wobbling rings -- the "voice presence".
+  for (let i = 0; i < cfg.rings; i++) {
+    const k = i / Math.max(1, cfg.rings - 1);
+    const rr = base * (0.62 + k * 0.85) * breathe;
+    const phase = t * cfg.speed * (1 + i * 0.33) + i * 1.7;
+    ctx.beginPath();
+    for (let a = 0; a <= Math.PI * 2 + 0.001; a += Math.PI / 90) {
+      const wob = 1
+        + Math.sin(a * (3 + i) + phase) * cfg.wob * (0.5 + amp * 0.6)
+        + Math.sin(a * (5 + i * 2) - phase * 1.3) * cfg.wob * 0.4;
+      const x = cx + Math.cos(a) * rr * wob;
+      const y = cy + Math.sin(a) * rr * wob;
+      if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
-
-    case "ResultDiscarded":
-      addBubble("system", null, `discarded ${ev.gen || "?"} · ${ev.reason || "stale"}${ev.stage ? " @ " + ev.stage : ""}`);
-      break;
+    ctx.closePath();
+    ctx.strokeStyle = rgba(hue, (0.30 - k * 0.19) * (0.35 + amp));
+    ctx.lineWidth = Math.max(1, (2.4 - k * 1.5));
+    ctx.stroke();
   }
+
+  // Core.
+  const coreR = base * (0.78 + amp * 0.10) * breathe;
+  const core = ctx.createRadialGradient(cx - coreR * 0.25, cy - coreR * 0.3, coreR * 0.1, cx, cy, coreR);
+  core.addColorStop(0, rgba(hue.map(v => Math.min(255, v + 55)), 0.95));
+  core.addColorStop(0.6, rgba(hue, 0.55 + amp * 0.25));
+  core.addColorStop(1, rgba(hue, 0.05));
+  ctx.beginPath();
+  ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+  ctx.fillStyle = core;
+  ctx.fill();
+
+  // Inner sheen, so the orb reads as a body rather than a flat disc.
+  ctx.beginPath();
+  ctx.arc(cx - coreR * 0.28, cy - coreR * 0.32, coreR * 0.42, 0, Math.PI * 2);
+  ctx.fillStyle = rgba([255, 255, 255], 0.06 + amp * 0.05);
+  ctx.fill();
+
+  requestAnimationFrame(drawOrb);
+}
+sizeCanvas();
+requestAnimationFrame(drawOrb);
+
+/* ---------------------------------------------------------------------------------------------
+   State rendering. `phase` values come from the coordinator: listening, thinking, speaking,
+   interrupted, recovering.
+--------------------------------------------------------------------------------------------- */
+const els = {
+  phaseLabel: document.getElementById("phaseLabel"),
+  phaseNote:  document.getElementById("phaseNote"),
+  listenBtn:  document.getElementById("listenBtn"),
+  interruptBtn: document.getElementById("interruptBtn"),
+  transcript: document.getElementById("transcript"),
+  turnCount:  document.getElementById("turnCount"),
+  connDot:    document.getElementById("connDot"),
+  connText:   document.getElementById("connText"),
+  timeline:   document.getElementById("timeline"),
+};
+
+let connected = false;
+let lastState = null;
+
+function orbStateFor(s) {
+  if (!connected) return "disconnected";
+  if (s && s.listening === false) return "stopped";
+  const phase = s ? s.phase : null;
+  if (phase === "interrupted" || phase === "recovering") return "interrupted";
+  if (s && s.speech_active) return "customer";
+  if (phase === "thinking") return "processing";
+  if (phase === "speaking") return "speaking";
+  if (phase === "listening") return (s && s.listening === false) ? "stopped" : "listening";
+  return "idle";
+}
+
+function setText(id, value, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const has = value !== null && value !== undefined && value !== "";
+  el.textContent = has ? String(value) : "—";
+  el.className = cls || "";
+}
+
+function renderTranscript(rows) {
+  const list = rows || [];
+  els.turnCount.textContent = list.length ? `${list.length} lines` : "";
+  if (!list.length) {
+    els.transcript.innerHTML =
+      '<div class="empty">Nothing said yet.<br>Start listening, then ask about the menu.</div>';
+    return;
+  }
+  const atBottom = els.transcript.scrollHeight - els.transcript.scrollTop
+                   - els.transcript.clientHeight < 60;
+  els.transcript.innerHTML = "";
+  for (const row of list) {
+    const div = document.createElement("div");
+    const interrupted = row.status === "interrupted";
+    div.className = "turn " + (row.role === "customer" ? "customer" : "aether")
+                  + (interrupted ? " interrupted" : "");
+
+    const who = document.createElement("div");
+    who.className = "who";
+    who.textContent = (row.role === "customer" ? "Customer" : "AETHER")
+                    + (row.gen ? ` · ${row.gen}` : "");
+    div.appendChild(who);
+
+    const body = document.createElement("div");
+    body.className = "body";
+    // An interrupted answer has no text to show: the words were discarded before they were
+    // spoken, and inventing a body for them would present a turn that never happened.
+    body.textContent = interrupted
+      ? "Answer discarded — never spoken."
+      : (row.text || "");
+    div.appendChild(body);
+
+    if (interrupted && row.reason) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = row.reason;
+      div.appendChild(tag);
+    }
+    els.transcript.appendChild(div);
+  }
+  if (atBottom) els.transcript.scrollTop = els.transcript.scrollHeight;
 }
 
 function renderLatency(latency) {
   const dl = document.getElementById("mLatency");
+  // The engine decides which metrics are real; the page renders whatever keys it is handed.
   const entries = Object.entries(latency || {});
-  if (!entries.length) {
-    dl.innerHTML = '<dt class="none">no completed turn yet</dt><dd></dd>';
-    return;
-  }
   dl.innerHTML = "";
   for (const [k, v] of entries) {
+    const box = document.createElement("div");
+    box.className = "metric";
     const dt = document.createElement("dt");
     dt.textContent = k.replace(/_ms$/, "").replace(/_/g, " ");
     const dd = document.createElement("dd");
-    dd.textContent = k.endsWith("_ms") ? `${Math.round(v)} ms` : v;
-    dl.append(dt, dd);
+    dd.textContent = typeof v === "number" ? `${Math.round(v)} ms` : String(v);
+    box.appendChild(dt); box.appendChild(dd);
+    dl.appendChild(box);
   }
 }
 
 function renderTimeline(steps) {
-  if (!steps || !steps.length) {
-    timelineEl.innerHTML = '<span class="none">nothing yet</span>';
-    return;
-  }
-  timelineEl.innerHTML = "";
-  steps.slice(-12).forEach((s, i) => {
+  const list = (steps || []).slice(-14);
+  els.timeline.innerHTML = "";
+  list.forEach((s, i) => {
     if (i) {
       const a = document.createElement("span");
-      a.className = "arrow";
-      a.textContent = "→";
-      timelineEl.appendChild(a);
+      a.className = "arrow"; a.textContent = "→";
+      els.timeline.appendChild(a);
     }
     const el = document.createElement("span");
     el.className = "step " + s.kind;
-    el.textContent = s.kind === "generation" ? (s.gen || "?")
-                   : s.kind === "fenced"     ? `${s.gen || "?"} FENCED`
-                   : s.kind === "spoken"     ? `${s.gen || "?"} spoken`
-                   : `${s.gen || "?"} discarded`;
-    if (s.detail) el.title = s.detail;
-    timelineEl.appendChild(el);
+    el.textContent = s.kind === "generation"  ? (s.gen || "?")
+                   : s.kind === "fenced"      ? `${s.gen || "?"} FENCED`
+                   : s.kind === "spoken"      ? `${s.gen || "?"} spoken`
+                   : s.kind === "classified"  ? String(s.detail || "classified")
+                   : s.kind === "backchannel" ? "backchannel"
+                   : s.kind === "cancelled"   ? "cancelled"
+                   : s.kind === "leaked"      ? "LEAKED"
+                   : `${s.gen || "?"} ${s.detail || s.kind}`;
+    els.timeline.appendChild(el);
   });
 }
 
-// The mic indicator is driven by the engine's REAL listening state, never by what the page
-// assumed after a click -- a control that lies about whether you are being heard is worse than
-// no control at all.
-function renderMic(listening) {
-  if (listening === undefined) return;
-  const btn = document.getElementById("standby");
-  const state = document.getElementById("ptt-state");
-  btn.setAttribute("aria-pressed", listening ? "false" : "true");
-  document.getElementById("standby-label").textContent = listening ? "MIC LIVE" : "MIC STANDBY";
-  state.textContent = listening ? "listening" : "standby — not listening";
-  state.classList.toggle("live", Boolean(listening));
+function renderControls(s) {
+  const listening = !!(s && s.listening);
+  // ONE toggle. Its label is derived from what the engine reports, never from what the last
+  // click assumed -- so the button cannot end up pointing the wrong way.
+  els.listenBtn.textContent = listening ? "Stop Listening" : "Start Listening";
+  els.listenBtn.classList.toggle("stop", listening);
+  els.listenBtn.disabled = !connected;
+  els.listenBtn.style.opacity = connected ? "1" : ".45";
+
+  // Emphasised only when there is genuinely something to stop. Still clickable, and a safe no-op.
+  const armed = !!(s && s.interruptible);
+  els.interruptBtn.classList.toggle("armed", armed);
+  els.interruptBtn.style.opacity = connected ? "1" : ".45";
 }
 
 function onState(s) {
-  document.body.dataset.phase = s.phase || "listening";
-  stateTextEl.textContent = PHASE_LABEL[s.phase] || s.phase || "—";
-  stateNoteEl.textContent = s.turn_id ? `turn ${s.turn_id}` : "";
+  lastState = s;
+  orbState = orbStateFor(s);
+  const cfg = ORB[orbState];
+  els.phaseLabel.textContent = cfg.label;
+  els.phaseNote.textContent = cfg.note;
 
-  renderMic(s.listening);
+  renderControls(s);
+  renderTranscript(s.transcript);
+  renderTimeline(s.timeline);
+  renderLatency(s.latency);
 
   setText("mGen", s.generation);
   setText("mPrev", s.previous_generation);
-  setText("mFenced", s.fenced_generation);
-  setText("mFenceReason", s.fence_reason);
+  setText("mPhase", s.phase);
+  setText("mFence", s.fence_reason);
   setText("mDiscard", s.last_discard);
-  document.getElementById("mGen").classList.toggle(
-    "stale", Boolean(s.fenced_generation) && s.fenced_generation === s.generation);
-
+  setText("mClass", s.last_class);
+  setText("mLeaks", s.leaks == null ? 0 : s.leaks, s.leaks ? "warn" : "zero");
   const rime = s.rime || {};
-  setText("mProvider", rime.provider);
-  setText("mTransport", rime.transport);
-  setText("mModel", rime.model);
-  setText("mVoice", rime.voice);
-  setText("mLlm", s.llm_provider);
+  setText("mVoice", rime.voice ? `${rime.voice} · ${rime.model || "?"}` : null);
+}
 
-  renderLatency(s.latency);
-  renderTimeline(s.timeline);
-
-  if (s.dropped_events) {
-    connEl.textContent = `connected · ${s.dropped_events} event(s) dropped (browser behind)`;
+/* Events are used ONLY for moments, never as a second copy of state. A fence is a moment. */
+function onEvent(ev) {
+  switch (ev.type) {
+    case "FenceRequested":
+      flash = 1;
+      break;
+    case "ResultDiscarded":
+      flash = Math.max(flash, 0.7);
+      break;
+    case "TranscriptFinal":
+    case "ResponseSpoken":
+      amp = Math.min(1, amp + 0.15);
+      break;
   }
 }
 
+/* ---------------------------------------------------------------------------------------------
+   Transport. Reconnects, and asks for a fresh snapshot on every open, so a dropped socket can
+   never leave a stale screen behind.
+--------------------------------------------------------------------------------------------- */
+let ws = null;
+let retry = 0;
+
+function send(msg) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(msg));
+  return true;
+}
+
 function connect() {
-  const ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
-  ws.onopen = () => { connEl.textContent = "connected to engine"; connEl.classList.remove("bad"); };
-  ws.onclose = () => {
-    connEl.textContent = "engine disconnected — retrying";
-    connEl.classList.add("bad");
-    setTimeout(connect, 1000);
+  ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+
+  ws.onopen = () => {
+    connected = true; retry = 0;
+    els.connDot.className = "dot on";
+    els.connText.textContent = "engine connected";
+    renderControls(lastState);
   };
-  ws.onerror = () => ws.close();
-  // --- push-to-talk -----------------------------------------------------------------
-  // One message, one action. The page cannot fence, enqueue or steer anything else; the bridge
-  // accepts exactly {"action":"interrupt"} and ignores everything else.
-  const pttBtn = document.getElementById('ptt');
-  const pttState = document.getElementById('ptt-state');
-
-  function interrupt() {
-    if (ws.readyState !== WebSocket.OPEN) { pttState.textContent = 'not connected'; return; }
-    ws.send(JSON.stringify({ action: 'interrupt' }));
-    pttBtn.classList.add('pressed');
-    setTimeout(() => pttBtn.classList.remove('pressed'), 140);
-    pttState.textContent = 'listening — speak now';
-    pttState.classList.add('live');
-    // The authoritative value arrives with the next state frame; this is only optimistic echo.
-  }
-
-  pttBtn.addEventListener('click', interrupt);
-
-  // --- standby -----------------------------------------------------------------------
-  // Separate control, separate meaning: this mutes the MIC and fences nothing. The label is
-  // driven by the engine's real mic state below, never by what we optimistically assumed here.
-  const standbyBtn = document.getElementById('standby');
-  standbyBtn.addEventListener('click', () => {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ action: 'standby' }));
-  });
-
-  // Space is the hands-free equivalent; ignored while typing so it cannot fire by accident.
-  document.addEventListener('keydown', (e) => {
-    if (e.code !== 'Space' || e.repeat) return;
-    const el = document.activeElement;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-    e.preventDefault();
-    interrupt();
-  });
 
   ws.onmessage = (m) => {
     let msg;
     try { msg = JSON.parse(m.data); } catch { return; }
-    if (msg.kind === "event") onEvent(msg.event);
-    else if (msg.kind === "state") onState(msg);
+    if (msg.kind === "state") onState(msg);
+    else if (msg.kind === "event") onEvent(msg.event);
+  };
+
+  ws.onclose = () => {
+    connected = false;
+    els.connDot.className = "dot";
+    els.connText.textContent = "reconnecting…";
+    orbState = "disconnected";
+    els.phaseLabel.textContent = ORB.disconnected.label;
+    els.phaseNote.textContent = ORB.disconnected.note;
+    // The transcript is NOT cleared: it belongs to the engine and will be re-sent whole on the
+    // next snapshot. Clearing it would present a real conversation as though it never happened.
+    renderControls(null);
+    retry = Math.min(retry + 1, 6);
+    setTimeout(connect, 400 * retry);
+  };
+
+  ws.onerror = () => {
+    els.connDot.className = "dot err";
   };
 }
 connect();
+
+/* --- the two controls ------------------------------------------------------------------- */
+els.listenBtn.addEventListener("click", () => {
+  // Send the DESIRED state, not "flip". Two fast clicks then converge instead of cancelling out,
+  // and the button's label follows the engine's answer rather than a local guess.
+  send({ action: "listening", on: !(lastState && lastState.listening) });
+});
+
+els.interruptBtn.addEventListener("click", () => {
+  send({ action: "interrupt" });
+  flash = 1;
+});
+
+document.addEventListener("keydown", (e) => {
+  const el = document.activeElement;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
+  if (e.code === "Space") { e.preventDefault(); els.interruptBtn.click(); }
+  else if (e.key === "l" || e.key === "L") { e.preventDefault(); els.listenBtn.click(); }
+});
 </script>
 </body>
 </html>

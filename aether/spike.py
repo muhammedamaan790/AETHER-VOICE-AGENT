@@ -1,20 +1,32 @@
-"""Day-1 vertical slice: mic -> VAD -> STT -> LLM -> Rime -> audio, plus the barge-in audio path.
+"""The turn loop: audio in, one answer out, and everything that decides whether it is spoken.
 
-Scope (PHASES.md Day 1). This deliberately does NOT contain:
-  - the six-class classifier
-  - refinement / replacement / salvage / cancel supervisor behaviour
-  - fencing or Output Gate validity checks
-  - warehouse tools, evaluator, dashboard
+    mic / phone -> VAD -> STT -> classify -> menu router -> hotel tool -> Rime -> AudioGate
+                                                         -> LLM       ->
 
-Barge-in on Day 1 is decided by *duration*, not meaning:
+The same class drives the local microphone and a phone call. On a call the two `aether.bridge`
+adapters replace the devices, and nothing between them changes.
+
+Interruption is decided in two stages, and they are deliberately different kinds of decision.
+
+**By duration, on the realtime thread** (open-mic only) -- fast, meaning-free, and reversible:
 
     speech onset               -> duck immediately            (AudioDucked)
     voiced speech continues    -> confirmed meaningful, stop  (AudioStopped)
-    voiced speech stops early  -> resume                      (AudioResumed)
 
-The duration test is an explicit placeholder for Day 3's classifier. It is not backchannel
-detection: no BackchannelDetected event is emitted here, because that event means a *semantic*
-judgement and Day 1 makes none.
+**By meaning, on the turn thread** -- `aether.classify`, running on the transcript BEFORE a
+generation is allocated, because allocation is what fences the previous one:
+
+    BACKCHANNEL / STATUS_QUERY -> no generation is allocated, the answer in flight survives
+    CANCEL                     -> fenced, and no successor task starts
+    REFINEMENT / REPLACEMENT   -> an ordinary turn, labelled on TaskReplaced
+    NEW_TASK                   -> an ordinary turn with nothing displaced
+
+The classifier can only ever WITHHOLD a fence for a phrase it recognises exactly; everything
+ambiguous falls through to replacement, which fences. Generation fencing stays the final authority
+on what may be heard -- the classifier decides whether a turn begins, never what may be spoken.
+
+Not implemented, and said plainly rather than faked: salvage (`ResultSalvaged`). AETHER has no
+partial-result store, so a refinement reuses nothing and reports nothing (RULES.md R8).
 """
 
 from __future__ import annotations
@@ -29,6 +41,7 @@ from .audio.player import AudioGate
 from .audio.rime import RimeNotConfigured
 from .audio.rime_ws import SpeakResult, build_tts
 from .audio.vad import MicVAD, describe_device
+from .classify import classify
 from .config import RuntimeConfig
 from .conversation import ConversationHistory
 from .hotel import MenuStore
@@ -76,8 +89,9 @@ MEANINGFUL_SPEECH_MS = 300.0
 # at the cost of a press before every utterance.
 #
 # OPEN_MIC: the original always-listening barge-in. Voice onset ducks, and sustained voiced audio
-# promotes that duck to a fence. The strongest demonstration where acoustics allow it, and the only
-# mode in which BACKCHANNEL is reachable at all.
+# promotes that duck to a fence. The strongest demonstration where acoustics allow it, and the
+# only mode in which a BACKCHANNEL produces AudioDucked -> AudioResumed rather than simply
+# leaving the answer playing untouched.
 #
 # All three reach the SAME fence through `BargeInCoordinator.fence_now`, so the generation model,
 # the AudioGate and every stale-result guarantee are identical. Only the trigger differs, and the
@@ -200,6 +214,53 @@ class Day1Spike:
 
     # --- standby: stop LISTENING, which is not the same as stopping talking -------------
 
+    def set_listening(self, on: bool) -> bool:
+        """Open or close the microphone. Returns whether AETHER is now listening.
+
+        THE LISTENING CONTROL. One toggle, two directions, and deliberately NOT a fence:
+
+            START LISTENING   inbound audio is processed again. No generation changes.
+            STOP LISTENING    inbound audio is dropped. The call stays up, an answer already
+                              in flight keeps playing, and no generation changes.
+
+        Stopping listening is not a hangup and not an interrupt. On a phone call the LiveKit room,
+        the published track and the outbound pump are all untouched -- `InboundBridge.push` checks
+        `mic.listening` and drops the frame, which is the only thing that changes. That is what
+        makes "stop listening" honest rather than cosmetic: the audio really is not reaching the
+        VAD, and the caller really is still connected.
+
+        Delegates to `MicVAD.set_listening`, which resets detector state on the closing edge, so a
+        half-captured utterance can never be stitched onto the next start.
+
+        Thread-safe: `MicVAD._enabled` is a `threading.Event`, so this is safe from the websocket
+        thread, the terminal listener and an asyncio teardown alike.
+        """
+        self.mic.set_listening(bool(on))
+        return self.mic.listening
+
+    def start_listening(self) -> bool:
+        """START LISTENING. Idempotent -- pressing it twice is not an error."""
+        return self.set_listening(True)
+
+    def stop_listening(self) -> bool:
+        """STOP LISTENING. Fences nothing, hangs up nothing, changes no generation."""
+        return self.set_listening(False)
+
+    def toggle_listening(self) -> bool:
+        """Flip the one toggle. Returns whether AETHER is now listening."""
+        return self.set_listening(not self.mic.listening)
+
+    @property
+    def listening(self) -> bool:
+        """Read from the microphone, never tracked separately -- one source of truth."""
+        return self.mic.listening
+
+    # --- standby: the same control, named from the other end ---------------------------
+    #
+    # Kept because the terminal listener and the earlier web action speak in these terms. Standby
+    # is exactly `not listening`; both names reach the same `MicVAD` flag, so there is no second
+    # state to fall out of step.
+
     def set_standby(self, on: bool) -> bool:
         """Mute or un-mute the microphone. Returns True when standby is engaged.
 
@@ -232,8 +293,14 @@ class Day1Spike:
         """True when the microphone is muted. Derived from the mic, never tracked separately."""
         return not self.mic.listening
 
-    def stop_listening(self) -> None:
-        """Close the mic again. In push-to-talk the mic is open only between press and end of turn."""
+    def _close_mic_after_capture(self) -> None:
+        """Push-to-talk only: the mic is open between the press and the end of the utterance.
+
+        NOT the listening control -- deliberately renamed away from `stop_listening`, which is now
+        the user-facing STOP LISTENING and means something else entirely. This is turn plumbing:
+        one press, one utterance. In hands-free and open-mic the mic state belongs to the user and
+        this does nothing.
+        """
         if self.input_mode == PUSH_TO_TALK:
             self.mic.set_listening(False)
 
@@ -244,15 +311,7 @@ class Day1Spike:
         # after this -- STT, the model, synthesis, playback -- happens with the microphone shut, so
         # a conversation with a colleague during the agent's answer cannot be captured, and the
         # agent's own output cannot re-trigger it. One press, one utterance.
-        self.stop_listening()
-
-        # A duck that never became a stop: the agent is still talking, so put the volume back.
-        # Audio-control decision only -- no semantic claim is made about the utterance.
-        if self.barge.should_resume_after_short_utterance():
-            self.gate.request_resume()
-            self.barge.note_resumed()
-            print("  (short utterance during playback -> resumed; no semantic judgement on Day 1)")
-            return
+        self._close_mic_after_capture()
 
         # Latency marks for this turn. Read the end-of-speech moment off the append-only trace
         # rather than threading a new value out of the VAD callback.
@@ -265,16 +324,59 @@ class Day1Spike:
             # recorded a button press as "meaningful_interruption" and quietly destroyed the one
             # distinction the evidence needs to make.
             self.trace.emit(EventType.FENCE_REQUESTED, gen=fenced_gen, reason=fence_reason)
+
+        # TRANSCRIBE BEFORE ALLOCATING A GENERATION.
+        #
+        # `begin_turn` allocates, and allocation is what fences the previous generation. Doing that
+        # first meant the active answer was destroyed before anybody knew what had been said -- so
+        # "mm-hm" during an answer killed it, and so did a noise burst that transcribed to nothing
+        # at all. Whether a generation should exist is a question about the words, so the words
+        # come first. Nothing is fenced on this path; the coordinator is not touched until the
+        # classifier has had its say.
+        # "Is there anything to interrupt?" -- and the answer is NOT just `turn_in_flight`. The
+        # turn function returns as soon as Rime's audio is enqueued, so for most of a menu answer
+        # the flag is already false while the caller is still listening to it. A backchannel said
+        # over that audio has to be recognised as one, so the gate is asked as well.
+        in_flight = self.barge.turn_in_flight or self.gate.is_playing
+        self.mic.set_context(turn_id=self._turn, gen=None)
+        text = self.stt.transcribe(audio, turn_id=self._turn, gen=None)
+        final = self.trace.last(EventType.TRANSCRIPT_FINAL)
+        timing.transcript = final.t if final else None
+        if not text:
+            # No longer fences the answer in flight -- see above. A duck raised by the onset is
+            # released here, because nothing was said that could justify keeping the volume down.
+            if self.barge.should_resume_after_short_utterance():
+                self.gate.request_resume()
+                self.barge.note_resumed()
+            print("  (empty transcript, ignoring)")
+            return
+
+        decision = classify(text, in_flight=in_flight)
+        if self._resolve_without_a_turn(text, decision, in_flight):
+            return
+
         gen = self.barge.begin_turn(turn_id=self._turn)
         try:
             self.mic.set_context(turn_id=self._turn, gen=gen.id)
 
-            text = self.stt.transcribe(audio, turn_id=self._turn, gen=gen.id)
-            final = self.trace.last(EventType.TRANSCRIPT_FINAL)
-            timing.transcript = final.t if final else None
-            if not text:
-                print("  (empty transcript, ignoring)")
-                return
+            self.trace.emit(
+                EventType.INTERRUPTION_CLASSIFIED,
+                turn_id=self._turn, gen=gen.id,
+                interruption_class=decision.cls.value, rule=decision.rule,
+                in_flight=in_flight, text=text,
+            )
+            if in_flight and decision.transition is not None:
+                # A task really was displaced. The canonical event carries WHICH transition, so a
+                # refinement and an outright replacement stay distinguishable in the evidence even
+                # though both fence -- AETHER has nothing to salvage, and says so rather than
+                # inventing a salvage count (RULES.md R8).
+                self.trace.emit(
+                    EventType.TASK_REPLACED,
+                    turn_id=self._turn, gen=gen.id,
+                    reason=decision.transition.value,
+                    interruption_class=decision.cls.value,
+                    records_salvaged=0,
+                )
 
             self.trace.emit(
                 EventType.TASK_STARTED,
@@ -385,6 +487,84 @@ class Day1Spike:
             # Runs on every path: completed, discarded, fenced or failed.
             self.barge.end_turn()
 
+
+    def _resolve_without_a_turn(self, text: str, decision, in_flight: bool) -> bool:
+        """Handle the classes that must NOT start a turn. Returns True when the utterance is done.
+
+        Two of the six classes are not requests, and treating them as requests is what destroys a
+        caller's answer:
+
+        * **BACKCHANNEL** -- "mm-hm", "right", "okay" while AETHER is speaking. Encouragement, not
+          a question. It gets no generation, so the answer in flight is never fenced and keeps
+          playing. If a duck is outstanding (open-mic only, where voice onset ducks) the volume is
+          restored, which is the audio half of "carry on".
+
+        * **STATUS_QUERY** -- "are you still there?" while a turn is running. A question ABOUT the
+          task, so the task survives it: no fence, no allocation, no `TaskReplaced`.
+
+          It is deliberately NOT answered aloud. Speaking a status line over an answer already in
+          flight would need a second audio path that could bypass the gate's single active
+          generation, and inventing one to say "just a moment" is not worth putting a hole in the
+          thing the whole design exists to guarantee. The caller hears the answer they were already
+          waiting for, which is the truthful response to "are you still there".
+
+        **CANCEL** is handled here too, but is not one of the protected classes -- it is the
+        opposite. It fences through the ordinary `fence_now` and then starts nothing, which is the
+        one transition that ends a task without a successor.
+
+        Everything else returns False and proceeds into the normal turn path, where generation
+        fencing remains the final authority.
+        """
+        from .events import InterruptionClass
+
+        if decision.cls is InterruptionClass.CANCEL:
+            # The same `fence_now` a barge-in and the button reach -- a different trigger, never a
+            # different fence. `reason` is what distinguishes a cancellation from a replacement in
+            # the trace; without it the evidence could not tell them apart.
+            fenced = self.barge.fence_now(reason="cancelled_by_caller")
+            for fenced_gen, fence_reason in self.barge.drain_fenced():
+                self.trace.emit(EventType.FENCE_REQUESTED, gen=fenced_gen, reason=fence_reason)
+            self.trace.emit(
+                EventType.INTERRUPTION_CLASSIFIED,
+                turn_id=self._turn, gen=fenced,
+                interruption_class=decision.cls.value, rule=decision.rule,
+                in_flight=in_flight, text=text,
+            )
+            self.trace.emit(
+                EventType.CANCELLATION_RESOLVED,
+                turn_id=self._turn, gen=fenced,
+                # Honest about the no-op case: "stop" said into silence cancels nothing, and the
+                # event says so rather than implying a task was killed.
+                cancelled=bool(fenced), had_task_in_flight=in_flight,
+                successor_task=None, text=text,
+            )
+            self.barge.end_turn()
+            print(f"  CANCEL: {text!r} -- " + (f"fenced {fenced}" if fenced else "nothing to stop"))
+            return True
+
+        if not decision.protects_task:
+            return False
+
+        self.trace.emit(
+            EventType.INTERRUPTION_CLASSIFIED,
+            turn_id=self._turn, gen=self.gens.active.id if self.gens.active else None,
+            interruption_class=decision.cls.value, rule=decision.rule,
+            in_flight=in_flight, text=text,
+        )
+
+        if decision.cls is InterruptionClass.BACKCHANNEL:
+            self.trace.emit(
+                EventType.BACKCHANNEL_DETECTED,
+                turn_id=self._turn, gen=self.gens.active.id if self.gens.active else None,
+                text=text, rule=decision.rule,
+            )
+            if self.gate.is_ducked:
+                self.gate.request_resume()
+                self.barge.note_resumed()
+            print(f"  BACKCHANNEL: {text!r} -- the answer keeps playing")
+        else:
+            print(f"  STATUS QUERY: {text!r} -- the task is untouched")
+        return True
 
     # --- reply production: two paths, one contract -------------------------------------
     #

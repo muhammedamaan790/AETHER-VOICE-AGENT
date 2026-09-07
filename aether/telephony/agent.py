@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 
 from livekit import rtc
@@ -37,9 +38,12 @@ from livekit.agents import AgentServer, JobContext, cli
 
 from ..audio.player import AudioGate
 from ..bridge import InboundBridge, OutboundBridge
+from ..prewarm import prewarm
 from ..spike import HANDS_FREE, Day1Spike
 from ..trace import Trace
+from ..web.server import WebBridge
 from . import AGENT_NAME, TRANSPORT_CHANNELS, TRANSPORT_SAMPLE_RATE, LiveKitConfig
+from .diagnostics import diagnose, format_report
 from .frames import to_chunk, to_frame_args
 
 logger = logging.getLogger("aether.telephony")
@@ -133,9 +137,58 @@ class CallBridge:
         self._tasks.clear()
 
 
+def start_console(spike: Day1Spike, trace: Trace) -> WebBridge | None:
+    """Serve the AETHER console for this call, and wire its two controls to this pipeline.
+
+    The SAME `WebBridge` the local-mic path uses, wired to the SAME `Day1Spike` methods. That is
+    what makes the toggle honest on a phone call rather than decorative: STOP LISTENING closes
+    `MicVAD`, `InboundBridge.push` then drops every inbound block, and the LiveKit room, the
+    published track and the outbound pump all keep running -- the caller is still connected and
+    AETHER simply cannot hear them.
+
+    Best-effort. A console that fails to bind must never take a call down, so every failure is
+    swallowed and the call proceeds without a UI. Disable entirely with AETHER_WEB=0.
+    """
+    if os.environ.get("AETHER_WEB", "1").strip() == "0":
+        return None
+    try:
+        console = WebBridge(
+            phase_source=lambda: spike.barge.phase,
+            listening_source=lambda: spike.listening,
+            # The one fence the browser may ask for -- the same `fence_now` the caller's voice
+            # reaches, distinguished only by `reason` in the trace.
+            on_interrupt=lambda: spike.interrupt(source="button"),
+            on_listening=spike.set_listening,
+            on_standby=spike.toggle_standby,
+            http_port=int(os.environ.get("AETHER_WEB_HTTP_PORT", "8760")),
+            ws_port=int(os.environ.get("AETHER_WEB_WS_PORT", "8761")),
+        )
+        unsubscribe = trace.subscribe(console.on_event)
+        console.start()
+        console._aether_unsubscribe = unsubscribe   # released in the call's teardown
+        logger.info("[5/7] console on http://127.0.0.1:%s/index.html?ws=%s",
+                    console.http_port, console.ws_port)
+        return console
+    except Exception:
+        logger.exception("console did not start; the call continues without a UI")
+        return None
+
+
+def stop_console(console: WebBridge | None) -> None:
+    if console is None:
+        return
+    try:
+        unsubscribe = getattr(console, "_aether_unsubscribe", None)
+        if unsubscribe is not None:
+            unsubscribe()
+        console.stop()
+    except Exception:
+        logger.exception("console teardown failed")
+
+
 # Spoken, so: no numerals, no symbols, short enough that a caller can interrupt it comfortably.
 # Identifies AETHER as the hotel's manager rather than as an assistant or a system.
-GREETING = "You've reached AETHER, the hotel manager. How may I help you?"
+GREETING = "You've reached AETHER, the hotel's manager. How may I help you?"
 
 
 def speak_greeting(spike: Day1Spike, text: str = GREETING) -> bool:
@@ -232,6 +285,7 @@ async def hotel_call(ctx: JobContext) -> None:
     spike = await asyncio.to_thread(build_pipeline, trace)
     bridge = CallBridge(spike, spike.gate, closing)
     logger.info("[2/7] pipeline ready: llm=%s rime=%s", spike.llm.name, spike.rime.configured)
+    console = start_console(spike, trace)
 
     # Anything that arrived during those 9 s, plus anything already subscribed before we attached
     # the handler at all. Both paths, because either can be the one that fires.
@@ -267,6 +321,15 @@ async def hotel_call(ctx: JobContext) -> None:
         logger.info("call ending, tearing down")
         await bridge.aclose()
         spike.stop_turns()
+        # BEFORE `shutdown()` closes the trace. The report is read out of the trace, so ordering
+        # it after teardown would produce an empty diagnosis of the call that just happened.
+        try:
+            logger.info("\n%s", format_report(
+                diagnose(trace, inbound=bridge.inbound, outbound=bridge.outbound)
+            ))
+        except Exception:
+            logger.exception("diagnostics failed")
+        stop_console(console)
         spike.shutdown()
         logger.info("[7/7] call ended: trace=%s", trace.path)
 
@@ -286,6 +349,14 @@ def main() -> None:
         )
     print(f"agent name : {AGENT_NAME}")
     print(f"project    : {config.project_host}")
+
+    # BEFORE the worker registers, so the process is warm before any call can arrive. Jobs run
+    # with `JobExecutorType.THREAD` by default, i.e. in this same process, so the imports and the
+    # page-cached Whisper weights are inherited by every call. Measured on this machine: 3810 ms
+    # cold, 672 ms warm -- about 3.1 s of setup a caller no longer waits through.
+    warm = prewarm()
+    print("prewarm    : " + "  ".join(f"{k}={v}ms" for k, v in warm.items()))
+
     cli.run_app(server)
 
 

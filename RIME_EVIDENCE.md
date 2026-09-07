@@ -13,7 +13,7 @@ Configured via environment variables, never hardcoded. See [.env.example](.env.e
 | Setting | Env var | Value |
 |---|---|---|
 | Endpoint | `RIME_API_URL` | `https://users.rime.ai/v1/rime-tts` (VERIFIED) |
-| Model | `RIME_MODEL` | **`mistv3`** — measured working, **NOT yet human-verified against the catalog** (see below). `mistv2` remains VERIFIED and is the fallback |
+| Model | `RIME_MODEL` | **`mistv3`** — VERIFIED against the live catalog on 2026-09-08 (see Part 2). `mistv2` remains a one-line fallback |
 | Voice | `RIME_VOICE` | `astra` (VERIFIED) |
 | Language | `RIME_LANGUAGE` | `eng` (VERIFIED) |
 | API key | `RIME_API_KEY` | secret — never committed, never shown |
@@ -107,10 +107,58 @@ These require a human. Do not mark them complete on the basis of anything an age
 ### Rime catalog verification
 - [x] Confirm the Rime API endpoint currently in use — `https://users.rime.ai/v1/rime-tts`
 - [x] Confirm the model ID exists in the live catalog — `mistv2`
+- [x] Confirm the model ID exists in the live catalog — **`mistv3`**, 2026-09-08
 - [x] Confirm the voice ID exists and is available to this account — `astra`
 - [x] Confirm the language code is supported for that model and voice — `eng`
 - [ ] Confirm the account tier and any rate limits that affect a live demo
-- [ ] Record the date of verification and re-check on Day 6
+- [ ] Record the date of verification and re-check before the demo
+
+**How `mistv3` was verified (2026-09-08).** Queried Rime's live voice catalog at
+`https://users.rime.ai/data/voices/voice_details.json` — 863 entries. Model IDs present and their
+entry counts:
+
+| `modelId` | entries |
+|---|---|
+| `arcana` | 269 |
+| `coda` | 253 |
+| `mistv2` | 141 |
+| `mist` | 117 |
+| **`mistv3`** | **83** |
+
+`astra` appears under `mistv2`, `arcana` **and** `mistv3`. So `mistv3` + `astra` + `eng` is a
+catalogued, supported combination — not an undocumented endpoint that merely happened to respond.
+This closes the R9.5 concern raised when the model was changed.
+
+**Which of the two sounds better has NOT been judged, and is not claimed anywhere in this
+repository.** A listening comparison is a human task and is listed below.
+
+### Listening comparison — `mistv2` vs `mistv3`
+- [ ] Play both renders of the identical sentence and choose one
+
+Both files are produced by `scripts/render_rime_compare.py` into the repository root
+(`rime_mistv2.wav`, `rime_mistv3.wav`; `*.wav` is gitignored, so they are never committed). The
+sentence exercises exactly what the demo needs — identity, a spelled-out price, and a negative:
+
+> "You've reached AETHER, the hotel manager. The chicken kebab is three hundred and eighty rupees,
+> and the seafood platter is not available today."
+
+Measured, same speaker, same transport (`/ws3`, PCM @ 48 kHz). **Two runs, both recorded**, because
+the second disagreed with the first by ~1 s on first-audio and quoting only one would have made a
+network-variable number look settled:
+
+| Run | Model | Audio length | First audio | Samples |
+|---|---|---|---|---|
+| 2026-09-08 a | `mistv2` | 6.92 s | 2500 ms | 332138 |
+| 2026-09-08 a | `mistv3` | 8.05 s | 1248 ms | 386400 |
+| 2026-09-08 b | `mistv2` | 7.08 s | 2592 ms | 339940 |
+| 2026-09-08 b | `mistv3` | 8.19 s | 2247 ms | 393120 |
+
+Two claims survive both runs and are the only ones made here: **`mistv3` reached first audio sooner
+in both**, and **`mistv3` speaks about 15-16% longer in both**. First-audio absolute values vary
+with connection warmth and should not be quoted as a fixed figure from this test — the streaming
+first-audio measurement in Part 1b is the one taken under controlled conditions.
+
+Naturalness remains the human judgement above.
 
 ### Organizer / event preflight
 - [ ] Confirm eligibility requirements for the Rime track
@@ -148,6 +196,41 @@ Every scenario asserts on the canonical event vocabulary
 ([ARCHITECTURE.md](ARCHITECTURE.md) §4). Mode is `safe` unless stated otherwise.
 
 Common assertion for every safe-mode scenario: **no `ResultLeaked` event appears in the trace.**
+
+### Automated coverage (2026-09-08)
+
+Six of the eight scenarios now run as real tests in `tests/test_acceptance.py`, against a real
+`Day1Spike` -- real classifier, real `GenerationRegistry`, real `AudioGate`, real `ToolRunner`, real
+fencing -- with only the four IO edges faked (microphone, STT, LLM, Rime).
+
+| Scenario | Automated | Note |
+|---|---|---|
+| A REFINEMENT | ✅ | `ResultSalvaged` asserted **absent**, not present — see below |
+| B REPLACEMENT | ✅ | |
+| C STATUS_QUERY | ✅ | narrowed: the status is **not spoken**, only protected |
+| D CANCEL | ✅ | |
+| E BACKCHANNEL | ✅ | narrowed: no duck/resume in hands-free, because hands-free never ducks |
+| F NEW_TASK | ✅ | |
+| G unsafe control | ⛔ skipped | `AETHER_UNSAFE_MODE` is inert; no leak path exists to disable |
+| G safe mode | ✅ | runs standalone, without the unsafe control condition |
+| H zero-salvage | ⛔ skipped | salvage is not implemented and is deliberately not faked |
+
+**A green test here is not a demo run.** The `<from_run>` fields below stay blank until an actual
+execution fills them in, and **none of them is evidence about a telephone** — see Part 6.
+
+Three assertions in the original specifications were changed rather than quietly dropped, and each
+change is recorded in the test's own docstring:
+
+- **C** originally said "status spoken from live task state". It is not spoken. Answering aloud over
+  an answer already in flight would need a second audio path able to bypass the Audio Gate's single
+  active generation, and putting a hole in the mechanism that enforces the golden invariant to say
+  "just a moment" is not a trade worth making.
+- **E** originally said `AudioDucked` then `AudioResumed`. Hands-free — the default, and what the
+  phone path runs — never ducks, because a ducked-but-never-fenced utterance would be silently
+  discarded. The audible result is stronger: the answer does not dip at all.
+- **A / H** originally expected `ResultSalvaged.records_reused` (may be 0). AETHER holds no
+  partial-result store, so it would be 0 on every run for ever. The event is asserted **absent**
+  and `TaskReplaced.records_salvaged` carries the honest zero (RULES.md R8).
 
 ---
 
@@ -316,6 +399,33 @@ Superseded configuration — STT is now `base.en` with `beam_size=5`, which has 
 
 ---
 
+### Prewarm — call setup cost removed before the caller waits
+
+Measured with `python -m aether.prewarm` on 2026-09-08, Windows 11 / Python 3.13.2, warm disk:
+
+| Step | Cold | Warm (what a later call pays) |
+|---|---|---|
+| `import sounddevice` | 364.7 ms | 0.0 ms |
+| `import faster_whisper` | 274.2 ms | 0.0 ms |
+| import the configured LLM SDK | 882.6 ms | 0.0 ms |
+| Whisper weights load (constructed and discarded) | 2288.1 ms | 671.8 ms |
+| **total** | **3809.6 ms** | **671.8 ms** |
+
+The worker runs this **before** it registers, so the process is warm before any call can arrive.
+`livekit-agents` uses `JobExecutorType.THREAD` by default, so a job runs in that same process and
+inherits the imports and the page-cached weights.
+
+Related, and **not** applied as a default: with `HF_HUB_OFFLINE=1` a warm Whisper construction
+measured 390.9 ms instead of 671.8 ms — faster-whisper otherwise makes a HuggingFace revision check,
+which is a network round-trip on the call's setup path. It is documented in `.env.example` rather
+than hardcoded, because it breaks a fresh clone that has not downloaded the model yet.
+
+Full pipeline construction, for context (`Day1Spike`, warm, no PortAudio streams opened):
+`AudioGate` 1492 ms · `WhisperSTT` 2601 ms · `build_llm` 1380 ms · `MicVAD` 442 ms ·
+`build_tts` 4 ms · **total 5920 ms**. The first real call measured 9051 ms cold.
+
+---
+
 ## Part 5 — Live demo evidence
 
 | Item | Status |
@@ -329,3 +439,68 @@ Superseded configuration — STT is now `base.en` with `beam_size=5`, which has 
 | Trace captured for the demo run | `<from_run>` |
 | Every judged spoken turn used Rime (verified from trace) | `<from_run>` |
 | Recording link | TODO |
+
+---
+
+## Part 6 — Real phone call — **NOT YET VERIFIED**
+
+**No successful phone call has been completed.** Nothing anywhere in this repository is evidence
+about telephone audio, and no test asserts any. Every row below is a placeholder and must stay one
+until an actual call fills it in.
+
+The first attempt reached the worker and AETHER never replied; four defects were found and fixed
+(entrypoint deadlock on an Event only teardown could set; 9051 ms of blocking pipeline construction
+on the event loop; `track_subscribed` registered after `connect()` so the event landed in the gap;
+and no greeting existed). Those fixes are tested. **They have not been exercised by a call.**
+
+### Call path
+
+| Item | Status |
+|---|---|
+| Worker registers as `aether-hotel` | `<from_run>` |
+| Inbound call reaches the entrypoint | `<from_run>` |
+| Caller's audio track subscribed | `<from_run>` |
+| Greeting heard on the handset | `<from_run>` |
+| Caller transcribed correctly (word accuracy) | `<from_run>` |
+| Rime audio heard on the handset | `<from_run>` |
+| Call ends cleanly, trace closed | `<from_run>` |
+| `diagnose()` verdict for the call | `<from_run>` |
+
+### Telephony audio — every number here is laptop-derived until this table is filled
+
+| Item | Laptop value | Real-call value |
+|---|---|---|
+| `AETHER_SPEECH_FLOOR` | 35 (calibrated on a laptop mic) | `<from_run>` |
+| Inbound `peak_rms` during speech | — | `<from_run>` |
+| Inbound `floor_rms` (ambient) | — | `<from_run>` |
+| `min_speech_ms` | 250 | `<from_run>` |
+| Endpointing (trailing silence) | 500 ms | `<from_run>` |
+| STT word accuracy | — | `<from_run>` |
+
+**None of these transfers.** Telephony audio is narrowband, codec-compressed, carrier-processed and
+network-jittered; a threshold derived from a laptop microphone has no reason to hold. Recalibration
+is expected and is the single most likely day-of failure.
+
+### Interruption on a call
+
+| Item | Status |
+|---|---|
+| Natural barge-in stops speech mid-word | `<from_run>` |
+| Barge-in latency (speech onset → audio stopped) | `<from_run>` |
+| `ResultLeaked` count for the call | `<from_run>` |
+| INTERRUPT button fences from the console during a call | `<from_run>` |
+| STOP LISTENING leaves the participant joined in LiveKit | `<from_run>` |
+| Turn latency, menu path | `<from_run>` |
+| Turn latency, LLM path | `<from_run>` |
+
+### AEC
+
+Not implemented, and deliberately not implemented speculatively. The expectation is that the
+caller's handset and the carrier already do echo cancellation, and that AETHER's audio reaches them
+over the network rather than through a speaker beside their microphone — so the local speaker-bleed
+problem should not exist on a call. **That is a hypothesis.** Implement only if AETHER is observed
+self-triggering on a real call.
+
+| Item | Status |
+|---|---|
+| AETHER self-triggers on its own outbound audio | `<from_run>` |

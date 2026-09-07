@@ -54,6 +54,31 @@ _SPICE_WORDS: tuple[tuple[str, str], ...] = (
     ("medium", "medium"),
 )
 
+# Allergen names a caller says, mapped to the fixture's canonical labels. Longest-first so
+# "tree nut" beats "nut". Kept in step with `tools._ALLERGEN_ALIASES` -- the router names the
+# allergen, the tool validates it, and a word only this table knows would raise there.
+_ALLERGEN_NAMES: tuple[tuple[str, str], ...] = tuple(sorted(
+    (
+        ("tree nut", "nuts"), ("tree nuts", "nuts"), ("peanuts", "nuts"), ("peanut", "nuts"),
+        ("nuts", "nuts"), ("nut", "nuts"),
+        ("lactose", "dairy"), ("dairy", "dairy"), ("milk", "dairy"), ("cheese", "dairy"),
+        ("gluten", "gluten"), ("wheat", "gluten"),
+        ("shellfish", "shellfish"), ("prawns", "shellfish"), ("prawn", "shellfish"),
+        ("shrimp", "shellfish"), ("crab", "shellfish"),
+        ("seafood", "fish"), ("fish", "fish"),
+        ("eggs", "eggs"), ("egg", "eggs"),
+    ),
+    key=lambda pair: -len(pair[0]),
+))
+
+# An allergen word alone is not an allergy question -- "do you have fish" is a menu browse. One of
+# these cues must be present too, so the narrower `safe_for` tool only fires when the caller has
+# actually said they are avoiding something.
+_AVOIDANCE_WORDS = (
+    "allerg", "intolerant", "intolerance", "avoid", "avoiding", "cannot eat", "can not eat",
+    "cant eat", "can t eat", "free", "without", "no ", "react to", "safe",
+)
+
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
 _AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
 _ALLERGEN_WORDS = ("allerg", "contain", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
@@ -104,6 +129,13 @@ def _find_pair(spoken: str, table: tuple[tuple[str, str], ...]) -> str | None:
     return None
 
 
+def _find_allergen(spoken: str) -> str | None:
+    for word, canonical in _ALLERGEN_NAMES:
+        if re.search(rf"\b{re.escape(word)}\b", spoken):
+            return canonical
+    return None
+
+
 def route(text: str) -> Route | None:
     """Pick a menu tool for this sentence, or None to let the LLM handle it.
 
@@ -118,6 +150,7 @@ def route(text: str) -> Route | None:
     category = _find_category(spoken)
     diet = _find_pair(spoken, _DIET_WORDS)
     spice = _find_pair(spoken, _SPICE_WORDS)
+    allergen = _find_allergen(spoken)
 
     # 1. Allergens about a named dish. First because it is the answer that matters most to get
     #    right, and because "does X contain nuts" also contains price-ish and list-ish words.
@@ -128,29 +161,44 @@ def route(text: str) -> Route | None:
     if dish and any(word in spoken for word in _AVAILABLE_WORDS):
         return Route("check_availability", {"dish": dish}, "dish+availability")
 
-    # 3. Price of a named dish.
+    # 3. How hot a named dish is. BEFORE the price rules and before the bare-dish fallback:
+    #    "is the chicken kebab spicy" names a dish and no price words, so it used to be answered
+    #    with a price -- a confidently wrong answer to a question about heat.
+    if dish and spice is not None:
+        return Route("spice_of", {"dish": dish}, "dish+spice")
+
+    # 4. Price of a named dish.
     if dish and any(word in spoken for word in _PRICE_WORDS):
         return Route("price_of", {"dish": dish}, "dish+price")
 
-    # 4. A dish named with no other signal -- treat as "tell me about it", which is its price.
+    # 5. A dish named with no other signal -- treat as "tell me about it", which is its price.
     if dish:
         return Route("price_of", {"dish": dish}, "dish only")
 
-    # 5. Dietary request, optionally narrowed to a category.
+    # 6. An allergy with no dish named: "I have a nut allergy, what can I eat?". Requires BOTH an
+    #    allergen and an avoidance cue, so "do you have any fish" stays a menu browse rather than
+    #    becoming a medical question.
+    if allergen and any(word in spoken for word in _AVOIDANCE_WORDS):
+        params: dict[str, object] = {"allergen": allergen}
+        if category is not None:
+            params["category"] = category.value
+        return Route("safe_for", params, "allergen avoidance")
+
+    # 7. Dietary request, optionally narrowed to a category.
     if diet:
-        params: dict[str, object] = {"diet": diet}
+        params = {"diet": diet}
         if category is not None:
             params["category"] = category.value
         return Route("find_by_diet", params, "diet")
 
-    # 6. Spice request, optionally narrowed.
+    # 8. Spice request, optionally narrowed.
     if spice and any(word in spoken for word in _LIST_WORDS):
         params = {"spice": spice}
         if category is not None:
             params["category"] = category.value
         return Route("find_by_spice", params, "spice")
 
-    # 7. A whole category.
+    # 9. A whole category.
     if category is not None and any(word in spoken for word in _LIST_WORDS):
         return Route("list_category", {"category": category.value}, "category")
 
