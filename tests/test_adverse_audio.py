@@ -185,7 +185,8 @@ def test_the_bar_rises_with_the_measured_room():
 
 
 def test_a_longer_endpoint_widens_the_unmeasured_room_limitation():
-    """MEASURED consequence of raising DEFAULT_ENDPOINT_MS from 500 ms to 1000 ms.
+    """MEASURED consequence of a longer endpoint window. 1000 ms was tried and reverted; this
+    test is why anyone raising it again must look at the noise gate as well.
 
     `_ambient_rms` is only updated on unvoiced frames while no utterance is active. Ending an
     utterance needs `offset_frames` CONSECUTIVE unvoiced frames, so the longer that window, the
@@ -194,11 +195,10 @@ def test_a_longer_endpoint_widens_the_unmeasured_room_limitation():
     speech; at 1000 ms the same room is never measured and the gate falls back to the absolute
     floor.
 
-    This is a real trade, taken deliberately: at 500 ms an ordinary mid-sentence pause ended the
-    caller's turn and their question arrived as fragments. The absolute floor -- 2500 on telephony,
-    derived from three real calls -- is what does the work on the phone path, and ambient WAS
-    measured on every one of those calls (4.1-24.8 RMS), so the relative gate is not load-bearing
-    there.
+    The absolute floor -- 2500 on telephony, derived from three real calls -- is what does the work
+    on the phone path, and ambient WAS measured on every one of those calls (4.1-24.8 RMS), so the
+    relative gate is not load-bearing there. That is why raising the window looked safe. It was
+    reverted for a different reason: six-second buffers of mostly silence made Whisper guess.
     """
     def ambient_at(endpoint_frames: int) -> float | None:
         vad = MicVAD(Trace(), offset_frames=endpoint_frames)

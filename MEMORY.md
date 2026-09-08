@@ -397,7 +397,7 @@ Still `<from_run>` and must not be quoted:
   **The lesson is about sample size, not about telephony.** One call is not a calibration, and a
   threshold that separates cleanly on one call can be wrong by two orders of magnitude on the next.
 
-- **Endpointing raised 500 ms -> 1000 ms** (`AETHER_ENDPOINT_MS`, `DEFAULT_ENDPOINT_MS`). At
+- **Endpointing raised 500 ms -> 1000 ms, then REVERTED after the caller reported it worse.** (`AETHER_ENDPOINT_MS`, `DEFAULT_ENDPOINT_MS`). At
   500 ms a mid-sentence pause ended the caller's turn: one question arrived as "Can you tell me
   what are the...", "put available as", "The middle." and got three useless answers. Measuring the
   synthetic fixture showed something worse -- at 500 ms the utterance ended **before any trailing
@@ -407,7 +407,14 @@ Still `<from_run>` and must not be quoted:
   **Two costs, both paid on every turn.** Turn latency rises by the difference, and in hands-free
   mode voice interruption lands at end-of-utterance so barge-in slows by the same amount.
 
-  **One measured side effect.** `_ambient_rms` only updates on unvoiced frames while no utterance
+  **Why it was reverted.** It fixed fragmentation and broke something worse. A longer window stops
+  the detector closing BETWEEN sentences as well as within them, so buffers grew from 1.2-4.2 s to
+  6.7, 6.5 and 8.3 s -- `dur=6680 voiced=3900` for "Hi, can you hear me?" -- and Whisper handed six
+  seconds of mostly silence started guessing: "Yes, can I help you with that?" for something never
+  said. **The real fix for fragmentation is not a longer window, it is not sending the silence to
+  STT.** Not attempted; recorded so the next attempt starts there rather than at the window again.
+
+  **One measured side effect, which is why the tests changed.** `_ambient_rms` only updates on unvoiced frames while no utterance
   is active, so the longer the window, the quieter a room must be before it is ever measured. A
   synthetic room at sigma 0.02 was measured at 500 ms and is not at 1000 ms, widening the
   already-documented "loud room never measured" limitation. Acceptable because the absolute floor

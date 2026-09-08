@@ -54,20 +54,26 @@ def _resolve_speech_floor(explicit: float | None) -> float:
 
 # How much silence ends an utterance.
 #
-# 1000 ms, raised from 500 ms after a real call. At 500 ms an ordinary mid-sentence pause -- the
-# beat where somebody thinks -- ended the turn, and the rest of the sentence arrived as a separate
-# utterance. One caller's question came through as three fragments:
+# 500 ms. TRIED AT 1000 ms ON A REAL CALL AND REVERTED -- the caller reported it plainly worse, and
+# the trace agrees. Giving the caller a second to think does stop mid-sentence fragmentation, but
+# it also stops the detector closing between sentences, so buffers grew from 1.2-4.2 s to 6.7, 6.5
+# and 8.3 s, half of them silence:
 #
-#     "Can you tell me what are the..."  /  "put available as"  /  "The middle."
+#     dur=6680 ms  voiced=3900 ms  ->  'Hi, can you hear me?'
+#     dur=8280 ms  voiced=4400 ms  ->  rejected as noise
 #
-# AETHER then answered each fragment honestly and uselessly. A second of thinking room is normal
-# on a telephone and must not read as "they have finished".
+# Whisper handed six seconds of mostly-silence guesses; "Yes, can I help you with that?" came back
+# for something the caller never said. Longer windows trade fragmentation for hallucination, and
+# hallucination is the worse failure.
 #
-# THE COST IS REAL AND IS PAID ON EVERY TURN: this is dead time between the caller stopping and
-# AETHER starting, so turn latency rises by the difference. Interruption by voice lands at
-# end-of-utterance in hands-free mode, so it slows by the same amount. Tune with
-# AETHER_ENDPOINT_MS rather than editing this.
-DEFAULT_ENDPOINT_MS = 1000.0
+# The real fix for fragmentation is not a longer window -- it is not sending the silence to STT at
+# all. Left as a known limitation rather than guessed at again.
+#
+# THE COST OF RAISING IT IS PAID ON EVERY TURN: this is dead time between the caller stopping and
+# AETHER starting, so turn latency rises by the difference, and voice interruption lands at
+# end-of-utterance in hands-free mode so it slows by the same amount. Tune with AETHER_ENDPOINT_MS
+# rather than editing this.
+DEFAULT_ENDPOINT_MS = 500.0
 
 
 def _resolve_endpoint_frames(explicit: int | None, frame_ms: int) -> int:
