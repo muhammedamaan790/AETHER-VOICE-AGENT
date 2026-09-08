@@ -39,7 +39,14 @@ only the conversation.
 <!-- SCRIPT:END -->
 
 Before turn 1, AETHER opens with the fixed greeting: *"You've reached AETHER, the hotel's manager.
-How may I help you?"*
+For Hindi, just say Hindi. How may I help you?"*
+
+That middle clause is the whole discoverability of the second language, and it is worth letting the
+judges hear rather than explaining. **If you want the Hindi beat**, say *"Hindi"* at any point: the
+voice changes to `anaya` on `arcana`, the console's Language field switches to हिन्दी, and every
+answer after that is Hindi — still read from the same database, still with `llm_ms` at zero. Say
+*"English"* to switch back. Expect about 1.5 s to first audio in Hindi against 0.4 s in English;
+that is the provider, it is measured, and it is written down in RIME_EVIDENCE Part 1c.
 
 Turns 8 and 10 are both about the **executive suite** on purpose: one guest, one room, price then
 what's included — the way somebody actually asks. It also keeps the spoken vocabulary small, which

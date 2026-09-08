@@ -543,6 +543,12 @@ function renderCaller(s){
 
   const rime = (s && s.rime) || {};
   els.factVoice.textContent = rime.voice ? `${rime.voice} · ${rime.model || "?"}` : "—";
+  // The language AETHER is actually speaking, not a fixed label. On a call that switches, the
+  // voice, the model and this all change together, and the operator can see the switch land.
+  const LANGUAGE_NAMES = { eng: "English", hin: "हिन्दी (Hindi)" };
+  els.factLang.textContent = rime.language
+    ? (LANGUAGE_NAMES[rime.language] || rime.language)
+    : "English";
   els.factTurns.textContent = s && s.turn_id != null ? String(s.turn_id) : "—";
   els.factLeaks.textContent = s && s.leaks != null ? String(s.leaks) : "0";
   els.factLeaks.style.color = (s && s.leaks) ? "var(--rec)" : "";

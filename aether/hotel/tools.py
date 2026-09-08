@@ -572,15 +572,32 @@ _EMPTY_IS_AN_ANSWER = frozenset({
 })
 
 
-def render(result) -> str | None:
+def render(result, language=None) -> str | None:
     """Turn a `ToolResult` into the sentence Rime will speak, or None if it must not be spoken.
 
     The stale check is first and is not negotiable: a result produced for a question the caller has
     already moved on from must never become speech, no matter how good the answer was.
+
+    `language` selects the renderer and NOTHING else. The lookup already happened: the same records
+    and the same summary go to whichever set of templates speaks the caller's language, so a Hindi
+    answer cannot disagree with an English one about a price. Defaults to English, and an unknown
+    language falls back to English rather than raising -- the caller is on a telephone, and the
+    worst acceptable outcome of a misconfiguration is being answered in the wrong language, not
+    silence.
     """
     if not result.may_speak:
         return None
+
+    from ..lang import DEFAULT, HINDI
+
+    language = language or DEFAULT
+    speakers, not_found = SPEAK, NOT_FOUND
+    if getattr(language, "code", None) == HINDI.code:
+        from . import tools_hi
+
+        speakers, not_found = tools_hi.SPEAK, tools_hi.NOT_FOUND
+
     if result.reason or (not result.records and result.tool not in _EMPTY_IS_AN_ANSWER):
-        return NOT_FOUND
-    speaker = SPEAK.get(result.tool)
+        return not_found
+    speaker = speakers.get(result.tool)
     return speaker(result) if speaker is not None else None

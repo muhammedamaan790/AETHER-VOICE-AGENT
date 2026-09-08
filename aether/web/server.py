@@ -61,6 +61,7 @@ class UiState:
     rime_transport: str | None = None
     rime_model: str | None = None
     rime_voice: str | None = None
+    rime_language: str | None = None
 
     llm_provider: str | None = None
     latency: dict[str, Any] = field(default_factory=dict)
@@ -157,6 +158,7 @@ class UiState:
             self.rime_transport = ev.get("transport")
             self.rime_model = ev.get("model")
             self.rime_voice = ev.get("voice")
+            self.rime_language = ev.get("voice_language")
             self.llm_provider = ev.get("llm_provider")
             # Only real measurements: a metric the run did not produce stays absent.
             self.latency = {
@@ -201,6 +203,7 @@ class UiState:
             "rime": {
                 "provider": self.rime_provider, "transport": self.rime_transport,
                 "model": self.rime_model, "voice": self.rime_voice,
+                "language": self.rime_language,
             },
             "llm_provider": self.llm_provider,
             "latency": dict(self.latency),

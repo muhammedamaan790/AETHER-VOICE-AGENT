@@ -341,13 +341,35 @@ class RimeHttpSpeaker:
         )
 
 
-def build_tts(trace, samplerate: int = 48000):
+def build_tts(trace, samplerate: int = 48000, language=None):
     """Streaming /ws3 by default; HTTP only when explicitly requested.
 
     `RIME_TRANSPORT=http` selects the fallback. The choice is recorded on `ResponseSpoken` as
     `transport`, so which path spoke is observable rather than assumed (RULES.md R9.3/R9.4).
+
+    `language` names a `aether.lang.Language`, whose model and voice replace the ones from the
+    environment. **Omitting it keeps the exact previous behaviour** -- the environment decides, and
+    no caller that does not care about language sees any change.
+
+    A language is a different *voice*, not a parameter on the same one. Rime's catalogue puts Hindi
+    on `arcana`/`coda` and English on `mistv3`, and `astra` speaks no Hindi on any model; on top of
+    that `speaker`, `modelId` and `lang` are baked into the `/ws3` connect URL, so one socket can
+    only ever be one voice. Hence a speaker per language, each with its own connection, built by
+    whoever holds them.
     """
     transport = (os.environ.get("RIME_TRANSPORT") or "").strip().lower()
+
+    config = None
+    if language is not None:
+        from dataclasses import replace
+
+        config = replace(
+            RimeConfig.from_env(),
+            model=language.rime_model,
+            voice=language.rime_voice,
+            language=language.code,
+        )
+
     if transport == "http":
-        return RimeHttpSpeaker(trace, samplerate=samplerate)
-    return RimeStreamingTTS(trace, samplerate=samplerate)
+        return RimeHttpSpeaker(trace, config=config, samplerate=samplerate)
+    return RimeStreamingTTS(trace, config=config, samplerate=samplerate)

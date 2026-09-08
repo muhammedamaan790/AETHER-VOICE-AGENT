@@ -352,7 +352,18 @@ def detach_console() -> None:
 
 # Spoken, so: no numerals, no symbols, short enough that a caller can interrupt it comfortably.
 # Identifies AETHER as the hotel's manager rather than as an assistant or a system.
-GREETING = "You've reached AETHER, the hotel's manager. How may I help you?"
+# The extra clause is the whole discoverability of the second language: a caller has no way to
+# guess that Hindi is on offer, and a judge should not need the presenter to say so. It costs about
+# a second and a half, stays in English on the existing socket, and opens no Hindi connection --
+# a call that never asks for Hindi pays nothing for the offer.
+#
+# It also makes the switch easy to hear correctly: it tells the caller to say the single word
+# "Hindi", which is the form `base.en` has the least trouble with.
+# The offer comes BEFORE the question, so the greeting still ends by handing the turn back --
+# `tests/test_telephony.py` pins that, and it is right: a greeting that trails off after the
+# question mark invites the caller to talk over the part they most need to hear.
+GREETING = ("You've reached AETHER, the hotel's manager. For Hindi, just say Hindi. "
+            "How may I help you?")
 
 
 def speak_greeting(spike: Day1Spike, text: str = GREETING) -> bool:

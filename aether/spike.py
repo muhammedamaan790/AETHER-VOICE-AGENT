@@ -45,6 +45,9 @@ from .classify import classify
 from .config import RuntimeConfig
 from .conversation import ConversationHistory
 from .hotel import HotelStore
+from .lang import ACKNOWLEDGEMENT as LANG_ACK
+from .lang import DEFAULT as LANG_DEFAULT
+from .lang import detect_switch
 from .hotel.router import route as route_menu
 from .hotel.tools import HOTEL_TOOLS, render
 from .events import EventType
@@ -142,7 +145,15 @@ class Day1Spike:
         self.stt = WhisperSTT(trace, model_size=stt_model)
         self.llm = build_llm()
         # Streaming /ws3 by default, HTTP fallback via RIME_TRANSPORT=http. Still Rime either way.
+        #
+        # Built WITHOUT a language, so the environment decides exactly as before -- this is the
+        # English speaker and nothing about it has changed. A second language builds a second
+        # speaker on demand (`_set_language`), because `speaker`, `modelId` and `lang` are baked
+        # into the /ws3 connect URL: one socket is one voice, and Hindi is a different voice on a
+        # different model, not a parameter on this one.
+        self.language = LANG_DEFAULT
         self.rime = build_tts(trace, samplerate=self.gate.samplerate)
+        self._speakers = {self.language.code: self.rime}
         # Session-scoped conversation history. Owned by this pipeline instance, never by the
         # provider object, so two sessions can never share or leak context.
         self.history = ConversationHistory()
@@ -412,7 +423,13 @@ class Day1Spike:
             # still say the wrong number. The router answers only when confident and returns None
             # otherwise, so anything ambiguous still reaches Gemini.
             self._last_stream_metrics = {}
-            spoken = self._menu_answer(text, gen)
+            # Asked for another language? Switch first, then answer in it. Deliberately here rather
+            # than before `begin_turn`: this way the switch is an ordinary turn with a generation,
+            # a transcript line and a `ResponseSpoken`, so it is fenceable and observable like any
+            # other -- and it cannot interact with the fencing rules in a way nothing else does.
+            spoken = self._language_answer(text)
+            if spoken is None:
+                spoken = self._menu_answer(text, gen)
             if spoken is not None:
                 # No model was consulted, so the LLM stage took no time. Recording it as a zero
                 # span rather than leaving it None keeps the turn's arithmetic honest.
@@ -497,6 +514,13 @@ class Day1Spike:
                 completed=result.completed,
                 model=self.rime.config.model,
                 voice=self.rime.config.voice,
+                # Which language actually spoke this turn. On a switched call the voice and the
+                # model change together, and a trace that recorded only two of the three would
+                # leave a reader guessing which language the third implied.
+                # `getattr`, not attribute access: `config` is duck-typed across the /ws3
+                # speaker, the HTTP fallback and the stubs the tests inject, and a missing field
+                # must degrade to "not recorded" rather than take the turn down.
+                voice_language=getattr(self.rime.config, "language", None),
                 audio_ms=round(result.samples / self.gate.samplerate * 1000.0, 1),
             )
         finally:
@@ -614,11 +638,52 @@ class Day1Spike:
             print("  (menu lookup fenced mid-flight -- nothing spoken)")
             return None
 
-        spoken = render(result)
+        spoken = render(result, self.language)
         if spoken is None:
             return None
         print(f"  MENU[{decision.tool}] via {decision.reason}: {spoken}")
         return spoken
+
+    def _set_language(self, language) -> bool:
+        """Make `language` the one AETHER listens and speaks in. Returns whether anything changed.
+
+        The speaker is built once per language and cached: reconnecting to Rime on every switch
+        would put a fresh handshake in front of the caller each time, and the measured cold cost of
+        an `arcana` connection is seconds, not milliseconds.
+        """
+        if language is None or language.code == self.language.code:
+            return False
+        speaker = self._speakers.get(language.code)
+        if speaker is None:
+            speaker = build_tts(self.trace, samplerate=self.gate.samplerate, language=language)
+            self._speakers[language.code] = speaker
+        self.language = language
+        self.rime = speaker
+        # The STT carries the active language as state, exactly as it already carries its model, so
+        # the call site does not change and every existing test double keeps working. Set with
+        # setattr semantics rather than a method so a stub STT is unaffected either way.
+        self.stt.language = language
+        return True
+
+    def _language_answer(self, text: str) -> str | None:
+        """Switch language if the caller asked, and return the acknowledgement to speak.
+
+        Returns None when they did not ask, so the turn proceeds exactly as before -- this is a
+        pre-step on the deterministic path, not a new path.
+
+        The acknowledgement is spoken by the NEW voice, because `_set_language` has already swapped
+        `self.rime` by the time the caller's answer is synthesised. That is also what makes it
+        useful: it is the switch's own proof that the new voice works, heard immediately.
+        """
+        wanted = detect_switch(text, self.language)
+        if wanted is None:
+            return None
+        was = self.language
+        if not self._set_language(wanted):
+            return None
+        print(f"  LANGUAGE: {was.code} -> {self.language.code} "
+              f"({self.language.rime_voice}/{self.language.rime_model})")
+        return LANG_ACK.get(self.language.code)
 
     def _speak_answer(self, reply: str, gen, timing):
         """Synthesise an already-composed sentence. The tool path's equivalent of the LLM paths.
