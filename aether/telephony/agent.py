@@ -494,6 +494,8 @@ async def hotel_call(ctx: JobContext) -> None:
             report = diagnose(trace, inbound=bridge.inbound, outbound=bridge.outbound)
             report["inbound_frames_failed"] = bridge.frames_failed
             report["inbound_pumps"] = len(bridge.attached)
+            # "The caller spoke and got nothing" must never be invisible.
+            report["utterances_dropped_stale"] = spike.utterances_dropped_stale
             logger.info("\n%s", format_report(report))
         except Exception:
             logger.exception("diagnostics failed")

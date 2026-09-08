@@ -60,6 +60,15 @@ from .trace import Trace, now_ms
 # Only consulted in open-mic mode; push-to-talk never promotes a duck, because it never ducks.
 MEANINGFUL_SPEECH_MS = 300.0
 
+# How long an utterance may sit unread before the loop is too late to answer it, measured from the
+# moment the caller stopped speaking. Only applied when NEWER speech is already waiting -- see
+# `Day1Spike._is_stale_on_intake`.
+#
+# Measured, not guessed: healthy turns on real phone calls completed end to end in 2798, 4288,
+# 4474 and 5922 ms. Six seconds sits above all of them, so normal operation never reaches this and
+# only a genuine stall does.
+STALE_UTTERANCE_MS = 6000.0
+
 # How the microphone is driven.
 #
 # Listening and fencing are ORTHOGONAL, and conflating them was a real bug. Push-to-talk closed the
@@ -150,6 +159,9 @@ class Day1Spike:
         )
 
         self._turn = 0
+        # Utterances the loop was too late to answer. Reported in the call diagnostics, because
+        # "the caller spoke and got nothing" must never be invisible.
+        self.utterances_dropped_stale = 0
         # Set by run_turns(); cleared by stop_turns()/shutdown(). A plain flag, because the
         # telephony worker sets it from an asyncio teardown while the loop runs on a thread.
         self._running = False
@@ -950,7 +962,43 @@ class Day1Spike:
                 audio, onset_t = self.mic.utterances.get(timeout=0.25)
             except queue.Empty:
                 continue
+            if self._is_stale_on_intake(audio, onset_t):
+                continue
             self.handle_utterance(audio, onset_t)
+
+    def _is_stale_on_intake(self, audio, onset_t: float) -> bool:
+        """Drop an utterance that the loop is far too late to answer. Returns True if dropped.
+
+        The turn loop is strictly sequential -- one utterance is transcribed, answered and
+        synthesised before the next is looked at -- so anything that blocks it backs the queue up
+        behind it. Observed on a real call: one transcription stalled, and three later utterances,
+        all loud clear speech, sat unread until the caller hung up. Answering them when the stall
+        cleared would have been worse than dropping them: the caller would have got a reply to
+        something they said forty seconds earlier, after several unanswered questions.
+
+        BOTH conditions are required, because either alone is too eager:
+
+        * **Stale** -- more than `STALE_UTTERANCE_MS` has passed since the caller stopped speaking.
+          Measured on real calls, a healthy turn completes in 2.8-5.9 s end to end, so the bound
+          sits clear of normal operation and only a genuine stall reaches it.
+        * **Superseded** -- there is newer audio already waiting. Without this, a caller who simply
+          asks two questions in quick succession would lose the first, which is a worse failure
+          than a late answer.
+
+        This is the same reasoning as generation fencing, applied one stage earlier: a result the
+        caller has moved on from must not be spoken, and an utterance the caller has already
+        followed up on is exactly that.
+        """
+        if self.mic.utterances.empty():
+            return False
+        duration_ms = len(audio) / getattr(self.mic, "samplerate", 16000) * 1000.0
+        waited_ms = now_ms() - onset_t - duration_ms
+        if waited_ms <= STALE_UTTERANCE_MS:
+            return False
+        self.utterances_dropped_stale += 1
+        print(f"  (dropped an utterance queued {waited_ms / 1000:.1f}s ago -- newer speech is "
+              f"waiting; the caller has moved on)")
+        return True
 
     def stop_turns(self) -> None:
         """Ask `run_turns` to return at the next quarter-second. Safe from any thread."""

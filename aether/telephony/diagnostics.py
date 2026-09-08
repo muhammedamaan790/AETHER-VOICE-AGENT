@@ -127,6 +127,10 @@ def format_report(report: dict[str, Any]) -> str:
                  if report.get(k) is not None}
     if transport:
         lines.append("transport: " + "  ".join(f"{k[8:]}={v}" for k, v in transport.items()))
+    dropped = report.get("utterances_dropped_stale")
+    if dropped:
+        lines.append(f"BACKLOG  : {dropped} utterance(s) dropped -- the turn loop fell so far "
+                     f"behind that newer speech had already superseded them")
     lines.append(
         "pipeline : "
         f"onsets={report['speech_onsets']}  transcripts={report['transcripts']}"
