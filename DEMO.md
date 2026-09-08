@@ -4,12 +4,17 @@ The exact sequence, the exact commands, and what to say if something fails. Read
 [RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 6 first: **the real phone path has never been validated**,
 and this runbook does not pretend otherwise.
 
+**The conversation itself is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md)** — twelve turns, with AETHER's
+exact words quoted from the running system and re-checked by
+[`tests/test_demo_script.py`](tests/test_demo_script.py) so the sheet cannot go stale. This runbook
+covers setup, the console and the failure paths; that one covers what to say.
+
 ---
 
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 765 passed, 2 skipped
+python -m pytest -q                 # expect 883 passed, 2 skipped
 python -m aether.prewarm            # warms the process; prints what it cost
 ```
 
