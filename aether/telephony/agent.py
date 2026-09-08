@@ -258,6 +258,20 @@ def start_console(spike: Day1Spike, trace: Trace) -> WebBridge | None:
         logger.info("[5/7] console on http://127.0.0.1:%s/index.html?ws=%s",
                     console.http_port, console.ws_port)
         return console
+    except OSError:
+        # Almost always `python -m aether.web` running alongside the worker: both want 8760/8761.
+        # Worth saying loudly rather than logging a traceback, because that second process is not
+        # merely holding a port -- it is a WHOLE SECOND PIPELINE, with its own Whisper model and
+        # its own microphone, competing for CPU with the call in progress.
+        logger.warning(
+            "console could not bind %s/%s -- something else is using those ports, most likely "
+            "`python -m aether.web`. That is a second full pipeline competing for CPU with this "
+            "call; stop it, or set AETHER_WEB_HTTP_PORT/AETHER_WEB_WS_PORT, or AETHER_WEB=0. "
+            "The call continues without a UI.",
+            os.environ.get("AETHER_WEB_HTTP_PORT", "8760"),
+            os.environ.get("AETHER_WEB_WS_PORT", "8761"),
+        )
+        return None
     except Exception:
         logger.exception("console did not start; the call continues without a UI")
         return None

@@ -487,3 +487,48 @@ def test_the_ui_renders_the_one_toggle_and_a_separate_interrupt():
     assert "push to talk" not in html.lower() and "push-to-talk" not in html.lower()
     for key in ("transcript", "interruptible", "last_class", "leaks", "speech_active"):
         assert key in html, f"{key} should drive the UI"
+
+
+# ============================ port binding ============================
+#
+# From a real call log: the websocket port was already in use, and the bare OSError traceback from
+# the dying daemon thread landed in the middle of the call's output, where it read like a fault in
+# the call. The `try` around `start_console` could not catch it, because it was raised on another
+# thread.
+
+def test_a_busy_port_raises_at_start_not_in_a_thread():
+    """The caller must be able to catch it. A phone call continues without a UI; it must not see
+    a traceback it cannot handle."""
+    first = WebBridge(http_port=8796, ws_port=8797)
+    first.start()
+    try:
+        second = WebBridge(http_port=8796, ws_port=8797)
+        with pytest.raises(OSError):
+            second.start()
+    finally:
+        first.stop()
+
+
+def test_a_failed_start_releases_whatever_did_bind():
+    """Half-bound is worse than not bound: it would block a retry on the other port."""
+    holder = WebBridge(http_port=8798, ws_port=8799)
+    holder.start()
+    try:
+        # Same ws port, free http port: http binds, ws fails, http must not be left holding 8800.
+        clashing = WebBridge(http_port=8800, ws_port=8799)
+        with pytest.raises(OSError):
+            clashing.start()
+
+        reuse = WebBridge(http_port=8800, ws_port=8801)
+        reuse.start()                      # would raise if 8800 were still held
+        reuse.stop()
+    finally:
+        holder.stop()
+
+
+def test_stop_releases_both_ports_for_the_next_call():
+    """Each phone call starts its own console on the same ports."""
+    for _ in range(3):
+        bridge = WebBridge(http_port=8802, ws_port=8803)
+        bridge.start()
+        bridge.stop()

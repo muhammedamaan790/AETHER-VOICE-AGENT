@@ -352,6 +352,33 @@ Still `<from_run>` and must not be quoted:
   the ratio -- 8 kHz audio reading as one sixth of its true length, i.e. "almost nothing arrived".
   It now records and reports `observed_rate`.
 
+- **Confirmed by the real call log** (`run-20260908T023320Z`, 2026-09-08): `[4/7] inbound pump
+  starting` appears twice, once `(queued)` and once `(already-subscribed)`. The diagnostics report
+  `audio_ms=45860` for a call that lasted ~23 s — exactly double, which is the defect stated
+  arithmetically. `base.en` fell through all six temperature fallbacks with a compression ratio of
+  9.82 (near-total repetition), the signature of interleaved audio.
+- **The speech floor did NOT need recalibrating, and predicting otherwise was wrong.** Real
+  telephony speech on that call peaked at 6372–10174 RMS against `AETHER_SPEECH_FLOOR=35` — a
+  180x–290x margin, close to the laptop's own 8422–12441. Line noise sat at 12.9–15.8 and was
+  correctly rejected as `below_noise_floor`. The plan called this the most likely day-of failure;
+  the measurement says it is not a problem at all. Nothing was changed.
+- **`diagnose()` returned `OK` for a call that failed.** It finds the first stage that produced
+  *nothing*, and every stage produced something — the audio was corrupt, not absent. Fixed by
+  adding a `transport:` line carrying `pumps` and `frames_failed`; `pumps=2` for one caller names
+  this defect immediately. The lesson generalises: a stage-completion check cannot detect
+  corruption, only absence.
+- **The console crashed the call log by binding in a worker thread.** A port already in use raised
+  a bare `OSError` from a dying daemon thread into the middle of a call's output, where it read as
+  a fault in the call — and `start_console`'s `try` could not catch it, because it was raised on
+  another thread. `WebBridge.start()` now binds both ports synchronously. The port was held by
+  `python -m aether.web` running alongside the worker, which is not merely a port clash: it is a
+  second complete pipeline, with its own Whisper model and microphone, competing for CPU with the
+  live call. The warning now says so.
+- **`stop()` could deadlock.** `shutdown()` blocks until the serve loop acknowledges it and hangs
+  forever if that loop was never entered — reachable when a call ends immediately after starting.
+  Each server now announces that `serve_forever` has begun, and `stop()` waits on that with a
+  bounded timeout.
+
 ### Standing limitations
 
 - **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is

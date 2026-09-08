@@ -243,6 +243,9 @@ class WebBridge:
         self._threads: list[threading.Thread] = []
         self._http = None
         self._ws = None
+        # Set once each server's `serve_forever` has actually begun. See `stop`.
+        self._http_up = threading.Event()
+        self._ws_up = threading.Event()
         self.dropped_events = 0
 
     # --- the realtime-safe end --------------------------------------------------------
@@ -261,10 +264,43 @@ class WebBridge:
     # --- lifecycle --------------------------------------------------------------------
 
     def start(self) -> None:
+        """Bind both ports, THEN serve. Raises if a port is taken.
+
+        Binding used to happen inside the worker threads, so a port already in use produced a bare
+        `OSError` traceback from a dying daemon thread -- and it landed in the middle of a phone
+        call's log, where it read like a fault in the call itself. Worse, the caller's `try` around
+        `start()` could not catch it, because it was raised on another thread.
+
+        Binding here means a busy port is an ordinary exception at the call site, which the
+        telephony worker already handles by continuing the call without a UI.
+        """
         self._running = True
-        self._spawn(self._serve_http, "aether-web-http")
-        self._spawn(self._serve_ws, "aether-web-ws")
+        try:
+            self._http = ThreadingHTTPServer(
+                ("127.0.0.1", self.http_port), partial(_QuietHandler, directory=str(STATIC_DIR))
+            )
+            self._ws = self._bind_ws()
+        except Exception:
+            # Release whichever half did bind, so a retry on other ports is not blocked by this one.
+            self.stop()
+            raise
+        self._spawn(self._serving(self._http, self._http_up), "aether-web-http")
+        self._spawn(self._serving(self._ws, self._ws_up), "aether-web-ws")
         self._spawn(self._pump, "aether-web-pump")
+
+    @staticmethod
+    def _serving(server, started: threading.Event):
+        """Run `serve_forever`, announcing that it has actually begun.
+
+        `shutdown()` blocks until the serve loop notices it, and DEADLOCKS if the loop was never
+        entered -- a real hazard when a call ends immediately after it starts, because the thread
+        may not have been scheduled yet. `stop()` waits on this before asking for a shutdown.
+        """
+        def run() -> None:
+            started.set()
+            server.serve_forever()
+
+        return run
 
     def stop(self) -> None:
         """Stop serving and RELEASE THE PORTS.
@@ -275,34 +311,37 @@ class WebBridge:
         needed.
         """
         self._running = False
-        for server in (self._http, self._ws):
+        for server, started in ((self._http, self._http_up), (self._ws, self._ws_up)):
             if server is None:
                 continue
-            for step in ("shutdown", "server_close"):
+            # Only ask for a shutdown once the loop is actually running; otherwise `shutdown()`
+            # waits for a loop that will never report back. The wait is bounded so a wedged
+            # server cannot hold up the teardown of a phone call.
+            if started.wait(timeout=2.0):
                 try:
-                    getattr(server, step)()
+                    server.shutdown()
                 except Exception:
                     pass
+            try:
+                server.server_close()
+            except Exception:
+                pass
+        self._http = self._ws = None
+        self._http_up.clear()
+        self._ws_up.clear()
 
     def _spawn(self, target, name: str) -> None:
         thread = threading.Thread(target=target, name=name, daemon=True)
         thread.start()
         self._threads.append(thread)
 
-    # --- HTTP: one static directory ---------------------------------------------------
-
-    def _serve_http(self) -> None:
-        handler = partial(_QuietHandler, directory=str(STATIC_DIR))
-        self._http = ThreadingHTTPServer(("127.0.0.1", self.http_port), handler)
-        self._http.serve_forever()
-
     # --- WebSocket: broadcast --------------------------------------------------------
 
-    def _serve_ws(self) -> None:
+    def _bind_ws(self):
+        """Bind the websocket port. Imported here because `websockets` is only needed to serve."""
         from websockets.sync.server import serve
 
-        self._ws = serve(self._handle_client, "127.0.0.1", self.ws_port)
-        self._ws.serve_forever()
+        return serve(self._handle_client, "127.0.0.1", self.ws_port)
 
     def _handle_client(self, connection) -> None:
         with self._clients_lock:
