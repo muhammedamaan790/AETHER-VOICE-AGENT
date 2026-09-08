@@ -63,9 +63,10 @@ got, and prints a diagnosis when the call ends.
 | 1 | Dial the number | Orb wakes; the recording strip turns green with the trace path and a live event count |
 | 2 | AETHER greets: *"You've reached AETHER, the hotel's manager. How may I help you?"* | Orb amber, transcript line appears |
 | 3 | *"What starters do you have?"* | Answered **without the LLM**. Evidence strip: no `llm_ms` |
-| 4 | *"How much is the chicken kebab?"* | *"…three hundred and eighty rupees."* Exact, from the fixture |
-| 5 | *"Is the chicken kebab spicy?"* | *"…medium spiced."* A different tool, not the price |
+| 4 | *"How much is the chicken kebab?"* | *"The Chicken Kebab is four hundred and twenty rupees."* Exact, read from `data/aether_hotel.db` |
+| 5 | *"Is room three oh five free?"* | *"Room three oh five is occupied at the moment."* A different table, same deterministic path — and the number is spoken as a door, not a quantity |
 | 6 | *"I have a nut allergy, what can I eat?"* | Suggestions plus a count of what to avoid. **Never** from the model |
+| 6b | *"What time is check in?"* | *"Check-in is from two in the afternoon, and check-out is by twelve noon."* |
 | 7 | **Talk over AETHER mid-answer** | Speech stops. Transcript marks the abandoned turn *"Answer discarded — never spoken"*. New question answered |
 | 8 | Say **"mm-hm"** while it is speaking | Nothing happens — and that is the point. `BackchannelDetected`, no fence, answer keeps playing |
 | 9 | Say **"stop"** | Speech stops, nothing new is said. `CancellationResolved`, fence reason `cancelled_by_caller` |

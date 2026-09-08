@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 
 from aether.events import EventType, InterruptionClass
+from aether.hotel import HotelStore, say_price
 from aether.trace import Trace
 
 AUDIO = np.zeros(16000, np.int16)
@@ -162,7 +163,8 @@ def test_replacement_fences_old_generation_and_runs_new_task(monkeypatch):
     changes = trace.all(EventType.GENERATION_CHANGED)
     assert changes[-1].fields["from_gen"] == first
     assert changes[-1].fields["to_gen"] == second
-    assert rime.spoken[-1] == "The chicken kebab is three hundred and eighty rupees."
+    kebab = HotelStore().find_item("chicken kebab")
+    assert rime.spoken[-1] == f"The {kebab.name} is {say_price(kebab.price)}."
     assert len(trace.all(EventType.RESPONSE_SPOKEN)) == 2
     no_leak(trace)
 

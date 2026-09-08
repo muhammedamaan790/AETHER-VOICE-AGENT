@@ -30,7 +30,7 @@ safe: it fences rather than speaks.
 ```
  PSTN ──▶ LiveKit SIP ──▶ Room ──┬─▶ inbound track ─▶ resample 48k→16k ─▶ MicVAD.process_frame
                                  │                                              │
-                                 │            Whisper ─▶ classify ─▶ MenuRouter ─┼─▶ hotel tool
+                                 │           Whisper ─▶ classify ─▶ HotelRouter ─┼─▶ hotel tool
                                  │                                              └─▶ Gemini
                                  │                                              │
                                  │                                    Rime /ws3 (unchanged)
@@ -95,30 +95,58 @@ whenever listening is on.
 Natural barge-in and the INTERRUPT button converge on the same `fence_now`. One fence, two triggers,
 distinguished only by `reason` in the trace (`voiced_duration_confirmed` vs `button_interrupt`).
 
-## The hotel menu
+## The hotel database
 
-`aether/hotel/` — 29 dishes across starters, mains, desserts and drinks, each with a price,
-vegetarian/vegan/non-vegetarian, spice level, allergens and availability (two items are sold out on
-purpose). Frozen dataclasses, module-level constants, no randomness, no clocks: two runs a week
-apart produce byte-identical answers.
+`data/aether_hotel.db` (SQLite) is the **source of truth** for every hotel fact AETHER states. It
+replaced a hand-written Python fixture, and the differences are real rather than cosmetic: prices
+moved, the menu is 12 items rather than 29, "vegetarian mains" became a category of its own, and the
+database records **no spice level at all** — so "is it spicy?" is now answered by reading the
+hotel's own description back instead of inventing a rating.
 
-Nine read-only tools — `menu_overview`, `list_category`, `price_of`, `find_by_diet`,
-`check_availability`, `check_allergens`, `find_by_spice`, `spice_of`, `safe_for` — run through the
-**existing** `ToolRunner`, so fencing, injectable delay and result identity are not reimplemented.
-A caller can never change the menu.
+| Table | Rows | What a caller can ask |
+|---|---|---|
+| `menu_items` / `menu_categories` | 12 / 5 | price, category, diet, allergens, availability, description |
+| `rooms` / `room_types` | 50 / 5 | status of a room number, what is free, nightly rate, amenities |
+| `hotel_services` | 6 | what exists, its hours, its extension |
+| `hotel` | 1 | check-in and check-out times, address, currency |
+| `reservations` / `guests` | 3 / 4 | which dates a room is held for |
+
+**Read-only, and enforced by SQLite rather than by convention.** `aether/hotel/db.py` opens the file
+with the `mode=ro` URI, so a write is rejected by the driver, not by a code path that could be
+edited around. There is no tool that creates, cancels or changes anything, and a test asserts that
+every result is stamped `mutates: false`.
+
+Seventeen read-only tools run through the **existing** `ToolRunner`, so fencing, injectable delay
+and result identity are not reimplemented:
+
+| | |
+|---|---|
+| menu | `menu_overview`, `list_category`, `price_of`, `find_by_diet`, `check_availability`, `check_allergens`, `safe_for`, `describe_item` |
+| rooms | `room_status`, `room_availability`, `list_room_types`, `room_price`, `room_amenities` |
+| hotel | `list_services`, `service_hours`, `check_in_out`, `reservation_for_room` |
 
 `menu_overview` answers the broadest and usually first question — "what's on the menu?", "what
 dishes do you have?" — with the *shape* of the menu rather than its contents, computed from the
-fixture: "We have starters, mains, desserts and drinks, with vegetarian, non-vegetarian and vegan
-options." Reading twenty-nine dish names down a telephone is not an answer, and **there is one
-hotel and one menu, so AETHER never asks which restaurant the caller means.**
+database: "We have starters, mains, vegetarian mains, desserts and drinks, with vegetarian, vegan
+and non-vegetarian options." Reading every dish name down a telephone is not an answer, and **there
+is one hotel and one menu, so AETHER never asks which restaurant the caller means.**
 
-**Menu facts do not go through the LLM.** `aether/hotel/router.py` maps a sentence to a tool by
-keyword and slot, and a template renders the answer for speech (numbers as words, no symbols). The
-router answers only when confident and returns `None` otherwise, so anything ambiguous still reaches
-Gemini. Two reasons: an LLM stage measured ~1.8 s that a lookup does not, and a model asked to read
-back `{"price": 380}` can still say a number the hotel does not charge — or an allergen that could
-put somebody in hospital.
+Numbers are rendered for speech, and a room number is not a quantity: `say_price(420)` gives "four
+hundred and twenty rupees", `say_room_number("305")` gives "three oh five", `say_time("14:00")`
+gives "two in the afternoon". Rime is never handed a digit or a colon. A reservation lookup
+deliberately never speaks the guest's name.
+
+**Hotel facts do not go through the LLM.** `aether/hotel/router.py` maps a sentence to a tool by
+keyword and slot, and a template renders the answer for speech. The router answers only when
+confident and returns `None` otherwise, so anything ambiguous still reaches Gemini. Two reasons: an
+LLM stage measured ~1.8 s that a lookup does not, and a model asked to read back `{"price": 420}`
+can still say a number the hotel does not charge — or an allergen that could put somebody in
+hospital.
+
+That fallback is itself defended. On a real call `base.en` transcribed "dessert" as "Desert", no
+rule matched, and Gemini answered from nothing — inventing three dishes and three prices. The
+system prompt now carries the entire hotel, generated from the database, so a router miss costs a
+slower answer rather than a fabricated one.
 
 ## Evidence model — three tiers, never mixed
 
@@ -221,8 +249,9 @@ Nothing tunes itself.
 - Every VAD threshold is calibrated on a laptop microphone. Telephony audio is narrowband and
   codec-compressed; `AETHER_SPEECH_FLOOR` is expected to need re-deriving and has not been.
 - `base.en` on narrowband phone audio may be materially worse than on clean 16 kHz. Unmeasured.
-- One caller at a time is the tested case. Each call constructs its own pipeline and its own menu
-  store, so calls do not share state, but concurrency has not been exercised.
+- One caller at a time is the tested case. Each call constructs its own pipeline and its own hotel
+  store, so calls do not share state, but concurrency has not been exercised. The database is opened
+  read-only, so concurrent readers are safe by construction.
 - `AETHER_UNSAFE_MODE` is parsed and honoured nowhere, so the "unsafe control condition" acceptance
   scenario is skipped rather than passing.
 - No AEC on the local path.
@@ -234,9 +263,9 @@ says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
 |---|---|
-| Hotel menu fixture, 8 read-only tools, deterministic routing | Salvage / partial-result reuse |
+| Hotel SQLite database, 17 read-only tools, deterministic routing | Salvage / partial-result reuse |
 | Six-class deterministic classifier, wired into the turn path | Suspend/resume |
-| Generation registry, barge-in coordinator, four-layer fence | Evaluator (`aether/evaluator/`) |
+| Generation registry, barge-in coordinator, four-layer fence | Evaluator (offline trace scoring) |
 | AudioGate with per-chunk generation tagging | Unsafe-mode control path |
 | Rime `/ws3` streaming, persistent socket, mid-utterance stop | |
 | LiveKit↔AETHER audio bridges (synthetic-verified) | |

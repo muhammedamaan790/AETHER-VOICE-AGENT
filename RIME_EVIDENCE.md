@@ -142,6 +142,12 @@ sentence exercises exactly what the demo needs — identity, a spelled-out price
 > "You've reached AETHER, the hotel manager. The chicken kebab is three hundred and eighty rupees,
 > and the seafood platter is not available today."
 
+That sentence predates the hotel database, and neither the price nor the dish matches
+`data/aether_hotel.db` any more. **It is left exactly as it was, in the script and here**, because
+these are recordings of what was actually synthesised and the numbers below were measured from
+them. Rewriting the sentence would silently invalidate the measurements it produced. What is being
+compared is a voice, and that comparison does not depend on the menu being current.
+
 Measured, same speaker, same transport (`/ws3`, PCM @ 48 kHz). **Two runs, both recorded**, because
 the second disagreed with the first by ~1 s on first-audio and quoting only one would have made a
 network-variable number look settled:

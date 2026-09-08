@@ -1,240 +1,120 @@
-"""Hotel menu fixture: the structured data AETHER answers from, never LLM knowledge.
+"""The hotel AETHER answers for. Backed by SQLite, never by model knowledge.
 
-A caller asking "how much is the chicken kebab?" must get the hotel's actual price, not a plausible
-number a language model produced. That is the whole reason this exists as data rather than as
-prompt text: a menu is a fact table, and facts belong in a lookup.
+`data/aether_hotel.db` is the source of truth: the menu, its prices, its allergens and its
+availability; fifty rooms, their types, rates, amenities and status; the hotel's services and its
+check-in and check-out times; and the current reservations. A caller asking "how much is the
+chicken kebab" gets the hotel's actual price, and a caller asking "is room three oh five free" gets
+the hotel's actual room status.
 
-Modelled deliberately on `aether/warehouse/` -- frozen dataclasses, module-level constants, a store
-that owns the only mutable state and bumps `state_version` on every change. Same shape, so the same
-`ToolRunner` drives both and there is one set of fencing semantics rather than two.
+This module is the seam. `aether.hotel.db` reads the database; `aether.hotel.tools` turns rows into
+speech; `aether.hotel.router` decides which tool answers a sentence. Everything above -- the turn
+loop, `ToolRunner`, fencing, the generation registry -- is unchanged, because it only ever saw
+`(records, summary)` and still only sees that.
+
+**Replaced a hand-written fixture, and the differences are real rather than cosmetic.** Prices
+moved (the chicken kebab is 420, not 380), the menu is twelve items rather than twenty-nine, the
+database makes "vegetarian mains" a category of its own, and it records no spice level at all --
+so "is it spicy" is now answered by reading the hotel's own description back instead of inventing a
+rating. Recorded in data/README.md rather than smoothed over.
 
 Deterministic by construction: no randomness, no clocks, no IDs derived from time. Two runs a week
 apart produce byte-identical answers, which is what makes a demo rehearsable and a test meaningful.
-
-Scope: this is Milestone 1 -- enough menu to prove the call path end to end with real questions.
-It is not a hotel management system, and it is not trying to be complete.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from enum import Enum
-
-from ..errors import ToolLookupError
-
-
-class Category(str, Enum):
-    """The four things a caller asks for by name."""
-
-    STARTERS = "starters"
-    MAINS = "mains"
-    DESSERTS = "desserts"
-    DRINKS = "drinks"
-
-
-class Diet(str, Enum):
-    VEG = "vegetarian"
-    NON_VEG = "non-vegetarian"
-    VEGAN = "vegan"
-
-
-@dataclass(frozen=True)
-class Dish:
-    """One menu item. `available` is the only field the tools ever change."""
-
-    dish_id: str
-    name: str
-    category: Category
-    price: float               # in the hotel's local currency, rendered by the templates
-    diet: Diet
-    spice: str                 # "none" | "mild" | "medium" | "hot"
-    allergens: tuple[str, ...] = ()
-    available: bool = True
-
-
-# --- the fixture ------------------------------------------------------------------------
-#
-# Hand-written and fixed. Sized so the demo questions in the plan all have real answers, and so at
-# least one dish is unavailable and one category has a clear price spread -- both are answer shapes
-# the templates must handle and a judge may probe.
-
-MENU: tuple[Dish, ...] = (
-    # --- Starters ---------------------------------------------------------------------
-    Dish("D-101", "chicken kebab",        Category.STARTERS, 380.0, Diet.NON_VEG, "medium", ("dairy",)),
-    Dish("D-102", "paneer tikka",         Category.STARTERS, 340.0, Diet.VEG,     "medium", ("dairy",)),
-    Dish("D-103", "tomato shorba",        Category.STARTERS, 220.0, Diet.VEGAN,   "mild"),
-    Dish("D-104", "crispy corn",          Category.STARTERS, 260.0, Diet.VEG,     "mild"),
-    Dish("D-105", "seafood platter",      Category.STARTERS, 890.0, Diet.NON_VEG, "medium",
-         ("shellfish", "fish"), False),                      # sold out on purpose
-    Dish("D-106", "mushroom galouti",     Category.STARTERS, 360.0, Diet.VEG,     "medium", ("dairy", "nuts")),
-    Dish("D-107", "prawn koliwada",       Category.STARTERS, 520.0, Diet.NON_VEG, "hot",    ("shellfish",)),
-    Dish("D-108", "beetroot carpaccio",   Category.STARTERS, 290.0, Diet.VEGAN,   "none",   ("nuts",)),
-    Dish("D-109", "chilli garlic squid",  Category.STARTERS, 480.0, Diet.NON_VEG, "hot",    ("shellfish",)),
-
-    # --- Mains ------------------------------------------------------------------------
-    Dish("D-201", "butter chicken",       Category.MAINS,    520.0, Diet.NON_VEG, "mild",   ("dairy", "nuts")),
-    Dish("D-202", "dal makhani",          Category.MAINS,    380.0, Diet.VEG,     "mild",   ("dairy",)),
-    Dish("D-203", "lamb rogan josh",      Category.MAINS,    640.0, Diet.NON_VEG, "hot"),
-    Dish("D-204", "vegetable biryani",    Category.MAINS,    420.0, Diet.VEG,     "medium", ("dairy",)),
-    Dish("D-205", "chana masala",         Category.MAINS,    310.0, Diet.VEGAN,   "medium"),
-    Dish("D-206", "grilled sea bass",     Category.MAINS,    780.0, Diet.NON_VEG, "mild",   ("fish",)),
-    Dish("D-207", "wild mushroom risotto", Category.MAINS,   560.0, Diet.VEG,     "none",   ("dairy",)),
-    Dish("D-208", "jackfruit rendang",    Category.MAINS,    440.0, Diet.VEGAN,   "hot",    ("nuts",)),
-    Dish("D-209", "tandoori pomfret",     Category.MAINS,    720.0, Diet.NON_VEG, "medium", ("fish", "dairy"), False),
-    Dish("D-210", "paneer butter masala", Category.MAINS,    460.0, Diet.VEG,     "mild",   ("dairy", "nuts")),
-
-    # --- Desserts ---------------------------------------------------------------------
-    Dish("D-301", "gulab jamun",          Category.DESSERTS, 180.0, Diet.VEG,     "none",   ("dairy",)),
-    Dish("D-302", "chocolate fondant",    Category.DESSERTS, 260.0, Diet.VEG,     "none",   ("dairy", "eggs", "gluten")),
-    Dish("D-303", "seasonal fruit plate", Category.DESSERTS, 200.0, Diet.VEGAN,   "none"),
-    Dish("D-304", "pistachio kulfi",      Category.DESSERTS, 240.0, Diet.VEG,     "none",   ("dairy", "nuts")),
-    Dish("D-305", "coconut panna cotta",  Category.DESSERTS, 280.0, Diet.VEGAN,   "none"),
-
-    # --- Drinks -----------------------------------------------------------------------
-    Dish("D-401", "masala chai",          Category.DRINKS,    90.0, Diet.VEG,     "none",   ("dairy",)),
-    Dish("D-402", "fresh lime soda",      Category.DRINKS,   120.0, Diet.VEGAN,   "none"),
-    Dish("D-403", "mango lassi",          Category.DRINKS,   160.0, Diet.VEG,     "none",   ("dairy",)),
-    Dish("D-404", "filter coffee",        Category.DRINKS,   110.0, Diet.VEG,     "none",   ("dairy",)),
-    Dish("D-405", "ginger lemon tea",     Category.DRINKS,   100.0, Diet.VEGAN,   "none"),
+from .db import (
+    DEFAULT_DB_PATH,
+    HotelDataUnavailable,
+    HotelDB,
+    HotelInfo,
+    HotelStore,
+    MenuItem,
+    Reservation,
+    Room,
+    RoomType,
+    Service,
+    UnknownRecord,
 )
 
-
+# The currency the database records. Read once, so the spoken price and the stored price cannot
+# drift apart.
 CURRENCY = "rupees"
 
+# `UnknownDish` was this package's not-found error before rooms and services existed. Kept as an
+# alias so existing `except UnknownDish` sites keep working; `UnknownRecord` is the name now, since
+# what is missing may be a room or a service rather than a dish.
+UnknownDish = UnknownRecord
 
-class UnknownDish(ToolLookupError):
-    """A dish the menu does not contain. Never guessed at, never approximated to a near match."""
+# `MenuStore` was the store's name while the menu was all there was. `HotelStore` serves rooms,
+# services and reservations too; the alias keeps the older import sites working.
+MenuStore = HotelStore
 
-
-class MenuStore:
-    """The only mutable menu state, and the only thing that may change it.
-
-    Each call constructs its own store, so two concurrent calls cannot see each other's changes.
-    Dishes are frozen and replaced wholesale on mutation, so a record handed to a tool result stays
-    a faithful snapshot of the moment it was produced.
-    """
-
-    def __init__(self, menu: tuple[Dish, ...] = MENU):
-        self._dishes: dict[str, Dish] = {d.dish_id: d for d in menu}
-        self._order: tuple[str, ...] = tuple(d.dish_id for d in menu)
-        # Stamped onto every tool result, so a late-arriving answer is recognisable as describing a
-        # menu that has since changed -- independently of generation fencing.
-        self.state_version: int = 0
-
-    # --- reading ------------------------------------------------------------------------
-
-    def dishes(self) -> list[Dish]:
-        """Every dish, in menu order. A copy: callers cannot mutate our state."""
-        return [self._dishes[i] for i in self._order]
-
-    def in_category(self, category: Category, *, available_only: bool = True) -> list[Dish]:
-        rows = [d for d in self.dishes() if d.category is category]
-        return [d for d in rows if d.available] if available_only else rows
-
-    def by_diet(self, diet: Diet, *, category: Category | None = None) -> list[Dish]:
-        """Vegan counts as vegetarian for a caller who asks for vegetarian options.
-
-        A caller asking "do you have vegetarian mains" wants everything they can eat, not a
-        taxonomy lesson -- excluding the vegan dishes would be a technically-correct wrong answer.
-        """
-        rows = [d for d in self.dishes() if d.available]
-        if diet is Diet.VEG:
-            rows = [d for d in rows if d.diet in (Diet.VEG, Diet.VEGAN)]
-        else:
-            rows = [d for d in rows if d.diet is diet]
-        if category is not None:
-            rows = [d for d in rows if d.category is category]
-        return rows
-
-    def find(self, name: str) -> Dish:
-        """Look a dish up by spoken name. Exact match first, then a containment match.
-
-        STT will not reliably produce "chicken kebab" -- it may give "the chicken kebab" or
-        "chicken kebabs". Containment handles that without inventing a fuzzy matcher whose failures
-        would be hard to explain. An ambiguous or absent match raises rather than guessing, because
-        quoting the wrong price is worse than admitting we did not catch it.
-        """
-        spoken = " ".join(name.lower().split())
-        if not spoken:
-            raise UnknownDish("no dish name given")
-
-        for dish in self.dishes():
-            if dish.name == spoken:
-                return dish
-
-        matches = [d for d in self.dishes() if d.name in spoken or spoken in d.name]
-        if len(matches) == 1:
-            return matches[0]
-        if not matches:
-            raise UnknownDish(f"no dish matching: {name}")
-        raise UnknownDish(f"more than one dish matches: {name}")
-
-    def dish(self, dish_id: str) -> Dish:
-        try:
-            return self._dishes[dish_id]
-        except KeyError as exc:
-            raise UnknownDish(f"no such dish id: {dish_id}") from exc
-
-    # --- mutation -----------------------------------------------------------------------
-
-    def set_available(self, dish_id: str, available: bool) -> Dish:
-        """The only way menu state changes. Bumps `state_version`, like the warehouse store."""
-        updated = replace(self.dish(dish_id), available=available)
-        self._dishes[dish_id] = updated
-        self.state_version += 1
-        return updated
+__all__ = [
+    "CURRENCY", "DEFAULT_DB_PATH", "HotelDB", "HotelDataUnavailable", "HotelInfo", "HotelStore",
+    "MenuItem", "MenuStore", "Reservation", "Room", "RoomType", "Service", "UnknownDish",
+    "UnknownRecord", "menu_for_prompt", "say_a", "say_date", "say_list", "say_number",
+    "say_price", "say_room_number", "say_time",
+]
 
 
-def menu_for_prompt(menu: tuple[Dish, ...] = MENU) -> str:
-    """The menu as compact reference text, for the model that answers what the router could not.
+def menu_for_prompt(store: HotelStore | None = None) -> str:
+    """The hotel's facts as compact reference text, for the model that answers what the router cannot.
 
     THE SAFETY NET, and it exists because the router missed once on a real call. A caller asked for
     the desserts, `base.en` transcribed "dessert" as "Desert", no rule matched, the model answered
     from nothing -- and invented three dishes and three prices. "Chocolate fudge cake, three
-    hundred and fifty rupees" is not on this menu and never has been.
+    hundred and fifty rupees" was never on any menu.
 
-    The deterministic path is still the answer for menu questions: it is faster and it cannot be
+    The deterministic path is still the answer for these questions: it is faster and it cannot be
     wrong. This is what the model sees when that path declines, so a router miss costs a slower
-    answer rather than a fabricated one. Generated from the fixture, so it can never drift from it.
+    answer rather than a fabricated one. Generated from the database, so it can never drift from it.
 
-    Sold-out dishes are included and marked, because "do you have the seafood platter" is a
-    question the model may be asked and "I don't know that dish" would be a worse answer than
-    "that one is off today".
+    Sold-out items and unavailable rooms are included and marked, because "do you have the fish
+    curry" is a question the model may be asked and "I don't know that dish" would be a worse
+    answer than "that one is off today".
     """
+    store = store if store is not None else HotelStore()
     lines: list[str] = []
-    for category in Category:
-        rows = [d for d in menu if d.category is category]
+    info = store.hotel()
+    lines.append(f"HOTEL: {info.name}, {info.address}.")
+    lines.append(f"Check-in from {info.check_in_time}. Check-out by {info.check_out_time}.")
+
+    lines.append("")
+    lines.append("MENU (the only food that exists):")
+    for category in store.categories():
+        rows = store.in_category(category, available_only=False)
         if not rows:
             continue
-        lines.append(f"{category.value.upper()}:")
-        for d in rows:
-            bits = [f"{d.name} - {say_price(d.price)}", d.diet.value]
-            if d.spice != "none":
-                bits.append(f"{d.spice} spice")
-            if d.allergens:
-                bits.append("contains " + ", ".join(d.allergens))
-            if not d.available:
+        lines.append(f"  {category.upper()}:")
+        for item in rows:
+            bits = [f"{item.name} - {say_price(item.price)}"]
+            bits.append("vegan" if item.vegan else ("vegetarian" if item.vegetarian
+                                                    else "non-vegetarian"))
+            if item.allergens:
+                bits.append("contains " + ", ".join(item.allergens))
+            if not item.available:
                 bits.append("NOT AVAILABLE TODAY")
-            lines.append("  " + "; ".join(bits))
+            lines.append("    " + "; ".join(bits))
+
+    lines.append("")
+    lines.append("ROOM TYPES (the only rooms that exist):")
+    for room_type in store.room_types():
+        free = len(store.available_rooms(room_type.name))
+        lines.append(f"  {room_type.name} - {say_price(room_type.rate)} a night; "
+                     f"sleeps {room_type.max_guests}; {free} free now; "
+                     f"{', '.join(room_type.amenities)}")
+    rooms = store.rooms()
+    lines.append(f"  Room numbers run {rooms[0].number} to {rooms[-1].number}; "
+                 f"{len(store.available_rooms())} of {len(rooms)} are free. "
+                 "No other room numbers exist.")
+
+    lines.append("")
+    lines.append("SERVICES (the only services that exist):")
+    for service in store.services():
+        lines.append(f"  {service.name} - {service.availability}; extension {service.extension}")
+
     return "\n".join(lines)
-
-
-def describe_dish(dish: Dish) -> dict[str, object]:
-    """Flatten one dish into the plain dict a tool result carries.
-
-    Done here rather than in each tool so every tool describes a dish identically, and so what
-    reaches a caller is data rather than a live store reference.
-    """
-    return {
-        "dish_id": dish.dish_id,
-        "name": dish.name,
-        "category": dish.category.value,
-        "price": dish.price,
-        "diet": dish.diet.value,
-        "spice": dish.spice,
-        "allergens": list(dish.allergens),
-        "available": dish.available,
-    }
 
 
 # --- spoken rendering ---------------------------------------------------------------------
@@ -271,7 +151,7 @@ def say_number(n: int) -> str:
 
 
 def say_price(price: float) -> str:
-    """`380.0` -> `three hundred and eighty rupees`. Whole units only; this menu has no paise."""
+    """`420.0` -> `four hundred and twenty rupees`. Whole units only; this menu has no paise."""
     return f"{say_number(int(round(price)))} {CURRENCY}"
 
 
@@ -282,3 +162,72 @@ def say_list(items: list[str]) -> str:
     if len(items) == 1:
         return items[0]
     return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+
+_MONTHS = ("January", "February", "March", "April", "May", "June",
+           "July", "August", "September", "October", "November", "December")
+_ORDINALS = {1: "first", 2: "second", 3: "third", 5: "fifth", 8: "eighth", 9: "ninth",
+             12: "twelfth", 20: "twentieth", 21: "twenty first", 22: "twenty second",
+             23: "twenty third", 30: "thirtieth", 31: "thirty first"}
+
+
+def say_room_number(number: str | int) -> str:
+    """`305` -> `three oh five`. How a room number is said, not how a quantity is.
+
+    `say_number` would give "three hundred and five", which is a count of rooms rather than the
+    name of one. A guest asked to go to "three hundred and five" has been given a number, not a
+    door.
+    """
+    digits = str(number).strip()
+    if not digits.isdigit():
+        return str(number)
+    spoken = {"0": "oh"}
+    return " ".join(spoken.get(d, say_number(int(d))) for d in digits)
+
+
+def say_time(clock: str) -> str:
+    """`06:00` -> `six in the morning`; `12:00` -> `twelve noon`; `23:00` -> `eleven at night`.
+
+    Rime is given words, never `06:00`, because a spoken agent should not gamble on how a TTS
+    engine reads a colon.
+    """
+    raw = str(clock).strip()
+    hour_part, _, minute_part = raw.partition(":")
+    if not hour_part.strip().isdigit():
+        return raw
+    hour, minute = int(hour_part), int(minute_part) if minute_part.strip().isdigit() else 0
+
+    if hour == 0:
+        base, suffix = "twelve", "midnight"
+    elif hour == 12:
+        base, suffix = "twelve", "noon"
+    else:
+        base = say_number(hour if hour <= 12 else hour - 12)
+        suffix = ("in the morning" if hour < 12
+                  else "in the afternoon" if hour < 17
+                  else "in the evening" if hour < 21
+                  else "at night")
+    if minute:
+        base = f"{base} {say_number(minute)}"
+    return f"{base} {suffix}"
+
+
+def say_date(iso: str) -> str:
+    """`2026-09-07` -> `the seventh of September`. The year is dropped: a caller asking about a
+    stay this week does not need it, and reading it aloud makes the sentence longer than the fact.
+    """
+    parts = str(iso).strip().split("-")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return str(iso)
+    _, month, day = (int(p) for p in parts)
+    if not 1 <= month <= 12:
+        return str(iso)
+    ordinal = _ORDINALS.get(day) or (say_number(day) + "th")
+    return f"the {ordinal} of {_MONTHS[month - 1]}"
+
+
+def say_a(phrase: str) -> str:
+    """`Executive Suite` -> `an Executive Suite`. Article agreement, so the sentence reads."""
+    text = str(phrase).strip()
+    article = "an" if text[:1].lower() in "aeiou" else "a"
+    return f"{article} {text}"

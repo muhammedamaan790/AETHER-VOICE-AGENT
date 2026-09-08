@@ -1,0 +1,1 @@
+See the SQLite schema in aether_hotel.db. Tables: hotel, room_types, rooms, guests, reservations, menu_categories, menu_items, hotel_services, service_requests, restaurant_orders, restaurant_order_items.

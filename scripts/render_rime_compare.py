@@ -28,6 +28,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Identity, a spelled-out price, and a negative: the three things the demo actually has to say.
 # Deliberately fixed rather than configurable, so two renders a week apart stay comparable.
+#
+# DO NOT "correct" this to match the current menu. The price and the dish predate
+# `data/aether_hotel.db` and no longer exist in it -- but RIME_EVIDENCE.md quotes measurements taken
+# from the renders of THIS sentence, and changing it would invalidate them while leaving the numbers
+# in place. What is being compared here is a voice, not a menu.
 SENTENCE = (
     "You've reached AETHER, the hotel manager. The chicken kebab is three hundred and eighty "
     "rupees, and the seafood platter is not available today."

@@ -20,6 +20,7 @@ import pytest
 
 from aether.classify import Classification, classify, normalise
 from aether.events import EventType, InterruptionClass, TransitionReason
+from aether.hotel import HotelStore
 from aether.trace import Trace
 
 AUDIO = np.zeros(16000, np.int16)
@@ -104,7 +105,7 @@ def test_every_menu_question_the_demo_asks_still_reaches_a_turn():
     from aether.hotel.router import route
 
     for said in ("what starters do you have", "how much is the chicken kebab",
-                 "do you have vegetarian mains", "is the seafood platter available",
+                 "do you have vegetarian mains", "is the fish curry available",
                  "what desserts do you have", "do you have vegan options",
                  "is the chicken kebab spicy", "i have a nut allergy what can i eat"):
         for in_flight in (True, False):
@@ -330,7 +331,10 @@ def test_a_replacement_fences_the_old_generation_and_answers_the_new_question(mo
     assert classes(trace)[-1] == "REPLACEMENT"
     replaced = trace.all(EventType.TASK_REPLACED)
     assert [e.fields["reason"] for e in replaced] == ["replacement"]
-    assert "gulab jamun" in rime.spoken[-1], "the new question really was answered"
+    spoken = rime.spoken[-1]
+    assert "desserts" in spoken.lower(), "the new question really was answered, not the old one"
+    for item in HotelStore().in_category("desserts"):
+        assert item.name in spoken
     assert trace.all(EventType.RESULT_LEAKED) == []
 
 
@@ -443,7 +447,7 @@ def test_absent_duration_evidence_leaves_the_closed_sets_unchanged():
 def test_the_bound_is_generous_enough_for_every_demo_phrase():
     """No required phrase may ever be withheld or cancelled, at any plausible speaking pace."""
     phrases = ["what starters do you have", "how much is the chicken kebab",
-               "do you have vegetarian mains", "is the seafood platter available",
+               "do you have vegetarian mains", "is the fish curry available",
                "what desserts do you have", "do you have vegan options",
                "is the chicken kebab spicy", "i have a nut allergy what can i eat",
                "what time do you close"]
