@@ -1,0 +1,11 @@
+# The console is served byte-for-byte over HTTP, and a test asserts that what the browser receives
+# is exactly what is on disk (tests/test_web_bridge.py). With core.autocrlf=true and no rule here,
+# git rewrites this file to CRLF on checkout while Python reads it back with universal newlines --
+# so the bytes differ and the test fails on a fresh clone, on a colleague's machine and in CI,
+# while passing on the machine where the file was last written. Pin it.
+*.html text eol=lf
+
+# Same reasoning for anything else read as bytes and compared, or fed to a parser that cares.
+*.sql  text eol=lf
+*.db   binary
+*.wav  binary
