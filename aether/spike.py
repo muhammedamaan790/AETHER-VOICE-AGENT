@@ -351,7 +351,11 @@ class Day1Spike:
             print("  (empty transcript, ignoring)")
             return
 
-        decision = classify(text, in_flight=in_flight)
+        # How much the caller actually SAID, measured by the VAD and read off the same event the
+        # latency marks come from. Without it a garbled three-second question that Whisper renders
+        # as "Okay." looks exactly like a backchannel, and the caller silently loses their turn.
+        voiced_ms = ended.fields.get("voiced_ms") if ended else None
+        decision = classify(text, in_flight=in_flight, voiced_ms=voiced_ms)
         if self._resolve_without_a_turn(text, decision, in_flight):
             return
 

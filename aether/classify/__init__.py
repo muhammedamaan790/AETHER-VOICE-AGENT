@@ -107,6 +107,38 @@ _REFINEMENT_PREFIXES = (
 )
 
 
+# How long a phrase of N words can plausibly have taken to say.
+#
+# MEASURED, not guessed. The repository's one real speech fixture
+# (`tests/fixtures_stt_probe.wav`, "Find the priority orders in aisle 9.") runs through the real
+# `MicVAD` detector as **2320 ms of voiced audio for 7 words = 331 ms per word**. The bound below
+# is 1000 ms per word: three times slower than that measurement, so it admits deliberate, drawled
+# or hesitant speech and rejects only what could not be a faithful reading of the audio at all.
+#
+# It compares against `SpeechEnded.voiced_ms`, which counts voiced frames only -- the 300 ms
+# preroll and the 500 ms of trailing silence that end an utterance are already excluded, so this
+# is genuinely "how long were they talking" and not "how big was the buffer".
+#
+# This is NOT a VAD threshold and changes nothing about capture, endpointing or transcription. It
+# decides only whether a closed-set phrase is allowed to withhold a turn.
+_MAX_MS_PER_WORD = 1000.0
+# One short word still gets a fair hearing: 331 ms measured, and frame quantisation is 20 ms.
+_MIN_CREDIBLE_MS = 400.0
+
+
+def _duration_is_credible(spoken: str, voiced_ms: float | None) -> bool:
+    """Could this transcript really have taken this long to say?
+
+    `None` means the caller has no duration evidence -- some tests, and any future caller that is
+    not the live pipeline. It is treated as credible, so the closed sets behave exactly as they did
+    before this check existed. The live path always has the figure: `MicVAD` emits `SpeechEnded`
+    immediately before it queues the utterance, so there is always a measurement to read.
+    """
+    if voiced_ms is None:
+        return True
+    return voiced_ms <= max(_MIN_CREDIBLE_MS, len(spoken.split()) * _MAX_MS_PER_WORD)
+
+
 @dataclass(frozen=True)
 class Classification:
     """One judgement about one utterance. Immutable, and carries why it was made."""
@@ -134,12 +166,19 @@ class Classification:
         }.get(self.cls)
 
 
-def classify(text: str, *, in_flight: bool) -> Classification:
+def classify(text: str, *, in_flight: bool, voiced_ms: float | None = None) -> Classification:
     """Classify one utterance. `in_flight` is whether a turn is currently running.
 
     `in_flight` is not context in the conversational sense -- it is the question of whether there
     is anything to interrupt. The same words mean different things: "okay" while AETHER is
     mid-answer is a backchannel, and "okay" said into silence is the start of a turn.
+
+    `voiced_ms` is how much the caller ACTUALLY SAID, from `SpeechEnded.voiced_ms` -- voiced frames
+    only, with the preroll and the trailing silence excluded. It exists to catch the one failure
+    mode the closed sets cannot see on their own: a garbled three-second question that Whisper
+    renders as the single word "Okay." A caller who was talking for three seconds did not utter a
+    backchannel, whatever the transcript says, and treating that as one silently loses their turn.
+    See `_duration_is_credible`.
 
     Order is by confidence, not by frequency. The three closed sets are exact and are tried first;
     everything after them is a fallback, and the final fallback is the behaviour AETHER had before
@@ -152,24 +191,30 @@ def classify(text: str, *, in_flight: bool) -> Classification:
         return Classification(InterruptionClass.NEW_TASK, "empty", spoken)
 
     readings = _readings(spoken)
+    # Every closed set is gated on this. A phrase that is too long to have been spoken in the audio
+    # we heard is a transcription artefact, and an artefact must never be allowed to withhold a
+    # turn or cancel a task -- it falls through to REPLACEMENT, which is what AETHER did before
+    # this module existed.
+    credible = _duration_is_credible(spoken, voiced_ms)
 
     # 1. BACKCHANNEL -- only meaningful against something to encourage. "yes" into silence is an
     #    answer to a question AETHER asked, not a backchannel, and must start a turn.
-    if in_flight:
+    if in_flight and credible:
         for form in readings:
             if form in _BACKCHANNEL:
                 return Classification(InterruptionClass.BACKCHANNEL, "closed_set", form)
 
     # 2. CANCEL -- whole utterance only. Legal with nothing in flight, where it resolves to a
     #    no-op: the caller asked for silence and silence is what they get.
-    for form in readings:
-        if form in _CANCEL:
-            return Classification(InterruptionClass.CANCEL, "closed_set", form)
+    if credible:
+        for form in readings:
+            if form in _CANCEL:
+                return Classification(InterruptionClass.CANCEL, "closed_set", form)
 
     # 3. STATUS_QUERY -- a question ABOUT the task. With nothing in flight it is ordinary
     #    conversation ("can you hear me?" on a bad line) and belongs to the model, so it only
     #    counts as a status query when there is a status to report.
-    if in_flight:
+    if in_flight and credible:
         for form in readings:
             if form in _STATUS_QUERY:
                 return Classification(InterruptionClass.STATUS_QUERY, "closed_set", form)

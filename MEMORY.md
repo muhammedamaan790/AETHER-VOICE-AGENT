@@ -293,6 +293,25 @@ Still `<from_run>` and must not be quoted:
   releases the socket, and only the first was being called. The second call in a process — the next
   phone call starting its own console — would fail to bind with no obvious cause.
 
+- **The classifier swallowed turns whose transcript was correct.** Reported as "STT got worse";
+  it was not. `aether/audio/*`, `aether/stt.py` and `aether/config.py` are byte-identical to
+  e4360ea, and the same fixture transcribes identically, so recognition never changed. What
+  changed is that a new layer sat between the transcript and the answer: `in_flight` includes
+  `gate.is_playing`, which stays true for the several seconds an answer takes to play, and during
+  that window any transcript in the backchannel or cancel closed set was withheld or fenced. A
+  garbled question that Whisper renders as "Okay." or "Stop." — which it does readily — therefore
+  produced silence where the old build produced an answer.
+
+  Fixed by gating every closed set on `SpeechEnded.voiced_ms`, which the VAD already measures
+  (voiced frames only; preroll and trailing silence excluded). The bound is **measured, not
+  guessed**: `tests/fixtures_stt_probe.wav` through the real detector is 2320 ms of voiced audio
+  for 7 words = **331 ms per word**, and the bound is 1000 ms per word — three times slower than
+  natural speech, so it admits drawled speech and rejects only what cannot be a faithful reading
+  of the audio. No VAD, STT or capture parameter was touched.
+- **An explicit price question containing a spice word answered about heat.** Ordering `spice_of`
+  before `price_of` in the router meant "how much is the hot chicken kebab" returned a spice
+  level. Price now wins; a spice question with no price words still reaches `spice_of`.
+
 ### Standing limitations
 
 - **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is

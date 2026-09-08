@@ -373,3 +373,112 @@ def test_a_noise_burst_that_transcribes_to_nothing_no_longer_kills_the_answer(mo
     assert spike.gens.active.id == answering
     assert trace.all(EventType.FENCE_REQUESTED) == []
     assert len(rime.spoken) == 1
+
+
+# ============================ duration credibility ============================
+#
+# THE REGRESSION THIS PREVENTS. The closed sets cannot tell "okay" said as encouragement from a
+# garbled three-second question that Whisper rendered as the single word "Okay." Treating the
+# second as a backchannel silently loses the caller's turn, which from the caller's chair is
+# indistinguishable from AETHER mishearing them.
+#
+# The discriminator is `SpeechEnded.voiced_ms` -- voiced frames only, preroll and trailing silence
+# already excluded -- against a bound MEASURED from real speech: the repository's speech fixture
+# runs through the real MicVAD detector as 2320 ms of voiced audio for 7 words, i.e. 331 ms per
+# word. The bound is 1000 ms per word, three times slower than that.
+
+MEASURED_MS_PER_WORD = 331          # tests/fixtures_stt_probe.wav through the real detector
+
+
+def spoken_ms(text: str, *, pace: float = 1.0) -> float:
+    """How long this phrase takes to say, in multiples of the measured natural rate."""
+    return len(text.split()) * MEASURED_MS_PER_WORD * pace
+
+
+@pytest.mark.parametrize("said", ["okay", "yeah", "mm-hm", "right", "sure"])
+@pytest.mark.parametrize("pace", [1.0, 2.0, 2.9])
+def test_a_genuine_backchannel_is_recognised_even_when_drawled(said, pace):
+    """Up to ~3x slower than measured natural speech still counts. The bound is generous."""
+    decision = classify(said, in_flight=True, voiced_ms=spoken_ms(said, pace=pace))
+    assert decision.cls is InterruptionClass.BACKCHANNEL
+
+
+@pytest.mark.parametrize("said", ["okay", "yeah", "right", "sure", "i see"])
+def test_a_long_utterance_rendered_as_a_backchannel_is_not_one(said):
+    """Three seconds of talking is not "mm-hm", whatever the transcript says.
+
+    It falls through to REPLACEMENT, which fences and answers -- exactly what AETHER did before
+    the classifier existed. A transcription artefact must never withhold a turn.
+    """
+    decision = classify(said, in_flight=True, voiced_ms=3000.0)
+    assert decision.cls is InterruptionClass.REPLACEMENT
+    assert not decision.protects_task
+
+
+@pytest.mark.parametrize("said", ["stop", "cancel that", "forget it", "never mind"])
+def test_a_genuine_cancellation_still_cancels(said):
+    assert classify(said, in_flight=True,
+                    voiced_ms=spoken_ms(said)).cls is InterruptionClass.CANCEL
+
+
+@pytest.mark.parametrize("said", ["stop", "nothing", "done", "quiet"])
+def test_a_long_utterance_rendered_as_a_cancellation_does_not_cancel(said):
+    """Mishearing a question as "stop" must not silently kill the turn."""
+    for in_flight in (True, False):
+        decision = classify(said, in_flight=in_flight, voiced_ms=2500.0)
+        assert decision.cls is not InterruptionClass.CANCEL
+
+
+def test_a_long_utterance_rendered_as_a_status_query_is_answered_instead():
+    decision = classify("are you still there", in_flight=True, voiced_ms=6000.0)
+    assert decision.cls is InterruptionClass.REPLACEMENT
+
+
+def test_absent_duration_evidence_leaves_the_closed_sets_unchanged():
+    """`None` means "no measurement", and must not silently change how the tables behave."""
+    assert classify("okay", in_flight=True, voiced_ms=None).cls is InterruptionClass.BACKCHANNEL
+    assert classify("stop", in_flight=True, voiced_ms=None).cls is InterruptionClass.CANCEL
+
+
+def test_the_bound_is_generous_enough_for_every_demo_phrase():
+    """No required phrase may ever be withheld or cancelled, at any plausible speaking pace."""
+    phrases = ["what starters do you have", "how much is the chicken kebab",
+               "do you have vegetarian mains", "is the seafood platter available",
+               "what desserts do you have", "do you have vegan options",
+               "is the chicken kebab spicy", "i have a nut allergy what can i eat",
+               "what time do you close"]
+    for said in phrases:
+        for pace in (0.5, 1.0, 2.0, 4.0):
+            for in_flight in (True, False):
+                decision = classify(said, in_flight=in_flight,
+                                    voiced_ms=spoken_ms(said, pace=pace))
+                assert not decision.protects_task, (said, pace, in_flight)
+                assert decision.cls is not InterruptionClass.CANCEL, (said, pace, in_flight)
+
+
+def test_the_pipeline_reads_the_measurement_from_the_vad(monkeypatch):
+    """The live path must actually supply `voiced_ms`, or the gate above is decorative."""
+    import inspect
+
+    from aether.spike import Day1Spike
+
+    src = inspect.getsource(Day1Spike.handle_utterance)
+    assert "voiced_ms=voiced_ms" in src, "handle_utterance must pass the measurement to classify"
+    assert 'ended.fields.get("voiced_ms")' in src, "and must read it off SpeechEnded"
+
+
+def test_a_long_garbled_utterance_still_gets_answered_end_to_end(monkeypatch):
+    """The regression, driven through the real pipeline rather than the pure function."""
+    from aether.events import EventType
+
+    spike, trace, rime, _llm = build(monkeypatch, "what starters do you have", "Okay.")
+    spike.handle_utterance(AUDIO, 0.0)
+    assert spike.gate.is_playing
+
+    # The VAD says the caller talked for three seconds; the transcript is one word.
+    trace.emit(EventType.SPEECH_ENDED, voiced_ms=3000.0, duration_ms=3800.0)
+    spike.handle_utterance(AUDIO, 0.0)
+
+    assert trace.all(EventType.BACKCHANNEL_DETECTED) == [], "not a backchannel: they were talking"
+    assert len(rime.spoken) == 2, "the caller's turn was answered, not swallowed"
+    assert classes(trace)[-1] == "REPLACEMENT"

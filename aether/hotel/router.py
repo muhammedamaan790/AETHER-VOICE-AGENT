@@ -161,15 +161,19 @@ def route(text: str) -> Route | None:
     if dish and any(word in spoken for word in _AVAILABLE_WORDS):
         return Route("check_availability", {"dish": dish}, "dish+availability")
 
-    # 3. How hot a named dish is. BEFORE the price rules and before the bare-dish fallback:
-    #    "is the chicken kebab spicy" names a dish and no price words, so it used to be answered
-    #    with a price -- a confidently wrong answer to a question about heat.
-    if dish and spice is not None:
-        return Route("spice_of", {"dish": dish}, "dish+spice")
-
-    # 4. Price of a named dish.
+    # 3. Price of a named dish. BEFORE the spice rule, because an explicit price question is the
+    #    more specific signal: "how much is the hot chicken kebab" asks for a number, and the
+    #    stray "hot" must not turn it into an answer about heat. Getting this order wrong was a
+    #    real regression -- every price question containing a spice word answered the wrong
+    #    question.
     if dish and any(word in spoken for word in _PRICE_WORDS):
         return Route("price_of", {"dish": dish}, "dish+price")
+
+    # 4. How hot a named dish is. Before the bare-dish fallback: "is the chicken kebab spicy"
+    #    names a dish and no price words, so it used to be answered with a price -- a confidently
+    #    wrong answer to a question about heat.
+    if dish and spice is not None:
+        return Route("spice_of", {"dish": dish}, "dish+spice")
 
     # 5. A dish named with no other signal -- treat as "tell me about it", which is its price.
     if dish:
