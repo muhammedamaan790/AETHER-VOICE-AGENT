@@ -43,6 +43,7 @@ import logging
 import os
 import threading
 import wave
+import webbrowser
 
 import numpy as np
 from livekit import rtc
@@ -267,8 +268,25 @@ def start_console() -> WebBridge | None:
             ws_port=int(os.environ.get("AETHER_WEB_WS_PORT", "8761")),
         )
         _console.start()
-        print(f"console    : http://127.0.0.1:{_console.http_port}"
-              f"/index.html?ws={_console.ws_port}")
+        url = (f"http://127.0.0.1:{_console.http_port}"
+               f"/index.html?ws={_console.ws_port}")
+        print(f"console    : {url}")
+
+        # Open it, the way `python -m aether.web` already does. The page has to be up BEFORE the
+        # phone rings -- that is the whole reason the console now outlives the call -- and printing
+        # a link the operator then has to find and paste is a step to forget under demo pressure.
+        #
+        # Delayed slightly so the server is accepting connections before the browser asks, and
+        # opt-out via AETHER_WEB_OPEN=0 for a headless worker, where there is no browser to open
+        # and the attempt would be noise.
+        if os.environ.get("AETHER_WEB_OPEN", "1").strip() != "0":
+            def _open() -> None:
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    logger.debug("could not open a browser; the URL is printed above")
+
+            threading.Timer(0.6, _open).start()
         return _console
     except OSError:
         # Almost always `python -m aether.web` running alongside the worker: both want 8760/8761.
