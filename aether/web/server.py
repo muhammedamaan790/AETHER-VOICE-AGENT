@@ -282,6 +282,9 @@ class WebBridge:
         # Held BY THE BRIDGE, not monkey-patched on from the caller. One slot, cleared on detach,
         # so re-attaching cannot silently drop a subscription and leak the previous call's Trace.
         self._detach_trace = None
+        # The last state payload actually sent, so an unchanged snapshot is not re-sent. Reset on
+        # attach/detach so the next real change is always delivered.
+        self._last_state_json: str | None = None
         self.state = UiState()
         self.http_port = http_port
         self.ws_port = ws_port
@@ -314,6 +317,7 @@ class WebBridge:
         """
         self.detach()
         self.state.reset()
+        self._last_state_json = None
         # Drop anything the previous call left queued, so its tail cannot fold into this call.
         while True:
             try:
@@ -341,6 +345,7 @@ class WebBridge:
                 pass
             self._detach_trace = None
         self._engine = DETACHED
+        self._last_state_json = None
 
     # --- the realtime-safe end --------------------------------------------------------
 
@@ -502,18 +507,33 @@ class WebBridge:
             pass
 
     def _pump(self) -> None:
-        """Drain the queue, serialise, broadcast. The only thread that touches sockets."""
+        """Drain the queue, serialise, broadcast. The only thread that touches sockets.
+
+        The idle tick exists because `phase` and `listening` are read live from the pipeline and
+        can change with no event to carry them. It re-sends only when the snapshot has ACTUALLY
+        CHANGED: an idle console otherwise pushed five identical messages a second, forever, to
+        every open tab -- which under the worker's DEBUG logging printed five lines a second and
+        buried the call's own output.
+        """
         while self._running:
             try:
                 ev = self._queue.get(timeout=0.2)
             except queue.Empty:
-                self._broadcast({"kind": "state", **self.current_state()})
+                self._broadcast_state()
                 continue
 
             payload = event_to_dict(ev)
             self.state.apply(payload)
             self._broadcast({"kind": "event", "event": payload})
-            self._broadcast({"kind": "state", **self.current_state()})
+            self._broadcast_state()
+
+    def _broadcast_state(self) -> None:
+        """Send the snapshot, unless it is byte-identical to the one already sent."""
+        message = json.dumps({"kind": "state", **self.current_state()}, default=str)
+        if message == self._last_state_json:
+            return
+        self._last_state_json = message
+        self._broadcast_raw(message)
 
     def current_state(self) -> dict[str, Any]:
         """Snapshot: folded event state, plus the live phase read from the coordinator."""
@@ -549,9 +569,11 @@ class WebBridge:
         return snap
 
     def _broadcast(self, message: dict[str, Any]) -> None:
+        self._broadcast_raw(json.dumps(message, default=str))
+
+    def _broadcast_raw(self, data: str) -> None:
         if not self._clients:
             return
-        data = json.dumps(message, default=str)
         with self._clients_lock:
             clients = tuple(self._clients)
         for client in clients:
