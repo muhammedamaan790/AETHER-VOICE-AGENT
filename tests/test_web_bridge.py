@@ -230,11 +230,41 @@ def test_an_enum_phase_is_serialised_by_value():
 
 
 def test_a_broken_phase_source_does_not_break_the_snapshot():
+    """It must not crash -- and it must not claim to be listening either.
+
+    STRENGTHENED. The old fallback was `UiState.phase`, which defaults to "listening" and is never
+    written by the fold, so a dead coordinator produced a console asserting AETHER was listening.
+    A broken source now reports "error", which is the truth and which the page can render.
+    """
     def explodes():
         raise RuntimeError("coordinator gone")
 
     snap = WebBridge(phase_source=explodes).current_state()
-    assert snap["phase"] == "listening", "falls back to the folded default rather than crashing"
+    assert snap["phase"] == "error"
+    assert snap["interruptible"] is False, "nothing may be offered as interruptible"
+
+
+def test_a_bridge_with_nothing_attached_says_so():
+    """Before the phone rings there is no pipeline, and the console must not pretend otherwise."""
+    snap = WebBridge().current_state()
+    assert snap["call_active"] is False
+    assert snap["phase"] == "no_call"
+    assert snap["listening"] is False
+    assert snap["interruptible"] is False
+
+
+def test_listening_is_always_present_and_boolean():
+    """It used to VANISH from the payload when no source was wired.
+
+    In the browser that produced a contradiction: `orbStateFor` tests `listening === false`, which
+    is false for undefined, so the orb read "Listening"; `renderControls` does `!!listening`, so the
+    button read "Start Listening". The two halves of the page disagreed.
+    """
+    for bridge in (WebBridge(),
+                   WebBridge(listening_source=lambda: True),
+                   WebBridge(listening_source=lambda: (_ for _ in ()).throw(RuntimeError()))):
+        value = bridge.current_state()["listening"]
+        assert isinstance(value, bool), value
 
 
 def test_the_bridge_may_only_ask_for_a_fence_or_a_mute():
@@ -256,9 +286,13 @@ def test_the_bridge_may_only_ask_for_a_fence_or_a_mute():
     for forbidden in ("mark_fenced", "fence_generation", "allocate(", "enqueue(",
                       "request_stop", "request_duck", "set_active_generation", "set_listening"):
         assert forbidden not in code, f"the bridge must never call {forbidden} itself"
-    assert "_on_interrupt" in code and "_on_standby" in code, (
-        "its only pipeline writes are the two injected callables"
+    # The injected callables now live on the frozen `Engine` so they can be swapped per call as
+    # one atomic store. The guard follows them there; what it pins is unchanged -- the bridge may
+    # ask for a fence and ask for the microphone, and may reach the pipeline no other way.
+    assert "on_interrupt" in code and "on_standby" in code and "on_listening" in code, (
+        "its only pipeline writes are the injected callables"
     )
+    assert "class Engine" in code, "and they are held together, not as loose attributes"
 
 
 def test_only_the_two_known_actions_are_accepted():
@@ -466,8 +500,9 @@ def test_a_reconnecting_browser_is_handed_the_conversation_not_an_empty_screen()
     snapshot = bridge.current_state()
     assert len(snapshot["transcript"]) == 2
     assert snapshot["transcript"][0]["text"] == "what starters do you have"
-    assert "interruptible" in snapshot and "listening" not in snapshot, (
-        "listening is only reported when a real source is wired -- never assumed"
+    assert snapshot["interruptible"] is False
+    assert snapshot["listening"] is False, (
+        "explicitly false with no source wired -- never absent, or the page contradicts itself"
     )
 
 
@@ -532,3 +567,164 @@ def test_stop_releases_both_ports_for_the_next_call():
         bridge = WebBridge(http_port=8802, ws_port=8803)
         bridge.start()
         bridge.stop()
+
+
+# ============================ one console, many calls ============================
+#
+# The console used to be built and destroyed per call. That meant there was nothing to open before
+# the phone rang, and the browser's socket dropped at every hangup -- which is why running a second
+# `python -m aether.web` looked necessary, and that is a whole second pipeline competing for CPU
+# with the live call.
+
+class _Spike:
+    """The five things the console may ask of a pipeline."""
+
+    def __init__(self, name, phase="listening", listening=True):
+        self.name = name
+        self.phase = phase
+        self.listening = listening
+        self.interrupts = 0
+        self.listen_calls = []
+
+    def interrupt(self):
+        self.interrupts += 1
+        return f"G-{self.name}"
+
+    def set_listening(self, on):
+        self.listen_calls.append(on)
+        self.listening = bool(on)
+        return self.listening
+
+
+def _attach(bridge, spike, trace=None, label="call"):
+    bridge.attach(
+        phase_source=lambda: spike.phase,
+        listening_source=lambda: spike.listening,
+        on_interrupt=spike.interrupt,
+        on_listening=spike.set_listening,
+        trace=trace, label=label,
+    )
+
+
+def test_attach_forgets_the_previous_callers_conversation():
+    """THE PRIVACY ONE. Two members of the public must never see each other's words."""
+    bridge = WebBridge()
+    first = Trace()
+    _attach(bridge, _Spike("a"), trace=first)
+    first.emit(EventType.TRANSCRIPT_FINAL, turn_id=1, text="my card number is on the booking")
+    bridge.state.apply(event_to_dict(first.events[-1]))
+    assert bridge.current_state()["transcript"], "the first caller was recorded"
+
+    _attach(bridge, _Spike("b"), trace=Trace())
+
+    snap = bridge.current_state()
+    assert snap["transcript"] == [], "the next caller starts from nothing"
+    assert snap["timeline"] == []
+    assert snap["latency"] == {}
+    assert snap["leaks"] == 0
+    assert snap["generation"] is None
+    assert snap["last_class"] is None
+    assert snap["speech_active"] is False
+
+
+def test_detach_reports_no_call_rather_than_claiming_to_listen():
+    bridge = WebBridge()
+    spike = _Spike("a")
+    _attach(bridge, spike)
+    assert bridge.current_state()["call_active"] is True
+
+    bridge.detach()
+    snap = bridge.current_state()
+    assert snap["call_active"] is False
+    assert snap["phase"] == "no_call", "not 'listening' -- there is nothing to be listening"
+    assert snap["listening"] is False
+    assert snap["interruptible"] is False
+
+
+def test_a_detached_console_drives_nothing():
+    """Buttons on a page left open between calls must be inert, not silently effective."""
+    bridge = WebBridge()
+    spike = _Spike("a")
+    _attach(bridge, spike)
+    bridge.detach()
+
+    bridge._handle_inbound('{"action":"interrupt"}')
+    bridge._handle_inbound('{"action":"listening","on":false}')
+    assert spike.interrupts == 0
+    assert spike.listen_calls == []
+
+
+def test_a_second_attach_rebinds_the_controls_to_the_new_call():
+    """Otherwise INTERRUPT would fence call 1 while the page displayed call 2."""
+    bridge = WebBridge()
+    first, second = _Spike("a"), _Spike("b")
+    _attach(bridge, first)
+    _attach(bridge, second)
+
+    bridge._handle_inbound('{"action":"interrupt"}')
+    bridge._handle_inbound('{"action":"listening","on":false}')
+    assert (first.interrupts, first.listen_calls) == (0, [])
+    assert (second.interrupts, second.listen_calls) == (1, [False])
+
+
+def test_attach_unsubscribes_from_the_previous_trace():
+    """A leaked subscription would fold a dead call's events into the live one."""
+    bridge = WebBridge()
+    old_trace, new_trace = Trace(), Trace()
+    _attach(bridge, _Spike("a"), trace=old_trace)
+    _attach(bridge, _Spike("b"), trace=new_trace)
+
+    assert old_trace._subscribers == [], "the old trace no longer feeds this console"
+    assert bridge.on_event in new_trace._subscribers
+
+
+def test_detach_is_idempotent_and_safe_with_nothing_attached():
+    bridge = WebBridge()
+    bridge.detach()
+    bridge.detach()
+    assert bridge.current_state()["call_active"] is False
+
+
+def test_the_recording_path_reaches_the_snapshot(tmp_path):
+    """The judge-facing proof that the conversation is on disk."""
+    bridge = WebBridge()
+    assert bridge.current_state()["recording"]["path"] is None
+
+    trace = Trace(tmp_path / "run-x.jsonl")
+    _attach(bridge, _Spike("a"), trace=trace)
+    trace.emit(EventType.SPEECH_ONSET)
+    bridge.state.apply(event_to_dict(trace.events[-1]))
+
+    rec = bridge.current_state()["recording"]
+    assert rec["path"] is not None and rec["path"].endswith("run-x.jsonl")
+    assert rec["events"] == 1
+
+    bridge.detach()
+    assert bridge.current_state()["recording"]["path"] is None
+
+
+def test_the_ports_bind_once_across_many_calls():
+    """The browser tab must survive every hangup: no rebinding between calls."""
+    bridge = WebBridge(http_port=8804, ws_port=8805)
+    bridge.start()
+    try:
+        for name in ("a", "b", "c"):
+            _attach(bridge, _Spike(name), trace=Trace())
+            assert bridge.current_state()["call_active"] is True
+            bridge.detach()
+            assert bridge.current_state()["call_active"] is False
+        with urllib.request.urlopen("http://127.0.0.1:8804/index.html", timeout=3) as resp:
+            assert resp.status == 200, "still serving after three calls"
+    finally:
+        bridge.stop()
+
+
+def test_the_ui_renders_the_waiting_and_recording_states():
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert "call_active" in html, "the page must distinguish no-call from listening"
+    assert "Waiting for a call" in html
+    # The page keys off `call_active`, not off the phase string, so `no_call` is deliberately
+    # absent here -- `test_detach_reports_no_call_rather_than_claiming_to_listen` pins that end.
+    assert "recording" in html
+    for key in ("FEED_MAX", "pushFeed", "clearFeed"):
+        assert key in html, f"the live event feed needs {key}"
