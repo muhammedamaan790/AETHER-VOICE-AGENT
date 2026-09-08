@@ -21,6 +21,11 @@ asyncio is not the mechanism *inside* the audio callback, and may be used outsid
 frames are handed to `process_frame` from an async task, which is a plain function call; the turn
 loop runs on its own thread exactly as it does locally. Nothing new runs on a realtime callback.
 
+The console is served for the WHOLE life of the worker and attached to each call as it starts, so
+the page can be open before the phone rings and survives the hangup. Running `python -m aether.web`
+alongside is not the way to get a UI during a call: it is a second complete pipeline, with its own
+Whisper model and its own microphone, competing for CPU with the call and racing it for the ports.
+
 Scope: this registers, connects, bridges audio and tears down cleanly. A real call has now reached
 it -- the caller heard the greeting, and AETHER could not understand a word they said. The cause was
 the caller's track being attached on both discovery paths, so two `rtc.AudioStream` readers
@@ -226,8 +231,58 @@ class CallBridge:
         self._tasks.clear()
 
 
-def start_console(spike: Day1Spike, trace: Trace) -> WebBridge | None:
-    """Serve the AETHER console for this call, and wire its two controls to this pipeline.
+# The console, started once for the whole worker and shared by every call.
+#
+# It used to be built and destroyed PER CALL, which had two consequences on camera: before the
+# phone rang there was nothing to open, so the page could not be up in advance; and at every
+# hangup the ports were released and the browser's socket dropped into its reconnect backoff. That
+# is why running `python -m aether.web` alongside looked necessary -- and that is a second complete
+# pipeline, with its own Whisper model and its own microphone, competing for CPU with the call.
+_console: WebBridge | None = None
+
+
+def start_console() -> WebBridge | None:
+    """Bind the console for the worker's lifetime. Call once, before the first call arrives.
+
+    Nothing is attached yet: the snapshot reports `call_active: false` and `phase: "no_call"`, so
+    the page is honest about there being no pipeline rather than claiming to be listening.
+
+    Best-effort. A console that cannot bind must never stop the worker taking calls.
+    """
+    global _console
+    if os.environ.get("AETHER_WEB", "1").strip() == "0":
+        return None
+    try:
+        _console = WebBridge(
+            http_port=int(os.environ.get("AETHER_WEB_HTTP_PORT", "8760")),
+            ws_port=int(os.environ.get("AETHER_WEB_WS_PORT", "8761")),
+        )
+        _console.start()
+        print(f"console    : http://127.0.0.1:{_console.http_port}"
+              f"/index.html?ws={_console.ws_port}")
+        return _console
+    except OSError:
+        # Almost always `python -m aether.web` running alongside the worker: both want 8760/8761.
+        # Worth saying loudly rather than logging a traceback, because that second process is not
+        # merely holding a port -- it is a WHOLE SECOND PIPELINE competing for CPU with every call.
+        print(
+            f"console    : COULD NOT BIND "
+            f"{os.environ.get('AETHER_WEB_HTTP_PORT', '8760')}/"
+            f"{os.environ.get('AETHER_WEB_WS_PORT', '8761')} -- something else is using those "
+            "ports, most likely `python -m aether.web`. That is a second full pipeline competing "
+            "for CPU with your calls; stop it, or set AETHER_WEB_HTTP_PORT / AETHER_WEB_WS_PORT, "
+            "or AETHER_WEB=0."
+        )
+        _console = None
+        return None
+    except Exception:
+        logger.exception("console did not start; calls will run without a UI")
+        _console = None
+        return None
+
+
+def attach_console(spike: Day1Spike, trace: Trace) -> None:
+    """Point the console at this call, forgetting the previous one.
 
     The SAME `WebBridge` the local-mic path uses, wired to the SAME `Day1Spike` methods. That is
     what makes the toggle honest on a phone call rather than decorative: STOP LISTENING closes
@@ -235,13 +290,13 @@ def start_console(spike: Day1Spike, trace: Trace) -> WebBridge | None:
     published track and the outbound pump all keep running -- the caller is still connected and
     AETHER simply cannot hear them.
 
-    Best-effort. A console that fails to bind must never take a call down, so every failure is
-    swallowed and the call proceeds without a UI. Disable entirely with AETHER_WEB=0.
+    `attach` resets the conversation, which is not optional: without it the previous caller's
+    transcript would render to this one.
     """
-    if os.environ.get("AETHER_WEB", "1").strip() == "0":
-        return None
+    if _console is None:
+        return
     try:
-        console = WebBridge(
+        _console.attach(
             phase_source=lambda: spike.barge.phase,
             listening_source=lambda: spike.listening,
             # The one fence the browser may ask for -- the same `fence_now` the caller's voice
@@ -249,44 +304,23 @@ def start_console(spike: Day1Spike, trace: Trace) -> WebBridge | None:
             on_interrupt=lambda: spike.interrupt(source="button"),
             on_listening=spike.set_listening,
             on_standby=spike.toggle_standby,
-            http_port=int(os.environ.get("AETHER_WEB_HTTP_PORT", "8760")),
-            ws_port=int(os.environ.get("AETHER_WEB_WS_PORT", "8761")),
+            trace=trace,
+            label="call",
         )
-        unsubscribe = trace.subscribe(console.on_event)
-        console.start()
-        console._aether_unsubscribe = unsubscribe   # released in the call's teardown
-        logger.info("[5/7] console on http://127.0.0.1:%s/index.html?ws=%s",
-                    console.http_port, console.ws_port)
-        return console
-    except OSError:
-        # Almost always `python -m aether.web` running alongside the worker: both want 8760/8761.
-        # Worth saying loudly rather than logging a traceback, because that second process is not
-        # merely holding a port -- it is a WHOLE SECOND PIPELINE, with its own Whisper model and
-        # its own microphone, competing for CPU with the call in progress.
-        logger.warning(
-            "console could not bind %s/%s -- something else is using those ports, most likely "
-            "`python -m aether.web`. That is a second full pipeline competing for CPU with this "
-            "call; stop it, or set AETHER_WEB_HTTP_PORT/AETHER_WEB_WS_PORT, or AETHER_WEB=0. "
-            "The call continues without a UI.",
-            os.environ.get("AETHER_WEB_HTTP_PORT", "8760"),
-            os.environ.get("AETHER_WEB_WS_PORT", "8761"),
-        )
-        return None
+        logger.info("[5/7] console attached: http://127.0.0.1:%s/index.html?ws=%s",
+                    _console.http_port, _console.ws_port)
     except Exception:
-        logger.exception("console did not start; the call continues without a UI")
-        return None
+        logger.exception("console could not attach; the call continues without a UI")
 
 
-def stop_console(console: WebBridge | None) -> None:
-    if console is None:
+def detach_console() -> None:
+    """Let go of the call's pipeline, but keep serving. The page stays open for the next call."""
+    if _console is None:
         return
     try:
-        unsubscribe = getattr(console, "_aether_unsubscribe", None)
-        if unsubscribe is not None:
-            unsubscribe()
-        console.stop()
+        _console.detach()
     except Exception:
-        logger.exception("console teardown failed")
+        logger.exception("console detach failed")
 
 
 # Spoken, so: no numerals, no symbols, short enough that a caller can interrupt it comfortably.
@@ -391,7 +425,7 @@ async def hotel_call(ctx: JobContext) -> None:
     spike = await asyncio.to_thread(build_pipeline, trace)
     bridge = CallBridge(spike, spike.gate, closing)
     logger.info("[2/7] pipeline ready: llm=%s rime=%s", spike.llm.name, spike.rime.configured)
-    console = start_console(spike, trace)
+    attach_console(spike, trace)
 
     # Anything that arrived during those 9 s, plus anything already subscribed before we attached
     # the handler at all. Both paths, because either can be the one that fires.
@@ -439,7 +473,7 @@ async def hotel_call(ctx: JobContext) -> None:
         captured = bridge.write_capture()
         if captured:
             logger.info("inbound audio captured: %s", captured)
-        stop_console(console)
+        detach_console()
         spike.shutdown()
         logger.info("[7/7] call ended: trace=%s", trace.path)
 
@@ -466,6 +500,12 @@ def main() -> None:
     # cold, 672 ms warm -- about 3.1 s of setup a caller no longer waits through.
     warm = prewarm()
     print("prewarm    : " + "  ".join(f"{k}={v}ms" for k, v in warm.items()))
+
+    # ONE console for the worker, not one per call. Open the page before you dial: it shows
+    # "waiting for a call" until one arrives, stays connected through the hangup, and is ready for
+    # the next. Building it per call meant there was nothing to open in advance and the browser's
+    # socket dropped at the end of every call.
+    start_console()
 
     cli.run_app(server)
 

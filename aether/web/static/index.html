@@ -137,6 +137,30 @@ kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border
 #timeline .step.classified{border-color:rgba(167,139,250,.45);color:var(--think)}
 #timeline .arrow{color:var(--ink-faint)}
 .dl{margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:11px}
+#recording{
+  margin-top:12px;padding:8px 11px;border-radius:9px;font-family:var(--mono);font-size:11px;
+  color:var(--ink-faint);background:rgba(255,255,255,.03);border:1px solid var(--line);
+  overflow-wrap:anywhere;
+}
+#recording.live{color:var(--ok);border-color:rgba(52,211,153,.32);background:rgba(52,211,153,.07)}
+#recording .dotrec{
+  display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--alert);
+  margin-right:7px;vertical-align:middle;animation:rec 1.4s ease-in-out infinite;
+}
+@keyframes rec{0%,100%{opacity:1}50%{opacity:.25}}
+
+#feed{
+  flex:1;overflow-y:auto;padding:10px 12px;font-family:var(--mono);font-size:11px;
+  display:flex;flex-direction:column;gap:3px;min-height:150px;max-height:34vh;
+}
+#feed .row{display:flex;gap:9px;align-items:baseline;white-space:nowrap}
+#feed .t{color:var(--ink-faint);flex:0 0 auto}
+#feed .ty{color:var(--live);flex:0 0 auto;min-width:150px}
+#feed .g{color:var(--ink-faint);flex:0 0 auto;min-width:34px}
+#feed .d{color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis}
+#feed .row.fence .ty{color:var(--alert)}
+#feed .row.spoken .ty{color:var(--ok)}
+#feed .row.classify .ty{color:var(--think)}
 footer{font-size:11px;color:var(--ink-faint);text-align:center;letter-spacing:.05em;line-height:1.7}
 </style>
 </head>
@@ -199,6 +223,12 @@ footer{font-size:11px;color:var(--ink-faint);text-align:center;letter-spacing:.0
         </dl>
         <dl class="dl metrics" id="mLatency" style="margin-top:11px"></dl>
         <div id="timeline"></div>
+        <div id="recording">not recording</div>
+      </section>
+
+      <section class="panel" style="display:flex;flex-direction:column;min-height:0">
+        <h2><span>Event log</span><span id="feedCount" style="font-family:var(--mono)"></span></h2>
+        <div id="feed"><div class="empty">Canonical events appear here as they are written.</div></div>
       </section>
     </div>
   </div>
@@ -229,6 +259,8 @@ const WS_PORT = Number(new URLSearchParams(location.search).get("ws") || 8761);
 const ORB = {
   disconnected: { hue:[90,100,120],  glow:.18, speed:.10, wob:.02, rings:2, label:"Disconnected",
                   note:"No connection to the engine." },
+  waiting:      { hue:[110,124,158], glow:.30, speed:.22, wob:.04, rings:3, label:"Waiting for a call",
+                  note:"The line is open. Nothing is running until someone dials." },
   idle:         { hue:[91,141,255],  glow:.42, speed:.32, wob:.05, rings:3, label:"Connected",
                   note:"Listening is off. Press START LISTENING to begin." },
   listening:    { hue:[34,211,238],  glow:.62, speed:.55, wob:.10, rings:4, label:"Listening",
@@ -351,6 +383,9 @@ const els = {
   connDot:    document.getElementById("connDot"),
   connText:   document.getElementById("connText"),
   timeline:   document.getElementById("timeline"),
+  feed:       document.getElementById("feed"),
+  feedCount:  document.getElementById("feedCount"),
+  recording:  document.getElementById("recording"),
 };
 
 let connected = false;
@@ -358,6 +393,10 @@ let lastState = null;
 
 function orbStateFor(s) {
   if (!connected) return "disconnected";
+  // No pipeline attached: the worker is up and no call is in progress. Distinct from "stopped
+  // listening", which means a call IS up and the microphone was deliberately closed.
+  if (s && s.call_active === false) return "waiting";
+  if (s && s.phase === "error") return "error";
   if (s && s.listening === false) return "stopped";
   const phase = s ? s.phase : null;
   if (phase === "interrupted" || phase === "recovering") return "interrupted";
@@ -474,7 +513,14 @@ function renderControls(s) {
   els.interruptBtn.style.opacity = connected ? "1" : ".45";
 }
 
+let lastCallActive = null;
+
 function onState(s) {
+  // A new call attached: the engine has already reset its own state, so drop the tail of the
+  // previous conversation from the feed too rather than letting two calls run together.
+  if (s.call_active === true && lastCallActive === false) clearFeed();
+  lastCallActive = s.call_active === undefined ? null : s.call_active;
+
   lastState = s;
   orbState = orbStateFor(s);
   const cfg = ORB[orbState];
@@ -485,6 +531,7 @@ function onState(s) {
   renderTranscript(s.transcript);
   renderTimeline(s.timeline);
   renderLatency(s.latency);
+  renderRecording(s);
 
   setText("mGen", s.generation);
   setText("mPrev", s.previous_generation);
@@ -497,8 +544,98 @@ function onState(s) {
   setText("mVoice", rime.voice ? `${rime.voice} · ${rime.model || "?"}` : null);
 }
 
+function renderRecording(s) {
+  // The judge-facing proof that the conversation is on disk. The path and the count both come
+  // from the engine -- the page states nothing it was not told.
+  const rec = (s && s.recording) || {};
+  if (!rec.path) {
+    els.recording.className = "";
+    els.recording.textContent = connected ? "not recording — no call in progress"
+                                          : "not connected";
+    return;
+  }
+  els.recording.className = "live";
+  els.recording.innerHTML = "";
+  const dot = document.createElement("span");
+  dot.className = "dotrec";
+  els.recording.appendChild(dot);
+  els.recording.appendChild(document.createTextNode(
+    `recording · ${rec.path} · ${rec.events || 0} events`
+  ));
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Live event feed. A tail of the canonical event stream as it is written, so the log is visibly
+   being produced rather than merely claimed. Deliberately browser-side and ephemeral: it is a
+   tail, not state, and the engine's own snapshot remains the only source of truth for anything
+   that matters. Capped, because a long call would otherwise grow the DOM without limit.
+--------------------------------------------------------------------------------------------- */
+const FEED_MAX = 200;
+let feedSeeded = false;
+
+// Which single field is worth showing per event type. Anything not listed shows nothing rather
+// than a guess -- the trace file has the whole record.
+const FEED_DETAIL = {
+  TranscriptFinal:        ev => JSON.stringify(ev.text || ""),
+  ResponseSpoken:         ev => JSON.stringify(ev.text || ""),
+  FenceRequested:         ev => ev.reason,
+  ResultDiscarded:        ev => ev.reason,
+  InterruptionClassified: ev => `${ev.interruption_class} via ${ev.rule}`,
+  BackchannelDetected:    ev => JSON.stringify(ev.text || ""),
+  CancellationResolved:   ev => ev.cancelled ? "cancelled" : "nothing to cancel",
+  GenerationChanged:      ev => `${ev.from_gen || "-"} -> ${ev.to_gen || "-"}`,
+  TaskStarted:            ev => ev.task,
+  ResultReceived:         ev => ev.task,
+  SpeechEnded:            ev => ev.rejected ? `rejected: ${ev.rejected}` : `${ev.voiced_ms} ms voiced`,
+  ResultLeaked:           ev => "LEAKED",
+};
+
+const FEED_CLASS = {
+  FenceRequested: "fence", ResultDiscarded: "fence", ResultLeaked: "fence",
+  ResponseSpoken: "spoken", InterruptionClassified: "classify",
+  BackchannelDetected: "classify", CancellationResolved: "classify",
+};
+
+function pushFeed(ev) {
+  if (!feedSeeded) { els.feed.innerHTML = ""; feedSeeded = true; }
+  const atBottom = els.feed.scrollHeight - els.feed.scrollTop - els.feed.clientHeight < 40;
+
+  const row = document.createElement("div");
+  row.className = "row " + (FEED_CLASS[ev.type] || "");
+
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = ev.seq != null ? String(ev.seq).padStart(3, "0") : "—";
+
+  const ty = document.createElement("span");
+  ty.className = "ty";
+  ty.textContent = ev.type;
+
+  const g = document.createElement("span");
+  g.className = "g";
+  g.textContent = ev.gen || "";
+
+  const d = document.createElement("span");
+  d.className = "d";
+  const detail = FEED_DETAIL[ev.type];
+  try { d.textContent = detail ? (detail(ev) ?? "") : ""; } catch { d.textContent = ""; }
+
+  row.append(t, ty, g, d);
+  els.feed.appendChild(row);
+  while (els.feed.childElementCount > FEED_MAX) els.feed.removeChild(els.feed.firstChild);
+  els.feedCount.textContent = `${els.feed.childElementCount} shown`;
+  if (atBottom) els.feed.scrollTop = els.feed.scrollHeight;
+}
+
+function clearFeed() {
+  els.feed.innerHTML = '<div class="empty">Canonical events appear here as they are written.</div>';
+  els.feedCount.textContent = "";
+  feedSeeded = false;
+}
+
 /* Events are used ONLY for moments, never as a second copy of state. A fence is a moment. */
 function onEvent(ev) {
+  pushFeed(ev);
   switch (ev.type) {
     case "FenceRequested":
       flash = 1;
@@ -532,7 +669,7 @@ function connect() {
   ws.onopen = () => {
     connected = true; retry = 0;
     els.connDot.className = "dot on";
-    els.connText.textContent = "engine connected";
+    els.connText.textContent = "worker connected";
     renderControls(lastState);
   };
 
@@ -547,6 +684,7 @@ function connect() {
     connected = false;
     els.connDot.className = "dot";
     els.connText.textContent = "reconnecting…";
+    renderRecording(null);
     orbState = "disconnected";
     els.phaseLabel.textContent = ORB.disconnected.label;
     els.phaseNote.textContent = ORB.disconnected.note;

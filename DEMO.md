@@ -9,7 +9,7 @@ and this runbook does not pretend otherwise.
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 751 passed, 2 skipped
+python -m pytest -q                 # expect 765 passed, 2 skipped
 python -m aether.prewarm            # warms the process; prints what it cost
 ```
 
@@ -32,8 +32,12 @@ python -m aether.web
 
 Opens `http://127.0.0.1:8760/index.html?ws=8761`.
 
-**The LiveKit worker (real calls).** Registers as `aether-hotel`, prewarms first, and serves the
-same console for the duration of each call.
+**The LiveKit worker (real calls).** Registers as `aether-hotel`, prewarms, and serves the console
+for the whole life of the worker — open the page BEFORE you dial.
+
+**Do not run `python -m aether.web` at the same time.** It is a second complete AETHER, with its own
+Whisper model and its own microphone, competing for CPU with the call and racing it for the ports.
+The worker's own console is the one to use.
 
 ```bash
 python -m aether.telephony.agent dev
@@ -45,8 +49,9 @@ If a previous call went wrong, capture the next one so the failure names itself:
 AETHER_CALL_CAPTURE=call1.wav python -m aether.telephony.agent dev 2>&1 | tee call1.log
 ```
 
-Then dial the hotel number. The worker logs numbered stages `[1/7]`…`[7/7]`, so a failure says
-exactly how far it got, and prints a diagnosis when the call ends.
+Open `http://127.0.0.1:8760/index.html?ws=8761` **first** — the orb sits at "waiting for a call".
+Then dial. The worker logs numbered stages `[1/7]`…`[7/7]`, so a failure says exactly how far it
+got, and prints a diagnosis when the call ends.
 
 ---
 
@@ -54,7 +59,8 @@ exactly how far it got, and prints a diagnosis when the call ends.
 
 | # | Do this | What to point at |
 |---|---|---|
-| 1 | Dial the number | Orb: grey → blue. Console shows the connection |
+| 0 | Page open, before dialling | Orb calm grey, **"waiting for a call"**, `not recording` |
+| 1 | Dial the number | Orb wakes; the recording strip turns green with the trace path and a live event count |
 | 2 | AETHER greets: *"You've reached AETHER, the hotel's manager. How may I help you?"* | Orb amber, transcript line appears |
 | 3 | *"What starters do you have?"* | Answered **without the LLM**. Evidence strip: no `llm_ms` |
 | 4 | *"How much is the chicken kebab?"* | *"…three hundred and eighty rupees."* Exact, from the fixture |
@@ -67,6 +73,9 @@ exactly how far it got, and prints a diagnosis when the call ends.
 | 11 | Press **STOP LISTENING** | Button becomes START LISTENING. **The call stays connected** — check LiveKit still shows the participant. Speak: nothing is heard |
 | 12 | Press **START LISTENING** | Button becomes STOP LISTENING. Speak: answered normally, with no INTERRUPT press needed |
 | 13 | Point at the evidence strip | Generation, phase, last fence reason, class, latency, **stale leaks: 0** |
+| 14 | Point at the event log | Canonical events scrolling as they are written — the log being produced live |
+| 15 | Hang up | Orb returns to "waiting for a call". The page stays connected; nothing reloads |
+| 16 | Open the trace file named in the recording strip | The whole conversation, on disk |
 
 Two lines worth saying out loud, because they are the claim:
 

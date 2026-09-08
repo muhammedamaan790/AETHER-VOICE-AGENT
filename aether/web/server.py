@@ -81,9 +81,28 @@ class UiState:
     # Held here rather than derived in the browser so the orb and the engine cannot disagree about
     # who is speaking -- there is one source of truth, and it is this one.
     speech_active: bool = False
+    # How many canonical events this conversation has produced. Shown next to the trace path, so
+    # the console can prove the log is being written rather than merely claiming a filename.
+    event_count: int = 0
+
+    def reset(self) -> None:
+        """Forget the previous conversation entirely. Called when a new call attaches.
+
+        There was no reset at all while the bridge died with the call. Once one console serves many
+        calls, every field here becomes carryover -- and the worst of them is `transcript`, which
+        would render up to sixty lines of one caller's words to the next caller. That is a privacy
+        leak between two members of the public, not a cosmetic bug.
+
+        `leaks` resets too: the golden invariant is claimed per call, and a leak in one call must
+        not turn the counter red for the next.
+        """
+        fresh = UiState()
+        for field_name in vars(fresh):
+            setattr(self, field_name, getattr(fresh, field_name))
 
     def apply(self, ev: dict[str, Any]) -> None:
         kind = ev.get("type")
+        self.event_count += 1
 
         if kind == "SpeechOnset":
             self.speech_active = True
@@ -191,6 +210,7 @@ class UiState:
             "last_class_rule": self.last_class_rule,
             "leaks": self.leaks,
             "speech_active": self.speech_active,
+            "event_count": self.event_count,
         }
 
 
@@ -199,6 +219,34 @@ def event_to_dict(ev) -> dict[str, Any]:
     out = {"seq": ev.seq, "t": ev.t, "type": ev.type, "turn_id": ev.turn_id, "gen": ev.gen}
     out.update(ev.fields)
     return out
+
+
+@dataclass(frozen=True)
+class Engine:
+    """The five things the console may ask of a running pipeline, plus the trace it reads.
+
+    Frozen and swapped as ONE attribute store, because the swap happens on the entrypoint thread
+    while `current_state()` runs on the pump thread and on every websocket handler thread. Rebinding
+    five separate attributes would let a torn read show the new call's phase while INTERRUPT still
+    fenced the old call's generation.
+
+    `None` everywhere is the honest resting state: no call, nothing to read, nothing to drive.
+    """
+
+    phase_source: Any = None
+    listening_source: Any = None
+    on_interrupt: Any = None
+    on_listening: Any = None
+    on_standby: Any = None
+    trace_path: str | None = None
+    label: str | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.phase_source is not None
+
+
+DETACHED = Engine()
 
 
 class WebBridge:
@@ -214,28 +262,29 @@ class WebBridge:
                  on_listening=None):
         # The single permitted write. A zero-argument callable, injected rather than reached for,
         # so the bridge cannot widen its own access later without this signature changing.
-        self._on_interrupt = on_interrupt
-        # Second, and still injected rather than reached for. Standby mutes the microphone; it is
-        # NOT a fence and touches no generation. Kept separate from `on_interrupt` so the bridge
-        # cannot conflate "stop talking" with "stop listening" -- the exact conflation that made
-        # push-to-talk require a press before the user could speak at all.
-        self._on_standby = on_standby
-        # THE LISTENING TOGGLE. Takes the desired state as a boolean rather than flipping, so the
-        # browser cannot get out of step with the engine: two clicks racing each other converge on
-        # what the second one asked for instead of cancelling out. The button's label is derived
-        # from the state the engine reports back, never from what the click assumed.
+        # THE ONLY BINDING TO A PIPELINE, and it is one attribute so it can be swapped whole.
         #
-        # It is emphatically NOT an interrupt. It changes whether inbound audio is processed and
-        # touches no generation, so pressing STOP LISTENING while AETHER is mid-answer leaves the
-        # answer playing and the call connected.
-        self._on_listening = on_listening
-        # Read-only, like phase: the UI must show whether the mic is ACTUALLY open, never just
-        # what it optimistically assumed after a click.
-        self._listening_source = listening_source
+        # Every callable here is injected rather than reached for, so the bridge still cannot
+        # widen its own access: it may ask for a fence and ask for the microphone to open or
+        # close, and that is all. It holds no reference to the registry, the gate or the
+        # coordinator, and cannot enqueue audio or allocate a generation.
+        #
+        # Interrupt and listening stay separate on purpose. "Stop talking" and "stop listening"
+        # are independent intentions, and one control that did both is the exact conflation that
+        # once made push-to-talk require a press before the user could speak at all.
+        self._engine = Engine(
+            phase_source=phase_source, listening_source=listening_source,
+            on_interrupt=on_interrupt, on_listening=on_listening, on_standby=on_standby,
+        )
+        if not any((phase_source, listening_source, on_interrupt, on_listening, on_standby)):
+            # Nothing passed: the telephony worker's shape. It attaches per call instead.
+            self._engine = DETACHED
+        # Held BY THE BRIDGE, not monkey-patched on from the caller. One slot, cleared on detach,
+        # so re-attaching cannot silently drop a subscription and leak the previous call's Trace.
+        self._detach_trace = None
         self.state = UiState()
         self.http_port = http_port
         self.ws_port = ws_port
-        self._phase_source = phase_source
         self._queue: queue.Queue = queue.Queue(maxsize=EVENT_QUEUE_SIZE)
         self._clients: set = set()
         self._clients_lock = threading.Lock()
@@ -247,6 +296,51 @@ class WebBridge:
         self._http_up = threading.Event()
         self._ws_up = threading.Event()
         self.dropped_events = 0
+
+    # --- binding to a pipeline ---------------------------------------------------------
+
+    def attach(self, *, phase_source=None, listening_source=None, on_interrupt=None,
+               on_listening=None, on_standby=None, trace=None, label=None) -> None:
+        """Point this console at a pipeline, and forget the previous one.
+
+        The telephony worker calls this when a call starts, so ONE console serves every call
+        instead of one being built and destroyed per call. That is what lets the page be open
+        before the phone rings, and what stops the browser's socket dropping at every hangup.
+
+        Resets the conversation first: see `UiState.reset` for why that is not optional.
+
+        The five callables are swapped as a single frozen `Engine`, in one attribute store, because
+        `current_state()` reads them from the pump thread and from every websocket handler thread.
+        """
+        self.detach()
+        self.state.reset()
+        # Drop anything the previous call left queued, so its tail cannot fold into this call.
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        if trace is not None:
+            self._detach_trace = trace.subscribe(self.on_event)
+        self._engine = Engine(
+            phase_source=phase_source, listening_source=listening_source,
+            on_interrupt=on_interrupt, on_listening=on_listening, on_standby=on_standby,
+            trace_path=str(getattr(trace, "path", "") or "") or None, label=label,
+        )
+
+    def detach(self) -> None:
+        """Let go of the pipeline. Idempotent, and safe when nothing was ever attached.
+
+        After this the snapshot reports `call_active: false` and `phase: "no_call"` -- not
+        `"listening"`, which is what the console used to claim with no engine behind it at all.
+        """
+        if self._detach_trace is not None:
+            try:
+                self._detach_trace()
+            except Exception:
+                pass
+            self._detach_trace = None
+        self._engine = DETACHED
 
     # --- the realtime-safe end --------------------------------------------------------
 
@@ -389,15 +483,17 @@ class WebBridge:
             return
 
         action = message.get("action")
+        engine = self._engine          # one read: the call cannot be swapped out mid-dispatch
         try:
             if action == "listening":
-                if self._on_listening is None:
+                if engine.on_listening is None:
                     return
                 # Absent means "start". A malformed value must not silently mute the caller, so
                 # anything that is not an explicit false is read as on.
-                self._on_listening(message.get("on", True) is not False)
+                engine.on_listening(message.get("on", True) is not False)
                 return
-            handler = {"interrupt": self._on_interrupt, "standby": self._on_standby}.get(action)
+            handler = {"interrupt": engine.on_interrupt,
+                       "standby": engine.on_standby}.get(action)
             if handler is None:
                 return                  # unknown action, or no callback wired: ignore silently
             handler()
@@ -422,17 +518,30 @@ class WebBridge:
     def current_state(self) -> dict[str, Any]:
         """Snapshot: folded event state, plus the live phase read from the coordinator."""
         snap = self.state.snapshot()
-        if self._phase_source is not None:
+        engine = self._engine          # one read, so the whole snapshot describes one pipeline
+        snap["call_active"] = engine.active
+        snap["recording"] = {"path": engine.trace_path, "events": self.state.event_count}
+        snap["label"] = engine.label
+
+        # NOT `phase` defaulting to "listening". With nothing attached there is no pipeline to be
+        # listening, and `UiState.phase` is never written by the fold -- so the old default made
+        # the console assert that AETHER was listening when no call existed at all.
+        snap["phase"] = "no_call"
+        snap["listening"] = False
+        if engine.phase_source is not None:
             try:
-                phase = self._phase_source()
+                phase = engine.phase_source()
                 snap["phase"] = getattr(phase, "value", phase)
             except Exception:
-                pass
-        if self._listening_source is not None:
+                snap["phase"] = "error"
+        if engine.listening_source is not None:
             try:
-                snap["listening"] = bool(self._listening_source())
+                # Explicitly false rather than absent. When the key vanished the orb read
+                # "Listening" (undefined !== false) while the button read "Start Listening", and
+                # the two halves of the page contradicted each other.
+                snap["listening"] = bool(engine.listening_source())
             except Exception:
-                pass
+                snap["listening"] = False
         # Derived here, not in the browser, so "is there anything to interrupt?" has exactly one
         # answer. The INTERRUPT button is emphasised on this, and is a safe no-op when it is false.
         snap["interruptible"] = snap.get("phase") in ("thinking", "speaking")
