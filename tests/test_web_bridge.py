@@ -805,3 +805,33 @@ def test_the_worker_silences_transport_chatter():
 
     src = inspect.getsource(agent.start_console)
     assert "websockets" in src and "logging.WARNING" in src
+
+
+def test_the_console_is_never_cached_by_the_browser():
+    """It cost a real debugging round: the page had been rebuilt, the server was serving the new
+    one, and the operator was looking at the old one after a normal reload.
+
+    `SimpleHTTPRequestHandler` sends `Last-Modified` and nothing else, which leaves the browser
+    free to reuse what it has. This page is small, local, and reloaded by hand between runs -- there
+    is nothing to gain by caching it.
+    """
+    bridge = WebBridge(http_port=8806, ws_port=8807)
+    bridge.start()
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8806/index.html", timeout=3) as resp:
+            cache = resp.headers.get("Cache-Control", "")
+        assert "no-store" in cache, f"the console must not be cached; got {cache!r}"
+    finally:
+        bridge.stop()
+
+
+def test_the_page_served_is_the_page_on_disk():
+    """A stale in-memory copy would be worse than a stale browser copy."""
+    bridge = WebBridge(http_port=8808, ws_port=8809)
+    bridge.start()
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8808/index.html", timeout=3) as resp:
+            served = resp.read().decode("utf-8")
+    finally:
+        bridge.stop()
+    assert served == (STATIC_DIR / "index.html").read_text(encoding="utf-8")
