@@ -132,6 +132,47 @@ This closes the R9.5 concern raised when the model was changed.
 **Which of the two sounds better has NOT been judged, and is not claimed anywhere in this
 repository.** A listening comparison is a human task and is listed below.
 
+### Part 1c — Hindi, and why it is a different voice (2026-09-08)
+
+Queried the same public catalogue used to verify `mistv3`
+(`users.rime.ai/data/voices/voice_details.json`, 863 entries, **no API key sent**):
+
+| | |
+|---|---|
+| `mistv3` languages | `eng`, `fra`, `ger`, `spa` — **no Hindi** |
+| `astra` | `eng` on every model it appears under, `arcana` included |
+| Hindi voices | `anaya`, `anil`, `arya` (`arcana`, flagship, India); `nadi`, `taru` (`coda`) |
+
+So Hindi is **not** a language-code change on the English voice: it is a different model and a
+different voice. And because `speaker`, `modelId` and `lang` are query parameters on the `/ws3`
+connect URL, one socket is one voice — a second language is a second connection, opened lazily.
+
+**The voice was chosen by measurement, not preference.** Same sentence set, `/ws3`, PCM @ 48 kHz,
+warm first-audio over three utterances (`scripts/verify_rime_hindi.py`):
+
+| model / voice | cold | warm |
+|---|---|---|
+| **`arcana` / `anaya`** | 2820 ms | **1355 / 1716 ms** — chosen |
+| `coda` / `taru` | 4730 ms | 1585 / 2044 ms |
+| `coda` / `nadi` | 4006 ms | 1861 / 1910 ms |
+| `arcana` / `arya` | 4638 ms | 1948 / 2764 ms |
+| `mistv3` / `astra` (English control) | 2182 ms | 382 / 508 ms |
+
+**Hindi costs roughly 3x the first audio of English on this provider.** That is stated because it is
+true, not because it flatters the design. It is also why the switch is opt-in: a call that never
+asks for Hindi never opens the `arcana` socket and never pays the cost.
+
+### Devanagari or romanised — decided by listening
+
+The catalogue says `anaya` speaks Hindi. It does not say what to send her. Both were rendered and
+listened to; **Devanagari was correct**, and it also came back materially shorter for identical
+content — 9.47 s against 12.21 s — which is the shape of an engine parsing a script natively rather
+than falling back to spelling it out. Every Hindi template is therefore Devanagari
+(`aether/hotel/tools_hi.py`).
+
+R9.5 says Rime settings come from a human verifying the live service, never from an assumption. A
+script is a setting, and this is that verification.
+
 ### Listening comparison — `mistv2` vs `mistv3`
 - [ ] Play both renders of the identical sentence and choose one
 

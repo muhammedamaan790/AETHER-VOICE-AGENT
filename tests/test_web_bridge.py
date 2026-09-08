@@ -161,14 +161,15 @@ def test_response_spoken_populates_rime_and_latency():
     state = UiState()
     state.apply({
         "type": "ResponseSpoken", "gen": "G18", "provider": "rime", "transport": "ws3",
-        "model": "mistv2", "voice": "astra", "llm_provider": "gemini:gemini-3.8-flash",
+        "model": "mistv2", "voice": "astra", "voice_language": "eng",
+        "llm_provider": "gemini:gemini-3.8-flash",
         "stt_ms": 820.0, "llm_ms": 2900.0, "tts_ms": 650.0, "turn_latency_ms": 4370.0,
         "llm_ttft_ms": 1714.0,
     })
 
     snap = state.snapshot()
     assert snap["rime"] == {"provider": "rime", "transport": "ws3",
-                            "model": "mistv2", "voice": "astra"}
+                            "model": "mistv2", "voice": "astra", "language": "eng"}
     assert snap["llm_provider"] == "gemini:gemini-3.8-flash"
     assert snap["latency"]["llm_ttft_ms"] == 1714.0
     assert snap["latency"]["turn_latency_ms"] == 4370.0
@@ -189,7 +190,8 @@ def test_a_fresh_state_invents_nothing():
     snap = UiState().snapshot()
     assert snap["generation"] is None and snap["previous_generation"] is None
     assert snap["latency"] == {} and snap["timeline"] == []
-    assert snap["rime"] == {"provider": None, "transport": None, "model": None, "voice": None}
+    assert snap["rime"] == {"provider": None, "transport": None, "model": None, "voice": None,
+                            "language": None}
 
 
 def test_the_timeline_shows_generation_fence_generation():

@@ -4,7 +4,7 @@ Every claim here names the file, test or trace that backs it. Where something is
 measured, it says so — a rubric that rewards transparent method punishes overclaiming, and the
 "What we did not build" section at the end is not an afterthought.
 
-**Reproduce everything:** `python -m pytest -q` → **894 passed, 2 skipped**.
+**Reproduce everything:** `python -m pytest -q` → **945 passed, 2 skipped**.
 
 ---
 
@@ -47,6 +47,7 @@ superseded turn cannot reach the speaker even if it completes.
 | Telephony under real line conditions | `aether/bridge/`, `aether/telephony/` | [`RIME_EVIDENCE.md`](RIME_EVIDENCE.md) Part 6 |
 | Endpointing and speech floor, calibrated from real calls | `aether/audio/vad.py` | Part 6 — floor moved 35 → **2500** on 28 pooled utterances |
 | Surviving recogniser error | `aether/hotel/router.py` | `tests/test_hotel_db.py`, and below |
+| **Multilingual routing**, English ↔ Hindi mid-call | `aether/lang/`, `aether/hotel/tools_hi.py` | `tests/test_language.py` (51 tests) |
 
 **Two voice-specific defects, found in traces rather than imagined.** `suite` is pronounced "sweet",
 so `base.en` returns `suit` or `sweet` and the room-type match missed entirely — one real turn spent
@@ -54,6 +55,24 @@ so `base.en` returns `suit` or `sweet` and the room-type match missed entirely �
 service"`, misheard as `"Do you have room for this?"`, was being answered with the list of room
 types: a confident answer to a question nobody asked. Both are fixed and tested. Replaying all 218
 distinct utterances in `traces/`: **+2 answered deterministically, −1 wrong answer, 0 rerouted.**
+
+**Multilingual routing, and it does not cost the guarantee.** AETHER answers a hotel in India, so
+it speaks Hindi. The greeting offers it (*"For Hindi, just say Hindi"*), the caller asks mid-call,
+and voice, recogniser and templates all change together. Crucially the Hindi answers are **still
+templates over the same database rows** -- `llm_ms` stays 0 -- because handing a price to a model
+to phrase in Hindi would be handing it the chance to get it wrong in a language fewer people in the
+room can check.
+
+Nothing here was assumed. Rime's public catalogue says `mistv3` speaks eng/fra/ger/spa and that
+`astra` speaks no Hindi on any model, so Hindi is a **different model and a different voice**, and
+`speaker`/`modelId`/`lang` are baked into the `/ws3` URL so it is also a second socket. The voice
+was picked by measurement (warm first audio, `/ws3`): `arcana/anaya` 1355-1716 ms, `coda/taru`
+1585-2044, `coda/nadi` 1861-1910, `arcana/arya` 1948-2764. Devanagari over romanised was decided by
+listening to both, not by preference.
+
+The honest cost: **Hindi is roughly 3x slower to first audio than English** (~1.5 s against
+~0.4 s). It is recorded rather than hidden, and it is why the switch is opt-in -- an English call
+never opens the Hindi socket and never pays for it.
 
 **Latency is the reason the model is not in the path.** Hotel facts are read from SQLite and
 rendered by template, never phrased by an LLM — worth ~1.8 s per turn, and it removes the chance of
@@ -67,7 +86,7 @@ Rime is the only voice. There is no fallback TTS: unconfigured means silence, no
 |---|---|---|
 | Model | `mistv3` | chosen by measurement against `mistv2` — [Part 1a](RIME_EVIDENCE.md) |
 | Voice | `astra` | verified against the live catalog |
-| Language | `eng` | |
+| Language | `eng`, and `hin` on request | a second voice, not a parameter: see multilingual above |
 | Transport | **WebSocket `/ws3`**, persistent | streaming, and stoppable mid-utterance (`{"operation":"clear"}`) — which is what makes barge-in feel instant |
 | Endpoint | `wss://users-ws.rime.ai/ws3` | the HTTP endpoint `https://users.rime.ai/v1/rime-tts` is kept as a transport fallback (`RIME_TRANSPORT=http`), still Rime |
 | Audio format | `audioFormat=pcm` at **48 kHz**, the AudioGate's own rate | no MP3 decode and no resample — [Part 1b](RIME_EVIDENCE.md) |
@@ -83,7 +102,7 @@ a door — "three oh five", not "three hundred and five". Asserted in `tests/tes
 
 ## Evidence and reproducibility — 20%
 
-**896 automated tests — 894 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
+**947 automated tests — 945 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
 refuse to fake a result: `AETHER_UNSAFE_MODE` has no bypass path to exercise, and `ResultSalvaged`
 is not implemented and is not emitted to look like evidence.
 
@@ -94,6 +113,8 @@ is not implemented and is not emitted to look like evidence.
 | Rime model choice | [Part 1a](RIME_EVIDENCE.md) — both renders measured, both kept |
 | The demo script says what AETHER says | `tests/test_demo_script.py` — parses `DEMO_SCRIPT.md` and re-runs every line against the database |
 | Hotel answers match the database | `tests/test_hotel_db.py` — expectations read from SQLite, not written down |
+| Hindi says the same facts as English | `tests/test_language.py` — same rows, both renderers, no model in either |
+| Which Hindi voice, and why | `scripts/verify_rime_hindi.py` — four voices measured over `/ws3` |
 
 **The evidence file records being wrong.** A speech-floor claim made from one call was contradicted
 by two later calls; the original is struck through and left in place rather than deleted. A
@@ -116,7 +137,6 @@ camera with a price the database contradicted.
   acceptance scenario that would report it is skipped rather than faked.
 - **`AETHER_UNSAFE_MODE`.** Parsed, honoured nowhere. There is no code path that lets a stale result
   reach output, so the control condition cannot be run.
-- **Multilingual routing.** English only (`eng`). Rime supports more; we did not build it.
 - **Acoustic echo cancellation.** Not implemented. On the local path, wear headphones.
 - **STT word accuracy on narrowband audio.** Not separately measured.
 - **The input path is not in the trace.** A trace does not record whether its audio came from the

@@ -151,6 +151,30 @@ rule matched, and Gemini answered from nothing — inventing three dishes and th
 system prompt now carries the entire hotel, generated from the database, so a router miss costs a
 slower answer rather than a fabricated one.
 
+## Two languages
+
+AETHER answers a hotel in India, so it speaks Hindi. The greeting offers it — *"For Hindi, just say
+Hindi"* — the caller asks mid-call, and the voice, the recogniser and the templates all change
+together. *"English"* switches back.
+
+**The Hindi answers are still templates over the same database rows.** `llm_ms` stays 0. Handing a
+price to a model to phrase in Hindi would hand it the chance to say the wrong one, in a language
+fewer people in the room can check — which is the exact failure the English path already refuses.
+
+Nothing was assumed. Rime's public catalogue says `mistv3` speaks eng/fra/ger/spa and that `astra`
+speaks no Hindi on any model, so Hindi is a **different model and a different voice** — and since
+`speaker`, `modelId` and `lang` are baked into the `/ws3` connect URL, a second language is a second
+socket, opened only if it is used. `arcana`/`anaya` was chosen by measuring all four Hindi voices;
+Devanagari over romanised was chosen by listening to both. Both are in
+[RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 1c.
+
+`base.en` is a monolingual model and cannot transcribe Hindi at all, so the multilingual recogniser
+is loaded lazily on the first Hindi turn. An English-only call never loads it, and the English path
+— model, voice, latency — is byte-for-byte what it was.
+
+The honest cost: **Hindi is about 3x slower to first audio** (~1.5 s against ~0.4 s). It is
+measured, it is written down, and it is why the switch is opt-in.
+
 ## Evidence model — three tiers, never mixed
 
 1. **Local / laptop** — measured on this machine with a real microphone or a WAV, real STT, real
@@ -288,7 +312,7 @@ Nothing tunes itself.
 
 ## Status
 
-**894 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**945 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
