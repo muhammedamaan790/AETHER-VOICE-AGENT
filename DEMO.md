@@ -15,7 +15,7 @@ covers setup, the console and the failure paths; that one covers what to say.
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 883 passed, 2 skipped
+python -m pytest -q                 # expect 894 passed, 2 skipped
 python -m aether.prewarm            # warms the process; prints what it cost
 ```
 
@@ -102,8 +102,10 @@ Two lines worth saying out loud, because they are the claim:
 - `stale leaks: 0` is the golden invariant, live.
 - The interruption class shown is deterministic — closed sets, no model, no confidence score.
   Anything it does not recognise exactly falls through to REPLACEMENT, which fences.
-- If asked "does the phone path work": **it has not been validated.** The bridges are proven against
-  synthetic audio and the fence is proven on the laptop; the call itself is unverified.
+- If asked "does the phone path work": **calls connect, are answered, are understood and are
+  transcribed**, and the telephony audio is measured — 28 utterances across three calls, which is
+  what moved the speech floor from 35 to 2500. What is **not** separately measured is STT word
+  accuracy on narrowband audio. Say that distinction rather than blurring it.
 
 ---
 
@@ -116,14 +118,16 @@ Two lines worth saying out loud, because they are the claim:
 | Verdict is `vad` | The report prints `peak_rms` / `floor_rms` next to `speech_floor`. Set `AETHER_SPEECH_FLOOR` from that and restart. Do not guess it |
 | Verdict is `stt` | Speech was heard, words were not. Nothing to tune live — fall back to the local console |
 | Rime rejects a turn | The turn is discarded and the session survives. There is **no fallback voice** by design; say so |
-| The whole call path fails | **Switch to `python -m aether.web`.** The same brain, the same menu, the same fence, the same console — with a microphone instead of a phone. Say plainly that telephony is unvalidated |
+| The whole call path fails | **Switch to `python -m aether.web`.** The same brain, the same hotel database, the same fence, the same console — with a microphone instead of a phone. Say plainly that the call failed and this is the same system on a different input |
 | Console will not bind its port | `AETHER_WEB_HTTP_PORT` / `AETHER_WEB_WS_PORT`, or `AETHER_WEB=0` to run the call without a UI |
 
 ---
 
 ## What not to claim
 
-- That a real call has been measured. It has not.
+- That STT word accuracy on narrowband telephony audio has been measured. It has not.
+- That any particular trace is telephony evidence. A trace does not record whether its audio came
+  from the phone or the microphone, so only runs identified as calls at the time count.
 - That `mistv3` sounds better than `mistv2`. Only that it reached first audio sooner and speaks
   ~15% longer, in both recorded runs.
 - That the ~1.2 s menu-path turn projection is a measurement. It is arithmetic on laptop numbers.

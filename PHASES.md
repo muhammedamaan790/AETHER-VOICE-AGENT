@@ -99,7 +99,7 @@ made silently:
 
 ### Beyond the original plan (2026-09-08)
 
-- [x] Hotel menu fixture, 8 read-only tools, deterministic routing — `aether/hotel/`
+- [x] Hotel SQLite database, 17 read-only tools, deterministic routing — `aether/hotel/`
 - [x] LiveKit↔AETHER audio bridges, synthetic-verified — `aether/bridge/`
 - [x] Telephony worker: lifecycle, greeting, teardown — `aether/telephony/`
 - [x] One listening toggle + separate INTERRUPT, through the real bridge
