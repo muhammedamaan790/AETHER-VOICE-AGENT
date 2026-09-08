@@ -76,7 +76,11 @@ got, and prints a diagnosis when the call ends.
 | 13 | Point at the evidence strip | Generation, phase, last fence reason, class, latency, **stale leaks: 0** |
 | 14 | Point at the event log | Canonical events scrolling as they are written — the log being produced live |
 | 15 | Hang up | Orb returns to "waiting for a call". The page stays connected; nothing reloads |
-| 16 | Open the trace file named in the recording strip | The whole conversation, on disk |
+| 16 | **Scroll the conversation back up** | The panel scrolls on its own, with a visible bar. The orb and both controls stay put — the console is a fixed frame and only the conversation moves |
+| 17 | Open the trace file named in the recording strip | The whole conversation, on disk |
+
+If the screen looks small, reset the browser zoom to 100% (Ctrl+0) before recording — the console
+is laid out for a full window, and a zoomed-out tab shrinks every label with it.
 
 Two lines worth saying out loud, because they are the claim:
 

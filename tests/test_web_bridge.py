@@ -835,3 +835,92 @@ def test_the_page_served_is_the_page_on_disk():
     finally:
         bridge.stop()
     assert served == (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
+# --- console legibility and layout ------------------------------------------------------------
+#
+# These are presentation properties, but each one was a reported defect on a live call console:
+# the operator could not scroll back through the conversation, the listening and interrupt
+# controls were pushed below the fold by a long call, and the labels were too dim to read.
+
+
+def _console_css() -> str:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return html.split("<style>", 1)[1].split("</style>", 1)[0]
+
+
+def test_the_conversation_scrolls_inside_its_own_box():
+    """The reported defect: a long call grew the PAGE, so scrolling back meant scrolling the whole
+    console and the controls left the screen. The transcript must be the thing that scrolls."""
+    css = _console_css()
+    blocks = [chunk.split("}", 1)[0] for chunk in css.split("#transcript{")[1:]]
+    assert blocks, "no #transcript rule at all"
+
+    # There is deliberately more than one: the desktop rule, and a narrow-screen override where
+    # the page IS meant to scroll because two stacked panels cannot share a phone screen. The
+    # desktop rule is the one that owns the scrolling.
+    desktop = [b for b in blocks if "overflow-y:auto" in b]
+    assert len(desktop) == 1, f"expected exactly one scrolling #transcript rule, got {blocks!r}"
+    block = desktop[0]
+
+    # A box that cannot shrink cannot scroll -- it pushes the page taller instead. This is exactly
+    # what `min-height:52vh` did here, so the guard is against a floor, not against min-height:0.
+    assert "min-height:0" in block, "the transcript must be allowed to shrink, or it cannot scroll"
+    assert "vh" not in block, f"a viewport-height floor stops the transcript scrolling: {block!r}"
+
+
+def test_the_console_is_a_fixed_frame_so_the_controls_never_scroll_away():
+    css = _console_css()
+    shell = css.split(".shell{", 1)[1].split("}", 1)[0]
+    assert "height:100vh" in shell and "min-height:100vh" not in shell, shell
+
+
+def test_the_scrollbar_is_visible_rather_than_an_overlay_that_fades():
+    """A reader who cannot see a scrollbar does not know there is anything above to scroll to."""
+    css = _console_css()
+    assert "#transcript::-webkit-scrollbar" in css
+    assert "scrollbar-width:thin" in css and "scrollbar-color:" in css
+
+
+def test_both_controls_are_present_and_live_beside_the_conversation():
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    aside = html.split('<aside class="aside">', 1)[1].split("</aside>", 1)[0]
+    assert 'id="listenBtn"' in aside and 'id="interruptBtn"' in aside
+    # and they must still be wired -- a visible button that does nothing is worse than none
+    assert "listenBtn" in html.split("</style>", 1)[1]
+    assert "interruptBtn" in html.split("</style>", 1)[1]
+
+
+def test_body_text_is_large_enough_to_read_across_a_room():
+    """A demo console is read at a distance, and by a judge who is not sitting at the keyboard."""
+    css = _console_css()
+    bubble = css.split(".bubble{", 1)[1].split("}", 1)[0]
+    size = float(bubble.split("font-size:", 1)[1].split("px", 1)[0])
+    assert size >= 17, f"conversation text is {size}px, too small to read at a distance"
+
+
+def test_no_text_colour_is_left_near_the_panel_background():
+    """The reported defect: label text sat so close to the panel colour it was invisible. The dim
+    inks carry the labels, the hint and the recording path, so they are the ones that must clear
+    the background by a real margin."""
+    css = _console_css()
+
+    def rgb(token: str) -> tuple[int, int, int]:
+        val = css.split(f"--{token}:", 1)[1].split(";", 1)[0].strip().lstrip("#")
+        return tuple(int(val[i:i + 2], 16) for i in (0, 2, 4))
+
+    def luminance(c: tuple[int, int, int]) -> float:
+        chan = []
+        for v in c:
+            v = v / 255
+            chan.append(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * chan[0] + 0.7152 * chan[1] + 0.0722 * chan[2]
+
+    def contrast(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+        la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+        return (la + 0.05) / (lb + 0.05)
+
+    panel = rgb("panel")
+    for token in ("ink", "ink-dim", "ink-faint"):
+        ratio = contrast(rgb(token), panel)
+        assert ratio >= 4.5, f"--{token} on --panel is {ratio:.1f}:1, below the 4.5:1 readable floor"

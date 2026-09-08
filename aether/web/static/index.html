@@ -22,11 +22,13 @@
 --------------------------------------------------------------------------------------------- */
 :root{
   --bg:#0b0907; --bg-2:#100d0a; --panel:#16120d;
-  --line:rgba(212,169,74,.13); --line-soft:rgba(255,255,255,.06);
-  --gold:#d4a94a; --gold-bright:#eacb84;
-  --ink:#f2ece0; --ink-dim:#a99e8b; --ink-faint:#6f6656;
-  --guest:#1b1b1d; --guest-ink:#e8e4dc;
-  --aether:#3a3016; --aether-ink:#f2e0b0;
+  --line:rgba(212,169,74,.2); --line-soft:rgba(255,255,255,.09);
+  --gold:#e0b75c; --gold-bright:#f5db9a;
+  /* --ink-faint was #6f6656: barely off the #16120d panel, and it carried the labels, the hint
+     text and the recording path. Lifted until each is legible on the panel it actually sits on. */
+  --ink:#faf6ee; --ink-dim:#cdc2ad; --ink-faint:#9d9280;
+  --guest:#232326; --guest-ink:#f4f1ea;
+  --aether:#463a1b; --aether-ink:#fdf0cd;
   --live:#35c76a; --rec:#e2453c;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
   --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
@@ -41,7 +43,14 @@ body{
     radial-gradient(700px 420px at 96% 4%, rgba(212,169,74,.05) 0%, transparent 58%),
     linear-gradient(180deg,var(--bg),var(--bg-2));
 }
-.shell{max-width:1280px;margin:0 auto;padding:20px 22px 26px;display:flex;flex-direction:column;min-height:100vh}
+/* The console is a fixed frame with ONE scroller inside it (the transcript). Before, the shell
+   was min-height:100vh and the transcript min-height:52vh, so a long call grew the page instead
+   of the transcript -- which pushed the orb, START LISTENING and INTERRUPT below the fold exactly
+   when a demo needs them. Now the frame is the viewport and nothing but the conversation moves. */
+.shell{
+  max-width:1680px;margin:0 auto;padding:16px 20px 14px;
+  display:flex;flex-direction:column;height:100vh;min-height:0;
+}
 
 /* ---------------- masthead ---------------- */
 .masthead{
@@ -55,20 +64,20 @@ body{
   border:1.5px solid var(--gold);color:var(--gold-bright);font-family:var(--serif);font-size:22px;
   background:radial-gradient(circle at 35% 30%,rgba(212,169,74,.22),transparent 70%);
 }
-.brand h1{margin:0;font-size:26px;letter-spacing:.22em;font-weight:600;line-height:1.1}
-.brand p{margin:3px 0 0;font-size:10.5px;letter-spacing:.28em;color:var(--ink-faint);text-transform:uppercase}
+.brand h1{margin:0;font-size:31px;letter-spacing:.22em;font-weight:600;line-height:1.1}
+.brand p{margin:4px 0 0;font-size:12px;letter-spacing:.28em;color:var(--ink-dim);text-transform:uppercase}
 .status-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .pill{
   display:inline-flex;align-items:center;gap:9px;padding:10px 18px;border-radius:999px;
   border:1px solid var(--line);background:rgba(255,255,255,.02);
-  font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-dim);white-space:nowrap;
+  font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink);white-space:nowrap;
 }
 .pill.on{border-color:rgba(53,199,106,.35);color:#cfe9d8}
 .pill .bead{width:9px;height:9px;border-radius:50%;background:var(--ink-faint)}
 .pill.on .bead{background:var(--live);box-shadow:0 0 10px rgba(53,199,106,.7)}
-.pill .clock{font-family:var(--mono);letter-spacing:.06em;font-size:14px;color:var(--ink)}
-.rec{display:inline-flex;align-items:center;gap:9px;font-size:11.5px;letter-spacing:.18em;
-     text-transform:uppercase;color:var(--ink-faint);white-space:nowrap}
+.pill .clock{font-family:var(--mono);letter-spacing:.06em;font-size:16px;color:var(--ink)}
+.rec{display:inline-flex;align-items:center;gap:9px;font-size:13px;letter-spacing:.18em;
+     text-transform:uppercase;color:var(--ink-dim);white-space:nowrap}
 .rec .bead{width:9px;height:9px;border-radius:50%;background:var(--ink-faint)}
 .rec.on{color:var(--rec)}
 .rec.on .bead{background:var(--rec);animation:blink 1.5s ease-in-out infinite}
@@ -76,7 +85,7 @@ body{
 
 /* ---------------- body ---------------- */
 .stage{
-  flex:1;display:grid;grid-template-columns:340px 1fr;gap:22px;min-height:0;
+  flex:1;display:grid;grid-template-columns:390px minmax(0,1fr);gap:22px;min-height:0;overflow:hidden;
   padding:22px 26px 26px;border:1px solid var(--line);border-top:1px solid var(--line-soft);
   border-radius:0 0 16px 16px;background:linear-gradient(180deg,rgba(255,255,255,.012),transparent);
 }
@@ -85,88 +94,114 @@ body{
 /* The conversation is FIRST in the DOM -- it is what the call is about and it reads first --
    and grid places it in the right-hand column to match the reference. */
 .conversation{grid-column:2;display:flex;flex-direction:column;min-height:0}
-.aside{grid-column:1;display:flex;flex-direction:column;gap:18px;min-height:0}
-@media (max-width:960px){.conversation,.aside{grid-column:1}}
+.aside{grid-column:1;display:flex;flex-direction:column;gap:16px;min-height:0;overflow-y:auto;padding-right:4px}
+@media (max-width:960px){
+  .conversation,.aside{grid-column:1}
+  /* Below the two-column breakpoint the fixed frame stops helping: two stacked panels cannot both
+     fit a phone screen, so hand scrolling back to the page and let the panels take their height. */
+  html,body{height:auto}
+  .shell{height:auto;min-height:100vh}
+  .stage{overflow:visible}
+  .aside{overflow:visible}
+  #transcript{min-height:60vh}
+}
 
 /* ---------------- caller card ---------------- */
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
            padding:15px 18px;border-bottom:1px solid var(--line-soft)}
-.card-head .label{font-size:10.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-faint)}
+.card-head .label{font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim)}
 .badge{
-  font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;padding:5px 11px;border-radius:999px;
+  font-size:11px;letter-spacing:.18em;text-transform:uppercase;padding:6px 12px;border-radius:999px;
   border:1px solid rgba(212,169,74,.4);color:var(--gold-bright);background:rgba(212,169,74,.08);
   white-space:nowrap;
 }
-.who{display:flex;align-items:center;gap:14px;padding:18px}
+.who{display:flex;align-items:center;gap:14px;padding:16px 18px}
 .avatar{
   width:52px;height:52px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;
   border:1px solid rgba(212,169,74,.35);color:var(--gold-bright);font-size:18px;
   background:radial-gradient(circle at 35% 30%,rgba(212,169,74,.16),rgba(255,255,255,.02));
 }
-.who .name{font-family:var(--serif);font-size:20px;line-height:1.25}
-.who .sub{font-size:12px;color:var(--ink-faint);margin-top:3px;overflow-wrap:anywhere}
-.facts{padding:4px 18px 18px;display:flex;flex-direction:column}
-.fact{display:flex;align-items:center;gap:13px;padding:10px 0;border-top:1px solid var(--line-soft)}
+.who .name{font-family:var(--serif);font-size:24px;line-height:1.25}
+.who .sub{font-size:14px;color:var(--ink-dim);margin-top:4px;overflow-wrap:anywhere}
+.facts{padding:2px 18px 14px;display:flex;flex-direction:column}
+.fact{display:flex;align-items:center;gap:13px;padding:9px 0;border-top:1px solid var(--line-soft)}
 .fact .ico{
   width:34px;height:34px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
   border:1px solid var(--line);background:rgba(255,255,255,.02);color:var(--gold);font-size:14px;
 }
-.fact .k{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-faint);flex:1}
-.fact .v{font-size:13.5px;color:var(--ink);text-align:right;overflow-wrap:anywhere;max-width:58%}
+.fact .k{font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);flex:1}
+.fact .v{font-size:16px;font-weight:600;color:var(--ink);text-align:right;overflow-wrap:anywhere;max-width:58%}
 
 /* ---------------- voice ---------------- */
-.voice{padding:22px 18px 16px;display:flex;flex-direction:column;align-items:center}
-.orb-wrap{width:132px;height:132px;display:grid;place-items:center}
+.voice{padding:16px 18px 12px;display:flex;flex-direction:column;align-items:center}
+.orb-wrap{width:112px;height:112px;display:grid;place-items:center;flex:0 0 auto}
 canvas#orb{width:100%;height:100%;display:block}
-.voice .state{font-family:var(--serif);font-size:19px;margin-top:12px;text-align:center}
-.voice .meta{font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-faint);
+.voice .state{font-family:var(--serif);font-size:23px;margin-top:12px;text-align:center}
+.voice .meta{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);
              margin-top:6px;text-align:center;line-height:1.6}
-.controls{display:flex;flex-direction:column;gap:10px;padding:0 18px 14px}
+.controls{display:flex;flex-direction:column;gap:10px;padding:0 18px 12px;flex:0 0 auto}
 button{font-family:inherit;cursor:pointer;border:none;
        transition:transform .12s,box-shadow .2s,background .2s,opacity .2s}
 button:active{transform:translateY(1px)}
 button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
 #listenBtn{
-  padding:13px;border-radius:11px;font-size:11.5px;font-weight:650;letter-spacing:.18em;
+  padding:16px;border-radius:11px;font-size:14px;font-weight:700;letter-spacing:.18em;
   text-transform:uppercase;color:#1a1305;
   background:linear-gradient(135deg,var(--gold),var(--gold-bright));
   box-shadow:0 8px 24px rgba(212,169,74,.2);
 }
 #listenBtn.stop{background:linear-gradient(135deg,#4a4438,#37322a);color:var(--ink);box-shadow:none}
 #interruptBtn{
-  padding:12px;border-radius:11px;font-size:11px;font-weight:650;letter-spacing:.18em;
-  text-transform:uppercase;color:var(--ink-faint);background:transparent;
-  border:1px solid rgba(226,69,60,.28);
+  padding:15px;border-radius:11px;font-size:13.5px;font-weight:700;letter-spacing:.18em;
+  text-transform:uppercase;color:#f0a49c;background:transparent;
+  border:1px solid rgba(226,69,60,.45);
 }
 #interruptBtn.armed{color:#fff;border-color:transparent;
   background:linear-gradient(135deg,var(--rec),#ef7b4e);box-shadow:0 8px 24px rgba(226,69,60,.28)}
-.hint{font-size:10px;color:var(--ink-faint);text-align:center;line-height:1.7;padding:0 18px 16px;margin:0}
-kbd{font-family:var(--mono);font-size:9.5px;border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+.hint{font-size:11.5px;color:var(--ink-dim);text-align:center;line-height:1.75;padding:0 18px 16px;margin:0}
+kbd{font-family:var(--mono);font-size:11px;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 6px}
 
 /* ---------------- conversation ---------------- */
 .conv-head{display:flex;align-items:center;gap:14px;padding:18px 22px;
            border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
-.conv-head h2{margin:0;font-family:var(--serif);font-size:24px;font-weight:500}
-.conv-head .right{margin-left:auto;font-size:10px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-faint)}
-#transcript{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;min-height:52vh}
+.conv-head h2{margin:0;font-family:var(--serif);font-size:28px;font-weight:500}
+.conv-head .right{margin-left:auto;font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim)}
+/* `min-height:52vh` is gone on purpose: it was what made this box refuse to shrink, and a box
+   that will not shrink cannot scroll -- the page scrolled instead. */
+/* No `scroll-behavior:smooth` here on purpose: the transcript is re-rendered whole on every
+   snapshot, and animating the jump to the bottom would visibly lag a live call. The stick-to-bottom
+   logic already checks whether the reader was at the bottom before it moves anything, so scrolling
+   up to re-read stays put. */
+#transcript{flex:1;min-height:0;overflow-y:auto;padding:24px 26px;display:flex;flex-direction:column}
+
+/* A visible scrollbar, deliberately. The default overlay bar fades out, and a reader who cannot
+   see a scrollbar does not know there is anything above to scroll back to. */
+#transcript::-webkit-scrollbar,.aside::-webkit-scrollbar{width:12px}
+#transcript::-webkit-scrollbar-track,.aside::-webkit-scrollbar-track{
+  background:rgba(0,0,0,.32);border-radius:999px;margin:6px 0}
+#transcript::-webkit-scrollbar-thumb,.aside::-webkit-scrollbar-thumb{
+  background:rgba(224,183,92,.42);border-radius:999px;border:3px solid transparent;background-clip:content-box}
+#transcript::-webkit-scrollbar-thumb:hover,.aside::-webkit-scrollbar-thumb:hover{
+  background:rgba(224,183,92,.72);background-clip:content-box}
+#transcript,.aside{scrollbar-width:thin;scrollbar-color:rgba(224,183,92,.5) rgba(0,0,0,.32)}
 .line{display:flex;flex-direction:column;margin-bottom:16px}
 .line.aether{align-items:flex-end}
 .line.guest{align-items:flex-start}
-.line .tag{font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-faint);
+.line .tag{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);
            margin-bottom:8px;display:flex;align-items:center;gap:9px}
 .line.aether .tag{flex-direction:row-reverse}
-.bubble{max-width:78%;padding:15px 19px;border-radius:14px;font-size:15px;line-height:1.62}
+.bubble{max-width:76%;padding:17px 22px;border-radius:14px;font-size:18px;line-height:1.6}
 .line.aether .bubble{background:var(--aether);color:var(--aether-ink);
   border:1px solid rgba(212,169,74,.24);border-right:2px solid var(--gold)}
 .line.guest .bubble{background:var(--guest);color:var(--guest-ink);border:1px solid var(--line-soft)}
 .line.interrupted .bubble{background:rgba(226,69,60,.08);border:1px dashed rgba(226,69,60,.34);
   color:var(--ink-dim);font-style:italic}
-.line .note{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--rec);margin-top:7px}
+.line .note{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#ff8b82;margin-top:8px}
 .avatar-sm{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;
   border:1px solid var(--line);font-size:11px;color:var(--gold);background:rgba(255,255,255,.02)}
-.empty{color:var(--ink-faint);font-size:13px;text-align:center;margin:auto;line-height:1.9;padding:30px}
+.empty{color:var(--ink-dim);font-size:16px;text-align:center;margin:auto;line-height:1.9;padding:30px}
 .speaking{display:flex;align-items:center;gap:11px;padding:14px 22px;border-top:1px solid var(--line-soft);
-  font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-faint);min-height:44px}
+  font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);min-height:46px}
 .speaking.on{color:var(--gold-bright)}
 .bars{display:inline-flex;align-items:flex-end;gap:2.5px;height:13px}
 .bars i{width:3px;background:currentColor;border-radius:1px;height:4px;opacity:.35}
@@ -176,9 +211,9 @@ kbd{font-family:var(--mono);font-size:9.5px;border:1px solid var(--line);border-
 .speaking.on .bars i:nth-child(4){animation-delay:.45s}
 @keyframes eq{0%,100%{height:4px}50%{height:13px}}
 #recording{padding:11px 22px;border-top:1px solid var(--line-soft);font-family:var(--mono);
-  font-size:10.5px;color:var(--ink-faint);overflow-wrap:anywhere}
+  font-size:12.5px;color:var(--ink-dim);overflow-wrap:anywhere}
 #recording.live{color:#9fd8b4}
-footer{font-size:10px;color:var(--ink-faint);text-align:center;letter-spacing:.06em;line-height:1.8;padding-top:16px}
+footer{font-size:11.5px;color:var(--ink-dim);text-align:center;letter-spacing:.06em;line-height:1.7;padding-top:10px;flex:0 0 auto}
 </style>
 </head>
 <body>

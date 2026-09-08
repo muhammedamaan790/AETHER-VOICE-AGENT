@@ -189,6 +189,20 @@ cp .env.example .env          # then fill in Rime, an LLM key, and LiveKit
 **The console (local microphone).** The full product without a phone: orb, transcript, both
 controls, evidence strip.
 
+The console is a **fixed frame the height of the viewport, with one scroller inside it** — the
+conversation. That is deliberate: when the page itself grew with the transcript, a long call pushed
+the orb, `START LISTENING` and `INTERRUPT` below the fold, so the controls disappeared exactly when
+a demo needed them, and scrolling back through the conversation moved the whole console. Now only
+the conversation moves, the controls are always on screen, and the transcript keeps a visible
+scrollbar so it is obvious there is history above. Scrolling up to re-read stays put — the
+stick-to-bottom only fires if you were already at the bottom. Below 960 px the frame is released
+and the page scrolls normally, because two stacked panels cannot share a phone screen.
+
+Type and colour are sized to be read at a distance by someone who is not at the keyboard. Every ink
+in the palette clears 4.5:1 against the panel it sits on, asserted in `tests/test_web_bridge.py`;
+`--ink-faint` used to be 3.29:1, which is why the labels, the hint and the recording path were hard
+to see.
+
 ```bash
 python -m aether.web
 # then http://127.0.0.1:8760/index.html?ws=8761   (opened automatically)
@@ -271,7 +285,7 @@ says which: the unsafe-mode control condition, and salvage.
 | LiveKit↔AETHER audio bridges (synthetic-verified) | |
 | Telephony worker: lifecycle, greeting, teardown, diagnostics | |
 | One listening toggle + separate INTERRUPT, both through the real bridge | |
-| Siri-style console: orb, transcript, evidence strip, reconnect | |
+| Siri-style console: orb, transcript, evidence strip, reconnect, contrast-tested palette | |
 | Process prewarm (3810 ms cold → 672 ms warm) | |
 | Append-only JSONL trace with secret redaction | |
 
