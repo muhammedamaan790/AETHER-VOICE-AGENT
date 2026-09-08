@@ -37,22 +37,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aether.audio.vad import MicVAD, describe_device            # noqa: E402
 from aether.classify import classify                            # noqa: E402
 from aether.events import EventType                             # noqa: E402
-from aether.hotel import MenuStore                              # noqa: E402
+from aether.hotel import HotelStore                             # noqa: E402
 from aether.hotel.router import route                           # noqa: E402
 from aether.hotel.tools import HOTEL_TOOLS, render              # noqa: E402
 from aether.stt import WhisperSTT                               # noqa: E402
 from aether.tools import ToolRunner                             # noqa: E402
 from aether.trace import Trace                                  # noqa: E402
 
-# The exact phrases the demo depends on. Spoken in this order, they exercise every menu tool the
-# product uses plus one sentence that must fall through to the model.
+# The exact phrases the demo depends on. Spoken in this order, they exercise the menu, the rooms
+# and the hotel's timings, plus one sentence that must fall through to the model. Every one of them
+# is answerable from `data/aether_hotel.db`; the last is deliberately not.
 PHRASES = [
     "What starters do you have?",
     "How much is the chicken kebab?",
     "Do you have vegetarian mains?",
-    "Is the seafood platter available?",
-    "The chicken kebab is three hundred and eighty rupees.",
-    "What time do you close?",
+    "Is the fish curry available?",
+    "Is room three oh five free?",
+    "What time is check in?",
+    "Can I book a table for eight?",
 ]
 
 # int16 full scale. A capture that reaches this is clipped, and clipping is the one audio fault
@@ -205,7 +207,7 @@ def main() -> None:
     trace = Trace()
     mic = MicVAD(trace, device=args.input_device)
     stt = WhisperSTT(trace, model_size=args.stt_model)
-    tools = ToolRunner(trace, MenuStore(), tools=HOTEL_TOOLS)
+    tools = ToolRunner(trace, HotelStore(), tools=HOTEL_TOOLS)
 
     expected = list(PHRASES) if args.phrases else []
     limit = args.count or (len(expected) if expected else 0)

@@ -118,7 +118,7 @@ each names itself.
 | `aether/spike.py` — the voice loop | Implemented and **run end to end headless** (`scripts/bench_turn.py`: WAV → STT → Gemini → Rime WS3 → AudioGate, 3/3 turns spoke), and since run with a live microphone. Now also carries the classifier hook and the listening controls. **Never run over a real phone call** |
 | `aether/classify/` — six-class classifier | **Implemented, tested, wired (2026-09-08).** Closed sets, whole-utterance matching, no model, no confidence score. Runs after STT and **before** `begin_turn`, because allocation is what fences. `BACKCHANNEL` and `STATUS_QUERY` withhold a turn entirely; `CANCEL` fences with no successor; the other three proceed and label `TaskReplaced`. Anything unrecognised falls to `REPLACEMENT`, which fences |
 | Supervisor transitions | **Implemented for all six classes** in `Day1Spike.handle_utterance` / `_resolve_without_a_turn`, emitting `InterruptionClassified`, `BackchannelDetected`, `TaskReplaced` and `CancellationResolved`. There is still no separate supervisor *module*: the transitions live at the turn boundary, and `GenerationRegistry` remains the authority. **Salvage is not implemented and is not faked** |
-| `aether/hotel/` — menu fixture, tools, router | **Implemented, tested, wired (2026-09-07/08).** 29 dishes across four categories with price, diet, spice, allergens and availability; 8 read-only tools through the existing `ToolRunner`; deterministic keyword/slot routing with spoken templates. Menu facts never reach the LLM |
+| `aether/hotel/` — database, tools, router | **Implemented, tested, wired (2026-09-07/08; SQLite from 2026-09-08).** `data/aether_hotel.db` is the source of truth: 12 menu items across five categories, 50 rooms, 5 room types, 6 services, hotel timings and 3 reservations. Opened `mode=ro`, so writes are refused by the driver. 17 read-only tools through the existing `ToolRunner`; deterministic keyword/slot routing with spoken templates. Hotel facts never reach the LLM. Replaced a hand-written 29-dish fixture — prices moved, and the spice column does not exist, so `spice_of`/`find_by_spice` were removed rather than faked |
 | `aether/bridge/`, `aether/telephony/` — LiveKit transport | **Implemented, tested against synthetic audio only.** `InboundBridge`/`OutboundBridge` carry a transport into the unchanged pipeline; the worker uses `livekit.rtc` directly and never `AgentSession`. **No successful phone call has been made** |
 | `aether/prewarm.py` — process warm-up | **Implemented, measured.** 3810 ms cold, 672 ms warm; run before the worker registers |
 | `aether/telephony/diagnostics.py` — failure-stage report | **Implemented, tested.** Names the first stage that produced nothing, from bridge counters and the trace |
@@ -311,6 +311,10 @@ Still `<from_run>` and must not be quoted:
 - **An explicit price question containing a spice word answered about heat.** Ordering `spice_of`
   before `price_of` in the router meant "how much is the hot chicken kebab" returned a spice
   level. Price now wins; a spice question with no price words still reaches `spice_of`.
+  *Superseded 2026-09-08:* the database has no spice column, so `spice_of` and `find_by_spice` were
+  removed rather than faked. "Is it spicy?" now reaches `describe_item`, which reads the hotel's own
+  description back. The ordering fix still stands and is still tested — price must beat description
+  — because STT inserts "hot" and "medium" readily.
 
 - **The model volunteered rooms, stays and invented facts.** Live web test: "Hello, how are you
   doing today?" came back as "...how can I help make your stay comfortable today?", and "what time

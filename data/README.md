@@ -1,3 +1,68 @@
+# Data
+
+Two datasets, and they are not the same kind of thing. `aether_hotel.db` is the **hotel product**'s
+source of truth and is real to the demo; the warehouse fixture below belongs to the older
+warehouse-assistant path and is a hand-written constant.
+
+---
+
+# The hotel database — `aether_hotel.db`
+
+**The source of truth for every hotel fact AETHER states.** SQLite, 11 tables and 3 views, opened
+read-only. If it is not in this file, AETHER does not say it.
+
+| Table | Rows |
+|---|---|
+| `menu_items` | 12 (2 deliberately unavailable) |
+| `menu_categories` | 5 — starters, mains, vegetarian mains, desserts, drinks |
+| `rooms` | 50 — 101–510 across 5 floors |
+| `room_types` | 5 — 6 500 to 15 000 INR a night |
+| `hotel_services` | 6 |
+| `hotel` | 1 — check-in 14:00, check-out 12:00, INR |
+| `guests` / `reservations` | 4 / 3 |
+| `service_requests` / `restaurant_orders` / `restaurant_order_items` | 0 / 2 / 4 |
+
+Views `available_menu`, `available_rooms` and `current_reservations` exist in the file; the code
+reads the base tables and filters in Python, so availability logic is testable without a database
+round-trip.
+
+`schema.sql` and `seed.sql` in [`hotel_db/`](hotel_db/) are the files the database was built from,
+kept for regeneration and for reading the column definitions without opening SQLite.
+
+## Read-only, and enforced
+
+[`aether/hotel/db.py`](../aether/hotel/db.py) opens the file as `file:...?mode=ro` via the SQLite
+URI, so an `INSERT` raises `OperationalError` from the driver. That is a property of the connection,
+not a convention a future edit could quietly drop, and a test asserts it. There is no tool that
+creates, cancels or modifies anything: reservations, orders and room changes are **not** implemented.
+Every tool result is stamped `mutates: false`.
+
+`state_version` is therefore fixed at `0` — it exists because `ToolRunner` stamps it onto every
+result, and a read-only world never advances it.
+
+## What changed when this replaced the Python fixture
+
+Not cosmetic, and worth knowing when reading older traces or test names:
+
+| | Old fixture | This database |
+|---|---|---|
+| Menu size | 29 dishes | 12 items |
+| Chicken Kebab | 380 | 420 |
+| Categories | starters, mains, desserts, drinks | + **vegetarian mains** as its own category |
+| Spice level | a column, and a `find_by_spice` tool | **does not exist** |
+| Sold out | seafood platter, gulab jamun | Fish Curry, Vegetable Samosa |
+
+Because there is no spice column, `find_by_spice` and `spice_of` were removed rather than faked.
+"Is it spicy?" now routes to `describe_item`, which reads the hotel's own description back. "Do you
+have anything mild?" routes nowhere and reaches Gemini, which is given the whole menu.
+
+Deterministic: no randomness, no clocks, no IDs derived from time. Two runs a week apart produce
+byte-identical answers, which is what makes a demo rehearsable and a test meaningful.
+
+No data here is real. It is synthetic and invented for the demo.
+
+---
+
 # Synthetic warehouse fixture
 
 **Implemented.** The fixture itself lives in [`aether/warehouse/__init__.py`](../aether/warehouse/__init__.py)

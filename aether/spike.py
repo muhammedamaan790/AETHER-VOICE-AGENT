@@ -44,7 +44,7 @@ from .audio.vad import MicVAD, describe_device
 from .classify import classify
 from .config import RuntimeConfig
 from .conversation import ConversationHistory
-from .hotel import MenuStore
+from .hotel import HotelStore
 from .hotel.router import route as route_menu
 from .hotel.tools import HOTEL_TOOLS, render
 from .events import EventType
@@ -149,7 +149,7 @@ class Day1Spike:
         # The hotel menu, and the runner that executes its tools under the SAME fencing the audio
         # path uses. Deterministic lookups answer menu questions without the LLM; anything the
         # router is not confident about still goes to Gemini.
-        self.menu = MenuStore()
+        self.menu = HotelStore()
         self.tools = ToolRunner(trace, self.menu, tools=HOTEL_TOOLS)
         # Sentence streaming is additive; set AETHER_LLM_STREAMING=0 to use the
         # settled blocking path with its retry behaviour.

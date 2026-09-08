@@ -20,6 +20,7 @@ import pytest
 
 from aether.bridge import AudioChunk, InboundBridge, OutboundBridge
 from aether.events import EventType
+from aether.hotel import HotelStore
 from aether.trace import Trace
 
 AUDIO = np.zeros(16000, np.int16)
@@ -184,7 +185,10 @@ def test_start_after_an_interrupted_response_works_immediately(spike):
     assert spike.listening is True
 
     spike.handle_utterance(AUDIO, 0.0)          # the next question is answered normally
-    assert "gulab jamun" in spike.rime.spoken[-1]
+    spoken = spike.rime.spoken[-1]
+    assert "desserts" in spoken.lower(), "the new question was answered, not the old one"
+    for item in HotelStore().in_category("desserts"):
+        assert item.name in spoken
 
 
 def test_the_toggle_reports_the_state_it_reached_not_the_one_requested(spike):
@@ -314,7 +318,10 @@ def test_interrupt_then_an_immediate_new_request_is_answered(spike):
 
     assert spike.gens.active.id != first
     assert spike.gens.get(first).status.value == "fenced"
-    assert "gulab jamun" in spike.rime.spoken[-1]
+    spoken = spike.rime.spoken[-1]
+    assert "desserts" in spoken.lower(), "the new question was answered, not the old one"
+    for item in HotelStore().in_category("desserts"):
+        assert item.name in spoken
     assert spike._trace_for_test.all(EventType.RESULT_LEAKED) == []
 
 

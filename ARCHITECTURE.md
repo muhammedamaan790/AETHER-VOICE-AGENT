@@ -283,10 +283,14 @@ asserting the result is discarded, `ResultLeaked` is absent, and nothing enters 
 
 Two task paths, one supervisor:
 
-- **Hotel menu tools** — deterministic lookups over the structured menu in `aether/hotel/`
-  (category, price, diet, availability, allergens, spice level). Tools accept an injectable delay
-  so delayed-result races are reproducible. A parallel warehouse fixture (`aether/warehouse/`)
-  remains as the second domain that proves the runner is domain-agnostic.
+- **Hotel tools** — deterministic, read-only lookups over `data/aether_hotel.db` via
+  `aether/hotel/` (menu with category, price, diet, allergens and availability; fifty rooms and
+  five room types; services; check-in and check-out times; reservations). The database is opened
+  `mode=ro`, so a write is refused by SQLite rather than by convention. Tools accept an injectable
+  delay so delayed-result races are reproducible. The warehouse fixture (`aether/warehouse/`)
+  remains as the second domain that proves the runner is domain-agnostic — and, because it is the
+  only **mutable** store, it is what keeps the fenced-mutation path under test. The read-only hotel
+  structurally cannot exercise "the mutation never landed".
 - **LLM knowledge path** — general Q&A. In controlled tests it is backed by a deterministic stub so
   fixtures are reproducible; the live demo uses the real model.
 

@@ -22,26 +22,50 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from . import MENU, Category
+from .db import HotelStore
 
-# Longest-first, so "main course" wins over "main" and "non vegetarian" over "vegetarian".
-_CATEGORY_WORDS: tuple[tuple[str, Category], ...] = tuple(sorted(
-    (
-        ("starters", Category.STARTERS), ("starter", Category.STARTERS),
-        ("appetisers", Category.STARTERS), ("appetizers", Category.STARTERS),
-        ("appetiser", Category.STARTERS), ("appetizer", Category.STARTERS),
-        ("main course", Category.MAINS), ("main courses", Category.MAINS),
-        ("mains", Category.MAINS), ("main", Category.MAINS), ("entree", Category.MAINS),
-        ("desserts", Category.DESSERTS), ("dessert", Category.DESSERTS),
+# The store the router reads its vocabulary from. Dish names, categories and room types all come
+# from the database, so adding a dish or a room type needs no code change here. Built once at
+# import: the router is a pure function of the sentence and the hotel's shape, and the shape does
+# not change while the process runs (the database is read-only).
+_STORE = HotelStore()
+
+# Longest-first, so "main course" wins over "main" and "vegetarian mains" over "mains".
+_CATEGORY_WORDS: tuple[tuple[str, str], ...] = tuple(sorted(
+    [(c, c) for c in _STORE.categories()] + [
+        ("starter", "starters"), ("appetisers", "starters"), ("appetizers", "starters"),
+        ("appetiser", "starters"), ("appetizer", "starters"),
+        ("main course", "mains"), ("main courses", "mains"), ("main", "mains"),
+        ("entree", "mains"),
+        ("vegetarian main", "vegetarian mains"), ("veg mains", "vegetarian mains"),
+        ("dessert", "desserts"),
         # STT spellings, not English. `base.en` transcribed a caller's "dessert" as "Desert" on a
         # real call; the router missed, the model answered, and it invented three dishes and three
         # prices that do not exist. A missing letter must not be able to do that.
-        ("deserts", Category.DESSERTS), ("desert", Category.DESSERTS),
-        ("sweets", Category.DESSERTS), ("sweet", Category.DESSERTS),
-        ("pudding", Category.DESSERTS), ("puddings", Category.DESSERTS),
-        ("drinks", Category.DRINKS), ("drink", Category.DRINKS),
-        ("beverages", Category.DRINKS), ("beverage", Category.DRINKS),
-    ),
+        ("deserts", "desserts"), ("desert", "desserts"),
+        ("sweets", "desserts"), ("sweet", "desserts"),
+        ("pudding", "desserts"), ("puddings", "desserts"),
+        ("drink", "drinks"), ("beverages", "drinks"), ("beverage", "drinks"),
+    ],
+    key=lambda pair: -len(pair[0]),
+))
+
+# Room types, from the database, longest-first so "standard twin" beats "standard".
+_ROOM_TYPE_WORDS: tuple[tuple[str, str], ...] = tuple(sorted(
+    [(t.name.lower(), t.name) for t in _STORE.room_types()] + [
+        ("suite", "Executive Suite"), ("suites", "Executive Suite"),
+        ("family room", "Family Suite"), ("twin", "Standard Twin"),
+    ],
+    key=lambda pair: -len(pair[0]),
+))
+
+# Hotel services, from the database.
+_SERVICE_WORDS: tuple[tuple[str, str], ...] = tuple(sorted(
+    [(s.name.lower(), s.name) for s in _STORE.services()] + [
+        ("wake up call", "Wake-up Call"), ("wake up", "Wake-up Call"),
+        ("reception", "Front Desk"), ("luggage", "Luggage Assistance"),
+        ("bags", "Luggage Assistance"), ("cleaning", "Housekeeping"),
+    ],
     key=lambda pair: -len(pair[0]),
 ))
 
@@ -100,6 +124,17 @@ _MENU_NOUNS: tuple[tuple[str, str], ...] = (
     ("order", "order"),
 )
 
+# Rooms, services and timings. Each needs its own noun, so a sentence about the menu can never be
+# answered with a room rate.
+_ROOM_WORDS = ("room", "rooms", "suite", "suites", "stay", "night", "nights", "book a room")
+_SERVICE_WORDS_GENERIC = ("service", "services", "facilities", "amenities")
+_CHECKIN_WORDS = ("check in", "check-in", "checkin", "check out", "check-out", "checkout",
+                  "checking in", "checking out", "arrival time", "departure time")
+_RESERVATION_WORDS = ("reservation", "reserved", "booking", "booked", "reservations")
+_STATUS_WORDS = ("free", "available", "vacant", "occupied", "empty", "taken", "ready")
+_DESCRIBE_WORDS = ("tell me about", "what is the", "what is in", "describe",
+                   "what comes with", "like")
+
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
 _AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
 _ALLERGEN_WORDS = ("allerg", "contain", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
@@ -114,7 +149,8 @@ _LIST_WORDS = (
 
 # Dish names longest-first, so "paneer butter masala" is matched before "paneer tikka" could
 # ambiguously grab "paneer".
-_DISH_NAMES: tuple[str, ...] = tuple(sorted((d.name for d in MENU), key=len, reverse=True))
+_DISH_NAMES: tuple[str, ...] = tuple(sorted((i.name.lower() for i in _STORE.menu()),
+                                            key=len, reverse=True))
 
 
 @dataclass(frozen=True)
@@ -164,6 +200,28 @@ def _find_allergen(spoken: str) -> str | None:
     return None
 
 
+def _find_room_number(spoken: str) -> str | None:
+    """Any room number the caller said, spoken or spelled. Existence is NOT checked here.
+
+    Deliberately so. A number the hotel does not have must still reach `room_status`, where the
+    tool raises `UnknownRecord` and AETHER says it cannot find that room. Filtering unknown numbers
+    out here instead sent "is room four one two free" -- a room this hotel does not have -- down to
+    the general availability rule, which cheerfully answered "forty-one rooms are free". Answering
+    a question about a room that does not exist is worse than admitting it does not.
+    """
+    for token in re.findall(r"\b\d{3}\b", spoken):
+        return token
+    # "three oh five", "three zero five" -- how a number is actually said on a phone.
+    digits = {"zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+              "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}
+    words = spoken.split()
+    for i in range(len(words) - 2):
+        trio = [digits.get(w) for w in words[i:i + 3]]
+        if all(trio):
+            return "".join(trio)
+    return None
+
+
 def route(text: str) -> Route | None:
     """Pick a menu tool for this sentence, or None to let the LLM handle it.
 
@@ -179,6 +237,58 @@ def route(text: str) -> Route | None:
     diet = _find_pair(spoken, _DIET_WORDS)
     spice = _find_pair(spoken, _SPICE_WORDS)
     allergen = _find_allergen(spoken)
+
+    room_number = _find_room_number(spoken)
+    room_type = _find_pair(spoken, _ROOM_TYPE_WORDS)
+    service = _find_pair(spoken, _SERVICE_WORDS)
+
+    # ---- rooms, services and timings, before the menu rules --------------------------------
+    #
+    # First because their nouns are unambiguous. "How much is an executive suite" contains a price
+    # word and would otherwise be looked up as a dish; a sentence naming a room type is asking
+    # about a room.
+
+    # A. Check-in and check-out times. Read from the hotel row, so the model never guesses them.
+    if any(word in spoken for word in _CHECKIN_WORDS):
+        return Route("check_in_out", {}, "check-in/out")
+
+    # B. A reservation on a named room.
+    if room_number and any(word in spoken for word in _RESERVATION_WORDS):
+        return Route("reservation_for_room", {"room": room_number}, "room+reservation")
+
+    # C. The status of a named room: "is room three oh five free".
+    if room_number:
+        return Route("room_status", {"room": room_number}, "room number")
+
+    # D. A named service: "when is room service available".
+    if service:
+        return Route("service_hours", {"service": service}, "service")
+
+    # E. What a room type costs, or what comes with it.
+    if room_type:
+        if any(word in spoken for word in ("amenities", "come with", "comes with", "include",
+                                           "included", "facilities", "what is in")):
+            return Route("room_amenities", {"room_type": room_type}, "room type+amenities")
+        if any(word in spoken for word in _PRICE_WORDS) or "rate" in spoken:
+            return Route("room_price", {"room_type": room_type}, "room type+price")
+        if any(word in spoken for word in _STATUS_WORDS):
+            return Route("room_availability", {"room_type": room_type}, "room type+availability")
+        return Route("room_price", {"room_type": room_type}, "room type only")
+
+    # F. Rooms in general: "do you have anything free tonight", "what rooms do you have".
+    if any(word in spoken for word in _ROOM_WORDS):
+        if any(word in spoken for word in _STATUS_WORDS):
+            return Route("room_availability", {}, "rooms+availability")
+        if any(word in spoken for word in _LIST_WORDS) or any(
+                word in spoken for word in _PRICE_WORDS):
+            return Route("list_room_types", {}, "room types")
+
+    # G. Services in general: "what services do you offer".
+    if (any(word in spoken for word in _SERVICE_WORDS_GENERIC)
+            and any(word in spoken for word in _LIST_WORDS)):
+        return Route("list_services", {}, "services")
+
+    # ---- the menu rules ---------------------------------------------------------------------
 
     # 1. Allergens about a named dish. First because it is the answer that matters most to get
     #    right, and because "does X contain nuts" also contains price-ish and list-ish words.
@@ -197,11 +307,13 @@ def route(text: str) -> Route | None:
     if dish and any(word in spoken for word in _PRICE_WORDS):
         return Route("price_of", {"dish": dish}, "dish+price")
 
-    # 4. How hot a named dish is. Before the bare-dish fallback: "is the chicken kebab spicy"
-    #    names a dish and no price words, so it used to be answered with a price -- a confidently
-    #    wrong answer to a question about heat.
-    if dish and spice is not None:
-        return Route("spice_of", {"dish": dish}, "dish+spice")
+    # 4. "Is the chicken kebab spicy?" / "tell me about the paneer tikka".
+    #
+    #    THE DATABASE RECORDS NO SPICE LEVEL -- only a prose description. So this reads the hotel's
+    #    own description back rather than inventing a heat rating. Still before the bare-dish
+    #    fallback, because a question about what a dish IS must not be answered with its price.
+    if dish and (spice is not None or any(w in spoken for w in _DESCRIBE_WORDS)):
+        return Route("describe_item", {"dish": dish}, "dish+describe")
 
     # 5. A dish named with no other signal -- treat as "tell me about it", which is its price.
     if dish:
@@ -213,26 +325,23 @@ def route(text: str) -> Route | None:
     if allergen and any(word in spoken for word in _AVOIDANCE_WORDS):
         params: dict[str, object] = {"allergen": allergen}
         if category is not None:
-            params["category"] = category.value
+            params["category"] = category
         return Route("safe_for", params, "allergen avoidance")
 
     # 7. Dietary request, optionally narrowed to a category.
     if diet:
         params = {"diet": diet}
         if category is not None:
-            params["category"] = category.value
+            params["category"] = category
         return Route("find_by_diet", params, "diet")
 
-    # 8. Spice request, optionally narrowed.
-    if spice and any(word in spoken for word in _LIST_WORDS):
-        params = {"spice": spice}
-        if category is not None:
-            params["category"] = category.value
-        return Route("find_by_spice", params, "spice")
+    # (There is no "find everything mild" rule. The database records no spice level, and filtering
+    #  a menu by a column that does not exist is not something to fake -- such a question falls
+    #  through to the model, which is told the menu and told never to invent.)
 
     # 9. A whole category.
     if category is not None and any(word in spoken for word in _LIST_WORDS):
-        return Route("list_category", {"category": category.value}, "category")
+        return Route("list_category", {"category": category}, "category")
 
     # 10. The broadest menu question, and usually the FIRST one a caller asks: "what's on the
     #     menu", "what type of dishes are available", "what can I order". Answered from the
