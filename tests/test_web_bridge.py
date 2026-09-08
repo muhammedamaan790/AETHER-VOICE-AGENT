@@ -740,7 +740,13 @@ def test_the_ports_bind_once_across_many_calls():
 def test_the_ui_renders_the_waiting_and_recording_states():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     assert "call_active" in html, "the page must distinguish no-call from listening"
-    assert "Waiting for a call" in html
+    # A distinct no-call ORB STATE, not a particular wording. The copy changed with the console
+    # restyle; what must not change is that the page has somewhere honest to sit before a call,
+    # rather than falling through to "listening".
+    assert "waiting:" in html, "the orb needs a state for 'no call yet'"
+    assert 'call_active === false) return "waiting"' in html, (
+        "and no-call must map to it, not to a listening state"
+    )
     # The page keys off `call_active`, not off the phase string, so `no_call` is deliberately
     # absent here -- `test_detach_reports_no_call_rather_than_claiming_to_listen` pins that end.
     assert "recording" in html, "the trace path must stay visible -- it is the saved-log proof"
