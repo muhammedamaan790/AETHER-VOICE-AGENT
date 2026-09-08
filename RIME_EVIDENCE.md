@@ -491,7 +491,7 @@ Every utterance the VAD saw on that call:
 
 | Item | Laptop value | Real-call value |
 |---|---|---|
-| `AETHER_SPEECH_FLOOR` | 35 | **35 — unchanged, and correct.** See below |
+| `AETHER_SPEECH_FLOOR` | 35 | **2500** — derived from 28 utterances across 3 calls |
 | Inbound `peak_rms` during speech | 8422–12441 | **6372–10174** |
 | Inbound `floor_rms` (ambient) | 3.6–24.8 | **4.1–13.1** |
 | Line noise peak (rejected) | — | **12.9–15.8** |
@@ -499,7 +499,31 @@ Every utterance the VAD saw on that call:
 | Endpointing (trailing silence) | 500 ms | 500 ms — every utterance endpointed |
 | STT word accuracy | — | `<from_run>` — audio was garbled by the transport defect |
 
-**The prediction that thresholds would not transfer was WRONG, and that is worth stating plainly.**
+**CORRECTED 2026-09-08 after two further calls.** The paragraph below was written from the first
+call alone, where line noise happened to sit at 12.9-15.8 RMS. Two later calls showed noise reaching
+**1986** -- call-setup bursts and carrier artefacts that the first call did not contain. Against a
+floor of 35, eleven of fifteen noise utterances were accepted, transcribed by Whisper into
+hallucinations ("Good job.", "We'll see you in the next one.") and answered as if the caller had
+said them.
+
+Pooling all 28 utterances from three calls gives a clean separation:
+
+| | n | min | max |
+|---|---|---|---|
+| Real speech | 13 | **5560.3** | 14971.0 |
+| Noise / hallucination | 15 | 12.1 | **1986.2** |
+
+A factor of 2.8 between the loudest noise and the quietest real speech. **`AETHER_SPEECH_FLOOR` is
+now 2500**, which admits 0 of 15 noise utterances and loses 0 of 13 real ones. Any value in
+2000-3500 achieves that; 2500 is biased toward the low end because dropping genuine speech is the
+worse failure (RULES.md R2.3), leaving 1.26x margin above the loudest observed noise and 2.2x below
+the quietest observed speech.
+
+This is the recalibration the plan predicted would be needed. The original claim below is left in
+place, struck through by this note, because being wrong in public is the point of an evidence file.
+
+~~**The prediction that thresholds would not transfer was WRONG, and that is worth stating
+plainly.**~~
 Telephony speech peaked at 6372–10174 RMS against a floor of 35 — a margin of 180x to 290x, close
 to the laptop's own 8422–12441. Line noise sat at 12.9–15.8 and was correctly rejected. `35` was
 derived on a laptop and happens to be right for this carrier and handset.
