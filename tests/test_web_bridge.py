@@ -728,3 +728,47 @@ def test_the_ui_renders_the_waiting_and_recording_states():
     assert "recording" in html
     for key in ("FEED_MAX", "pushFeed", "clearFeed"):
         assert key in html, f"the live event feed needs {key}"
+
+
+def test_an_idle_console_stops_re_sending_the_same_snapshot():
+    """The pump ticks five times a second so live `phase` changes reach the browser with no event
+    to carry them. It must not RESEND an unchanged snapshot: with the worker's DEBUG logging on,
+    an idle console printed several lines a second to the terminal and buried the call's own
+    output."""
+    bridge = WebBridge()
+    sent = []
+    bridge._broadcast_raw = lambda data: sent.append(data)
+
+    for _ in range(10):
+        bridge._broadcast_state()
+    assert len(sent) == 1, "the first snapshot goes out, the nine identical ones do not"
+
+    bridge.state.apply({"type": "SpeechOnset"})
+    bridge._broadcast_state()
+    assert len(sent) == 2, "a real change is always delivered"
+
+
+def test_attach_and_detach_always_deliver_the_next_snapshot():
+    """A call starting or ending is exactly when the browser must not be left on a stale screen."""
+    bridge = WebBridge()
+    sent = []
+    bridge._broadcast_raw = lambda data: sent.append(data)
+    bridge._broadcast_state()
+
+    _attach(bridge, _Spike("a"), trace=Trace())
+    bridge._broadcast_state()
+    assert len(sent) == 2
+
+    bridge.detach()
+    bridge._broadcast_state()
+    assert len(sent) == 3
+
+
+def test_the_worker_silences_transport_chatter():
+    """`dev` mode sets the ROOT logger to DEBUG, which turns on every third-party logger too."""
+    import inspect
+
+    from aether.telephony import agent
+
+    src = inspect.getsource(agent.start_console)
+    assert "websockets" in src and "logging.WARNING" in src

@@ -252,6 +252,15 @@ def start_console() -> WebBridge | None:
     global _console
     if os.environ.get("AETHER_WEB", "1").strip() == "0":
         return None
+
+    # LiveKit's `dev` mode sets the ROOT logger to DEBUG, which turns on every third-party logger
+    # too. `websockets` then logs a line per frame, and the console pushes a state snapshot to each
+    # open tab -- so an idle worker printed several lines a second and a real call's [1/7]..[7/7]
+    # stages were buried in handshake dumps. These two are transport chatter with no diagnostic
+    # value here; AETHER's own logger and LiveKit's are untouched.
+    for noisy in ("websockets", "websockets.server", "websockets.client", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     try:
         _console = WebBridge(
             http_port=int(os.environ.get("AETHER_WEB_HTTP_PORT", "8760")),
