@@ -93,7 +93,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-08: 653 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-08: 894 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -119,7 +119,7 @@ each names itself.
 | `aether/classify/` — six-class classifier | **Implemented, tested, wired (2026-09-08).** Closed sets, whole-utterance matching, no model, no confidence score. Runs after STT and **before** `begin_turn`, because allocation is what fences. `BACKCHANNEL` and `STATUS_QUERY` withhold a turn entirely; `CANCEL` fences with no successor; the other three proceed and label `TaskReplaced`. Anything unrecognised falls to `REPLACEMENT`, which fences |
 | Supervisor transitions | **Implemented for all six classes** in `Day1Spike.handle_utterance` / `_resolve_without_a_turn`, emitting `InterruptionClassified`, `BackchannelDetected`, `TaskReplaced` and `CancellationResolved`. There is still no separate supervisor *module*: the transitions live at the turn boundary, and `GenerationRegistry` remains the authority. **Salvage is not implemented and is not faked** |
 | `aether/hotel/` — database, tools, router | **Implemented, tested, wired (2026-09-07/08; SQLite from 2026-09-08).** `data/aether_hotel.db` is the source of truth: 12 menu items across five categories, 50 rooms, 5 room types, 6 services, hotel timings and 3 reservations. Opened `mode=ro`, so writes are refused by the driver. 17 read-only tools through the existing `ToolRunner`; deterministic keyword/slot routing with spoken templates. Hotel facts never reach the LLM. Replaced a hand-written 29-dish fixture — prices moved, and the spice column does not exist, so `spice_of`/`find_by_spice` were removed rather than faked |
-| `aether/bridge/`, `aether/telephony/` — LiveKit transport | **Implemented, tested against synthetic audio only.** `InboundBridge`/`OutboundBridge` carry a transport into the unchanged pipeline; the worker uses `livekit.rtc` directly and never `AgentSession`. **No successful phone call has been made** |
+| `aether/bridge/`, `aether/telephony/` — LiveKit transport | **Implemented, tested against synthetic audio only.** `InboundBridge`/`OutboundBridge` carry a transport into the unchanged pipeline; the worker uses `livekit.rtc` directly and never `AgentSession`. **Calls now connect, are answered, are understood and are transcribed** — telephony audio measured from 28 utterances across three calls, which is what moved the speech floor from 35 to 2500. STT word accuracy on narrowband audio is still not separately measured |
 | `aether/prewarm.py` — process warm-up | **Implemented, measured.** 3810 ms cold, 672 ms warm; run before the worker registers |
 | `aether/telephony/diagnostics.py` — failure-stage report | **Implemented, tested.** Names the first stage that produced nothing, from bridge counters and the trace |
 | Fencing / Output Gate | **Audio-side fencing landed early** (pulled forward from Day 4 to fix a real defect): the AudioGate tags every queued chunk with its generation, refuses `enqueue` for a non-active generation, flushes on fence, and drops in-flight chunks in the callback — each recorded as `ResultDiscarded`. The *result*-side Output Gate (tool results, salvage, unsafe mode) is still Day 4 |
@@ -428,8 +428,12 @@ Still `<from_run>` and must not be quoted:
 
 ### Standing limitations
 
-- **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is
-  laptop-derived and expected to need re-deriving on telephony audio.
+- **The real phone path is only partially validated.** Calls connect, are answered, are understood
+  and are transcribed; see RIME_EVIDENCE Part 6. The prediction that laptop thresholds would not
+  transfer was correct and the speech floor was re-derived on telephony audio (35 → 2500). **STT
+  word accuracy on narrowband audio is still not separately measured**, and a trace does not record
+  whether its audio came from the phone or the microphone — so no run can be quoted as telephony
+  evidence unless it was identified as a call at the time.
 - **Salvage does not exist.** A refinement reuses nothing, so it behaves exactly as a replacement
   and only the `TaskReplaced.reason` differs. `ResultSalvaged` is never emitted (RULES.md R8).
 - **`AETHER_UNSAFE_MODE` is inert.** Parsed into `RuntimeConfig` and read by nothing, so the

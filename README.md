@@ -158,8 +158,17 @@ slower answer rather than a fabricated one.
    otherwise.
 2. **Synthetic bridge** — the LiveKit-shaped adapters driven from a WAV or generated audio, with no
    phone in the loop. Proves the plumbing and the fence; proves nothing about telephony.
-3. **Real phone call — NOT YET VERIFIED.** No successful call has been completed. Nothing in this
-   repository is evidence about telephone audio, and no test asserts it.
+3. **Real phone call — PARTIALLY VERIFIED.** Calls connect, are answered, are understood and are
+   transcribed; telephony audio levels are measured from 28 utterances across three calls, and the
+   speech floor was re-derived from them (35 → 2500). Still **not** separately measured: STT word
+   accuracy on narrowband audio.
+
+One thing a trace cannot tell you, and it is worth knowing before quoting any number: **the input
+path is not recorded.** A trace does not say whether its audio came from the telephone or the local
+microphone, and it cannot be inferred afterwards — the event vocabulary is identical on both, and
+`AETHER_SPEECH_FLOOR=2500` is set in `.env` so the telephony-derived floor applies to the laptop
+too. Numbers from `evidence/demo-run.jsonl` are therefore quoted as properties of the pipeline, not
+of the telephone.
 
 **No measurement here is real until it carries a `<from_run>` value.** See
 [RIME_EVIDENCE.md](RIME_EVIDENCE.md).
@@ -279,7 +288,7 @@ Nothing tunes itself.
 
 ## Status
 
-**734 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**894 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
