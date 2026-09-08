@@ -589,3 +589,21 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, *args, **kwargs) -> None:  # noqa: ARG002
         pass
+
+    def end_headers(self) -> None:
+        """Never let a browser hold on to an old console.
+
+        `SimpleHTTPRequestHandler` sends `Last-Modified` and nothing else, which leaves the browser
+        free to reuse whatever it already has. That cost a real debugging round: the page had been
+        rebuilt, the server was serving the new one, and the operator was looking at the old one on
+        a normal reload.
+
+        The console is a single small local page reloaded by hand between runs, so there is nothing
+        to gain by caching it and a whole class of confusion to lose. `no-store` rather than
+        `no-cache`, because `no-cache` still permits a stored copy to be revalidated and this page
+        should simply never be stored.
+        """
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
