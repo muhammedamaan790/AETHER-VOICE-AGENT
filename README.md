@@ -173,6 +173,7 @@ python -m aether.telephony.agent start      # production run
 ```bash
 python -m aether.spike                      # terminal only: ENTER interrupts, m toggles the mic
 python -m aether.prewarm                    # measure model/import warm-up on this machine
+python scripts/diagnose_mic_turn.py --phrases   # say a phrase, see which stage changed it
 python scripts/calibrate_mic.py             # derive AETHER_SPEECH_FLOOR for your microphone
 python scripts/bench_turn.py                # headless end-to-end turn, no mic
 pytest -q

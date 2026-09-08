@@ -370,3 +370,22 @@ def test_a_long_menu_answer_is_capped_so_it_can_be_said_on_a_phone(monkeypatch):
     said = rime.spoken[0]
     assert "plus two more" in said
     assert "chilli garlic squid" not in said, "the tail is summarised, not read out"
+
+
+def test_an_explicit_price_question_is_not_derailed_by_a_stray_spice_word():
+    """REGRESSION. Ordering spice before price made every price question containing "hot" or
+    "medium" answer the wrong question -- and STT inserts those words readily."""
+    for said in ("how much is the hot chicken kebab",
+                 "how much is the medium chicken kebab",
+                 "what is the price of the hot butter chicken",
+                 "how much does the hot paneer tikka cost"):
+        decision = route(said)
+        assert decision is not None and decision.tool == "price_of", said
+
+
+def test_a_spice_question_with_no_price_words_still_asks_about_heat():
+    """The fix must not undo the tool it was added for."""
+    for said in ("is the chicken kebab spicy", "how hot is the chicken kebab",
+                 "is the chicken kebab mild"):
+        decision = route(said)
+        assert decision is not None and decision.tool == "spice_of", said
