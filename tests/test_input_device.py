@@ -177,7 +177,9 @@ def test_detector_behaviour_is_unchanged_by_device_selection(clean_env, monkeypa
 
     assert mic.min_speech_ms == 250.0
     assert mic.noise_snr_margin == 3.0
-    assert mic.onset_frames == 2 and mic.offset_frames == 25
+    from aether.audio.vad import DEFAULT_ENDPOINT_MS
+    assert mic.onset_frames == 2
+    assert mic.offset_frames == round(DEFAULT_ENDPOINT_MS / mic.frame_ms)
 
 
 # --- reporting -----------------------------------------------------------------------------

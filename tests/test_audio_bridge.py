@@ -42,6 +42,16 @@ def speech(seconds: float, sample_rate: int = SR_TRANSPORT, amp: float = 0.35) -
     return (sig / np.abs(sig).max() * amp * 32767).astype(np.int16)
 
 
+def endpoint_silence(mic) -> float:
+    """Seconds of trailing silence that will actually end an utterance on THIS detector.
+
+    Derived rather than hardcoded: the endpoint window is configurable (AETHER_ENDPOINT_MS), and a
+    fixed 1.0 s stopped working the moment it was raised -- leaving these tests asserting on an
+    utterance that had never ended. The extra 15 frames clear webrtcvad's ~6-frame hangover.
+    """
+    return (mic.offset_frames + 15) * mic.frame_ms / 1000.0
+
+
 def silence(seconds: float, sample_rate: int = SR_TRANSPORT) -> np.ndarray:
     return np.zeros(int(sample_rate * seconds), dtype=np.int16)
 
@@ -90,7 +100,7 @@ def test_speech_through_the_bridge_produces_an_utterance():
         bridge.push(chunk)
     for chunk in wav_to_chunks(speech(1.2), SR_TRANSPORT):
         bridge.push(chunk)
-    for chunk in wav_to_chunks(silence(1.0), SR_TRANSPORT):      # trigger the endpoint
+    for chunk in wav_to_chunks(silence(endpoint_silence(mic)), SR_TRANSPORT):
         bridge.push(chunk)
 
     assert not mic.utterances.empty(), "the STT path must be reached from transport audio"
@@ -256,7 +266,7 @@ def test_a_full_call_shaped_exchange_leaks_nothing():
         inbound.push(chunk)
         out.pull()
     barge.fence_now(reason="customer_barge_in")
-    for chunk in wav_to_chunks(silence(1.0), SR_TRANSPORT):
+    for chunk in wav_to_chunks(silence(endpoint_silence(mic)), SR_TRANSPORT):
         inbound.push(chunk)
         out.pull()
 
