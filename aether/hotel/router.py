@@ -152,6 +152,67 @@ _LIST_WORDS = (
 _DISH_NAMES: tuple[str, ...] = tuple(sorted((i.name.lower() for i in _STORE.menu()),
                                             key=len, reverse=True))
 
+# Words that mean something else in a hotel, and must never be read as a menu item however
+# unambiguous they look on the menu. "Is there hot water?" is a question about plumbing, and
+# answering it with the price of a bottle of Mineral Water would be confidently wrong.
+_NOT_SHORTHAND = frozenset({"water"})
+
+
+def _unambiguous_shorthand(names: list[str]) -> dict[str, str]:
+    """Trailing word -> full name, but ONLY where that word names exactly one thing.
+
+    Nobody says "how much is the chocolate brownie" on a phone; they say "the brownie". Every one
+    of the twelve dish shorthands used to miss, and "How much is the kebab?" is in a real trace
+    (traces/, 2026-09-08) falling through to the model.
+
+    The ambiguity rule is the one `HotelStore.find_item` already applies: an ambiguous match raises
+    rather than guesses. So "chicken" is excluded (Butter Chicken AND Chicken Kebab), "masala" is
+    excluded (Paneer Butter Masala AND Masala Chai), and "suite" is excluded (Executive AND Family).
+    Guessing between two dishes is exactly the confident wrong answer this router exists to avoid.
+    """
+    candidates = {name.lower().split()[-1]: name for name in names}
+    shorthand: dict[str, str] = {}
+    for word, name in candidates.items():
+        if word in _NOT_SHORTHAND:
+            continue
+        # Ambiguous if the word appears ANYWHERE in another name, not merely as another trailing
+        # word. "chicken" trails only "Butter Chicken", but it also opens "Chicken Kebab" -- and a
+        # caller saying "the chicken" has named neither one of them.
+        owners = [n for n in names if word in n.lower().split()]
+        if len(owners) == 1:
+            shorthand[word] = name
+    return shorthand
+
+
+_DISH_SHORTHAND: tuple[tuple[str, str], ...] = tuple(sorted(
+    _unambiguous_shorthand([i.name for i in _STORE.menu()]).items(),
+    key=lambda pair: -len(pair[0]),
+))
+
+# Recogniser output, repaired before matching. EVERY entry is a mishearing observed in a real
+# trace; none is invented, and the trace is named beside it. A guessed homophone table would be a
+# second router with no evidence behind it.
+#
+# "suite" is the one that bites, because it is pronounced "sweet" -- `base.en` returns "suit" or
+# "sweet" and the room-type match then misses entirely. In `run-20260908T154108Z` the caller asked
+# "what comes with an executive suite?", it was heard as "executive suit", and the turn fell
+# through to Gemini: 1360 ms of model time on a question the database answers for free.
+#
+# Deliberately anchored to a preceding room-type word. A bare "sweet" must keep meaning DESSERTS
+# (`_CATEGORY_WORDS` maps it, and "what sweets do you have" is a real menu question), so only
+# "executive sweet" and "family suit" are repaired -- never "sweet" on its own.
+_ASR_REPAIRS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(executive|family|deluxe|standard)\s+(?:suit|suits|sweet|sweets)\b"),
+     r"\1 suite"),
+)
+
+
+def _repair_asr(spoken: str) -> str:
+    """Undo known recogniser errors. Normalised text in, normalised text out."""
+    for pattern, replacement in _ASR_REPAIRS:
+        spoken = pattern.sub(replacement, spoken)
+    return spoken
+
 
 @dataclass(frozen=True)
 class Route:
@@ -176,6 +237,11 @@ def _find_dish(spoken: str) -> str | None:
     for name in _DISH_NAMES:
         if name in spoken:
             return name
+    # Then the shorthand a caller actually uses -- "the kebab", "the brownie". Whole words only,
+    # so "chai" cannot be found inside another word.
+    for word, name in _DISH_SHORTHAND:
+        if re.search(rf"\b{re.escape(word)}\b", spoken):
+            return name.lower()
     return None
 
 
@@ -228,7 +294,7 @@ def route(text: str) -> Route | None:
     Order is by specificity, not by frequency: a sentence naming a dish AND asking about allergens
     must go to the allergen tool, not to the price tool, so the narrower rules are tested first.
     """
-    spoken = normalise(text)
+    spoken = _repair_asr(normalise(text))
     if not spoken:
         return None
 
@@ -276,7 +342,13 @@ def route(text: str) -> Route | None:
         return Route("room_price", {"room_type": room_type}, "room type only")
 
     # F. Rooms in general: "do you have anything free tonight", "what rooms do you have".
-    if any(word in spoken for word in _ROOM_WORDS):
+    #
+    #    "room for" is excluded because there "room" is uncountable and means SPACE. On a real call
+    #    "do you have room service" was heard as "Do you have room for this?", and this rule
+    #    answered it with the list of room types -- a confident answer to a question nobody asked.
+    #    Falling through costs a slower answer from a model that has the whole hotel in its prompt;
+    #    answering the wrong question costs the claim.
+    if any(word in spoken for word in _ROOM_WORDS) and "room for" not in spoken:
         if any(word in spoken for word in _STATUS_WORDS):
             return Route("room_availability", {}, "rooms+availability")
         if any(word in spoken for word in _LIST_WORDS) or any(

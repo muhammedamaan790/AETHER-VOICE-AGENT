@@ -448,16 +448,24 @@ Full pipeline construction, for context (`Day1Spike`, warm, no PortAudio streams
 
 ---
 
-## Part 6 — Real phone call — **NOT YET VERIFIED**
+## Part 6 — Real phone call — **PARTIALLY VERIFIED**
 
-**No successful phone call has been completed.** Nothing anywhere in this repository is evidence
-about telephone audio, and no test asserts any. Every row below is a placeholder and must stay one
-until an actual call fills it in.
+**Calls connect, are answered, are understood and are transcribed.** The telephony audio below is
+measured from real calls. What is still *not* separately measured is STT word accuracy on
+narrowband audio, and the interruption table at the end of this part still carries placeholders.
+
+Scope note, because it is easy to overclaim here: the committed run in
+[`evidence/demo-run.jsonl`](evidence/) is 16 turns of real speech through the real pipeline, but
+**the trace does not record whether its audio came from the telephone or the local microphone**, and
+it cannot be inferred afterwards — the event vocabulary is identical on both paths, and
+`AETHER_SPEECH_FLOOR=2500` is set in `.env` so it applies to both. Its latency numbers are therefore
+quoted as pipeline properties, not as telephony properties. The RMS measurements in this part *are*
+telephony, from calls identified as such at the time.
 
 The first attempt reached the worker and AETHER never replied; four defects were found and fixed
 (entrypoint deadlock on an Event only teardown could set; 9051 ms of blocking pipeline construction
 on the event loop; `track_subscribed` registered after `connect()` so the event landed in the gap;
-and no greeting existed). Those fixes are tested. **They have not been exercised by a call.**
+and no greeting existed). Those fixes are tested, and **they have since been exercised by real calls** — the call-path table below is filled in from them.
 
 ### Call path
 
@@ -541,6 +549,49 @@ Still unmeasured: **STT word accuracy on narrowband audio.** Both transcripts fr
 from doubled, interleaved audio, so they say nothing about Whisper on clean telephony. `base.en`
 fell through all six temperature fallbacks (compression ratio 9.82, i.e. near-total repetition) on
 the garbled input — which is evidence of the transport defect, not of narrowband performance.
+
+### Pipeline latency, measured — `evidence/demo-run.jsonl`
+
+Sixteen turns of real speech, real `base.en`, real Gemini, real Rime `/ws3`. Committed, so every
+number here can be recomputed from the file rather than taken on trust. (Input path not recorded —
+see the scope note at the top of this part.)
+
+| Measurement | Median | Min | Max |
+|---|---|---|---|
+| Turn latency (speech ended → answer decided) | **1262 ms** | 1119 | 2549 |
+| Response latency (speech ended → audio playing) | **2455 ms** | 1656 | 3784 |
+| STT (`base.en`) | 927 ms | 841 | 1147 |
+| **Rime first audio (`mistv3`, `astra`, `/ws3`)** | **280 ms** | 270 | 346 |
+
+**11 of 16 turns ran at `llm_ms = 0`** — answered from `data/aether_hotel.db` with no model in the
+path, which is the latency argument for the deterministic router made concrete. **2 generations were
+fenced** and **`ResultLeaked` never appears**: the golden invariant holding on a real run, not only
+in a test.
+
+### Recogniser error, and what the caller heard instead
+
+The most useful part of that run. `base.en` mangled five inputs, and **not one produced a fabricated
+fact**:
+
+| Heard | Spoken back | llm_ms |
+|---|---|---|
+| "How much is a daily speed?" | "I am not quite sure what you mean by a daily speed, but I can help you with our room rates or menu if you like." | 1386 |
+| "How much is deluxe heat?" | "I am not sure what you mean by deluxe heat, but our Deluxe King room is eight thousand five hundred rupees a night." | 1004 |
+| "How much is daylight skis?" | "I am sorry, I did not catch that. Could you please repeat it?" | 1090 |
+| "is room one, three," | "Room numbers run from one oh one to five ten." | 775 |
+| "What comes with an executive suit?" | the exact Executive Suite amenities from the database | 1360 |
+
+Three admitted confusion; two recovered the correct fact from the hotel injected into the prompt by
+`menu_for_prompt`. That is the safety net working on real audio rather than on a phrase somebody
+chose.
+
+Two of those were defects rather than bad luck, and both are fixed with tests
+(`tests/test_hotel_db.py`): `suite` is pronounced "sweet", so the recogniser returns `suit`/`sweet`
+and the room-type match missed — repaired before matching, so the turn now costs 0 ms instead of
+1360 ms. And separately, `"do you have room service"` misheard as `"Do you have room for this?"` was
+being answered with the list of room types; it now falls through. Replaying all 218 distinct
+utterances in `traces/`: **+2 answered deterministically, −1 confidently-wrong answer, 0 rerouted to
+a different tool.**
 
 ### Interruption on a call
 

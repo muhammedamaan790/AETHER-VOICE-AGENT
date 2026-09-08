@@ -1,0 +1,85 @@
+# Committed evidence
+
+## `demo-run.jsonl`
+
+One real run of the demo script — 16 turns, spoken into the pipeline, recorded by the trace writer
+as it happened. It is the artifact behind the latency and safety claims made in
+[`RIME_EVIDENCE.md`](../RIME_EVIDENCE.md) and [`JUDGING.md`](../JUDGING.md).
+
+**Input path: not recorded, so not claimed.** This is real speech through the real pipeline, but the
+trace does not say whether the audio arrived from a telephone or from the local microphone, and it
+cannot be inferred after the fact: the event vocabulary is identical on both paths, and
+`AETHER_SPEECH_FLOOR=2500` — the value derived from three real phone calls — is set in `.env`, so it
+applies to the laptop as well. Everything below is therefore stated as a property of the pipeline,
+not of the telephone. Telephony-specific evidence lives in
+[`RIME_EVIDENCE.md`](../RIME_EVIDENCE.md) Part 6, measured separately.
+
+That the trace cannot answer this is itself a gap, and it is recorded in
+[`JUDGING.md`](../JUDGING.md) rather than papered over.
+
+Traces are normally gitignored (`traces/*.jsonl`). This one is committed on purpose: a claim about
+latency is worth what the file behind it is worth. It was audited for secrets before being added —
+no credential-shaped strings, and no value from `.env` appears anywhere in it. The trace writer's
+own redaction is visible as 48 `<redacted>` markers.
+
+### What it records
+
+| | |
+|---|---|
+| Turns | 16 |
+| TTS | Rime `mistv3`, voice `astra`, transport `ws3` |
+| LLM | `gemini:gemini-flash-lite-latest` |
+| STT | `base.en` |
+
+| Measurement | Median | Min | Max |
+|---|---|---|---|
+| Turn latency (speech ended → answer decided) | **1262 ms** | 1119 | 2549 |
+| Response latency (speech ended → audio playing) | **2455 ms** | 1656 | 3784 |
+| STT | 927 ms | 841 | 1147 |
+| **Rime first audio** | **280 ms** | 270 | 346 |
+
+**11 of the 16 turns ran at `llm_ms = 0`** — answered from `data/aether_hotel.db` with no model call
+at all. **2 generations were fenced** (`TaskReplaced`) and **0 results leaked** (`ResultLeaked`
+never appears), which is the golden invariant holding on a real run rather than in a test.
+
+### The five turns the recogniser mangled
+
+This is the part worth reading. `base.en` misheard five inputs, and not one produced a fabricated
+fact:
+
+| Heard | Spoken back | llm_ms |
+|---|---|---|
+| "How much is a daily speed?" | "I am not quite sure what you mean by a daily speed, but I can help you with our room rates or menu if you like." | 1386 |
+| "How much is deluxe heat?" | "I am not sure what you mean by deluxe heat, but our Deluxe King room is eight thousand five hundred rupees a night." | 1004 |
+| "How much is daylight skis?" | "I am sorry, I did not catch that. Could you please repeat it?" | 1090 |
+| "is room one, three," | "Room numbers run from one oh one to five ten." | 775 |
+| "What comes with an executive suit?" | the exact Executive Suite amenities from the database | 1360 |
+
+Three admitted confusion; two recovered the correct fact from the hotel injected into the prompt.
+None invented a price, a room or a dish. That is the safety net described in
+[`aether/hotel/__init__.py`](../aether/hotel/__init__.py) (`menu_for_prompt`) working on real audio.
+
+### What this run also caused
+
+Two of those mishearings were defects, not bad luck, and both are now fixed in
+`aether/hotel/router.py` with tests in `tests/test_hotel_db.py`:
+
+- *"executive suit"* should never have needed the model. `suite` is pronounced "sweet", so the
+  recogniser returns `suit` or `sweet`; the router now repairs that before matching, and the turn
+  costs 0 ms instead of 1360 ms.
+- Separately, *"Do you have room for this?"* (a mishearing of *"do you have room service"*) was
+  being answered with the list of room types — a confident answer to a question nobody asked. It
+  now falls through.
+
+Replaying all 218 distinct utterances in `traces/` through the router before and after: **2 more are
+answered deterministically, 1 confidently-wrong answer is gone, and 0 utterances changed to a
+different tool.**
+
+### Reading it
+
+```bash
+python -c "import json;[print(e['type'], e.get('text','')) for e in map(json.loads, open('evidence/demo-run.jsonl', encoding='utf-8'))]"
+```
+
+Fields on `ResponseSpoken` carry the per-stage timings (`stt_ms`, `llm_ms`, `tts_ms`,
+`turn_latency_ms`, `response_latency_ms`) and the provider identity used for that turn.

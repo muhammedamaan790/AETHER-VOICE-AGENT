@@ -1,8 +1,9 @@
 # AETHER — demo runbook
 
 The exact sequence, the exact commands, and what to say if something fails. Read
-[RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 6 first: **the real phone path has never been validated**,
-and this runbook does not pretend otherwise.
+[RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 6 first: the phone path **connects, answers, understands
+and transcribes**, measured on real calls — but STT word accuracy on narrowband audio is still not
+separately measured, and this runbook does not pretend otherwise.
 
 **The conversation itself is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md)** — twelve turns, with AETHER's
 exact words quoted from the running system and re-checked by

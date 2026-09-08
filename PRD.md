@@ -10,14 +10,34 @@ spoken as if they were current.
 
 AETHER solves conversation continuity across those interruptions.
 
+**Why this has to be voice.** AETHER answers a hotel's telephone. A phone call has no screen: the
+caller cannot tap a menu, read a price list, scroll back or install anything. There is no fallback
+surface to degrade to, so speech is not a nicer way to reach this product — it is the only way.
+That is also what makes the continuity problem unavoidable rather than academic. On a phone people
+interrupt, change their minds mid-sentence and talk over the answer, and there is no screen still
+showing the previous answer to recover from when they do.
+
 ## 2. Users and context
 
-Primary demo persona: a warehouse worker whose hands and eyes are busy (scanner, pallet, ladder).
-They cannot look at a screen or type. They speak, they change their minds mid-sentence, they ask
-"how many so far?", they say "no, aisle 9 instead".
+**Primary user: someone ringing a hotel.** A guest already staying there, or a prospective one.
+They are on a handset, often mid-task — walking, packing, in a taxi, standing at the door of a
+room. No app, no login, no account, and frequently no shared language with a keyboard.
 
-The engine is domain-agnostic. The warehouse makes voice necessity concrete; general Q&A proves the
-engine is not warehouse-specific.
+What they actually do on the phone, and what the product must survive:
+
+- ask about the restaurant, a room, a rate, a service or a time;
+- say a dish or a room type in shorthand — *"the kebab"*, *"a deluxe"* — not as it appears in any
+  database;
+- change their mind mid-answer and talk over it: *"actually, what rooms do you have?"*;
+- say something the recogniser mangles, because a telephone line is 8 kHz and codec-compressed.
+
+The person on the other end is a duty manager: they answer from what the hotel actually holds, they
+say when they do not know, and they never invent a price or a room. That is the standard AETHER is
+held to, and it is why hotel facts are read from `data/aether_hotel.db` and never phrased by a
+model.
+
+The engine is domain-agnostic. The hotel makes voice necessity concrete; general Q&A proves the
+engine is not hotel-specific, and `aether/warehouse/` remains as a second domain in the tests.
 
 ## 3. Goals
 
@@ -31,7 +51,7 @@ engine is not warehouse-specific.
 
 - A general-purpose voice assistant platform.
 - Multiple domain implementations.
-- A large warehouse application (WMS, auth, dashboards, CRUD).
+- A property-management system (bookings, payments, auth, dashboards, CRUD). Hotel data is **read-only**.
 - Elaborate UI beyond an observability panel and trace output.
 - RAG infrastructure, custom model training, multi-agent architecture.
 - Suspend/resume stacks. (Single-slot suspend/resume is an optional Day-5 stretch only.)
@@ -40,7 +60,8 @@ engine is not warehouse-specific.
 
 ### FR-1 Conversation
 - FR-1.1 Answer general/conversational questions via the LLM knowledge path.
-- FR-1.2 Answer warehouse questions via deterministic tools over the synthetic dataset.
+- FR-1.2 Answer hotel questions via deterministic tools over `data/aether_hotel.db`, read-only,
+  with no model in the path. (`aether/warehouse/` keeps a second, mutable domain under test.)
 
 ### FR-2 Full-duplex audio
 - FR-2.1 The user microphone stays active while the agent is speaking.

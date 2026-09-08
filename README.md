@@ -4,6 +4,9 @@
 ordinary speech, interrupts mid-answer, changes their mind, or tells it to stop — and the
 conversation stays coherent, with a live view of what the system is doing and why.
 
+> **Judging:** [JUDGING.md](JUDGING.md) maps each criterion to the file, test or trace that backs
+> it — including what we did not build and what is not measured.
+
 The product is a hotel voice manager. The engineering problem underneath it is conversation
 continuity during realtime voice interaction: users can interrupt, refine, replace, question, cancel
 or start a new task while the agent is working, **without allowing stale state to become spoken
