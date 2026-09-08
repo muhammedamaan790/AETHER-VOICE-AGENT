@@ -186,6 +186,10 @@ pip install -r requirements.txt
 cp .env.example .env          # then fill in Rime, an LLM key, and LiveKit
 ```
 
+The demo call is scripted word for word in [DEMO_SCRIPT.md](DEMO_SCRIPT.md), with every answer
+quoted from the running system and re-verified by a test, so the sheet cannot drift from the
+database.
+
 **The console (local microphone).** The full product without a phone: orb, transcript, both
 controls, evidence strip.
 
