@@ -374,3 +374,64 @@ def test_the_tap_never_sees_audio_the_listening_gate_dropped():
         bridge.push(AudioChunk(data=np.full(960, 5000, dtype=np.int16), sample_rate=48000))
 
     assert tapped == []
+
+
+# ============================ the console opens itself ============================
+
+@needs_livekit
+def test_the_console_opens_a_browser_on_startup(monkeypatch):
+    """The page must be up BEFORE the phone rings, and a printed link is a step to forget."""
+    import aether.telephony.agent as mod
+
+    opened = []
+    monkeypatch.setenv("AETHER_WEB_HTTP_PORT", "8830")
+    monkeypatch.setenv("AETHER_WEB_WS_PORT", "8831")
+    monkeypatch.delenv("AETHER_WEB_OPEN", raising=False)
+    monkeypatch.setattr(mod.webbrowser, "open", lambda url: opened.append(url))
+    # Fire the delayed open immediately instead of waiting on a real timer.
+    monkeypatch.setattr(mod.threading, "Timer", lambda _delay, fn: type(
+        "T", (), {"start": staticmethod(fn)})())
+
+    console = mod.start_console()
+    try:
+        assert opened == ["http://127.0.0.1:8830/index.html?ws=8831"]
+    finally:
+        console.stop()
+
+
+@needs_livekit
+def test_opening_a_browser_can_be_turned_off(monkeypatch):
+    """A headless worker has no browser, and the attempt would be noise."""
+    import aether.telephony.agent as mod
+
+    opened = []
+    monkeypatch.setenv("AETHER_WEB_HTTP_PORT", "8832")
+    monkeypatch.setenv("AETHER_WEB_WS_PORT", "8833")
+    monkeypatch.setenv("AETHER_WEB_OPEN", "0")
+    monkeypatch.setattr(mod.webbrowser, "open", lambda url: opened.append(url))
+
+    console = mod.start_console()
+    try:
+        assert opened == []
+        assert console is not None, "the console still serves; only the browser is suppressed"
+    finally:
+        console.stop()
+
+
+@needs_livekit
+def test_a_browser_that_will_not_open_does_not_stop_the_worker(monkeypatch):
+    import aether.telephony.agent as mod
+
+    monkeypatch.setenv("AETHER_WEB_HTTP_PORT", "8834")
+    monkeypatch.setenv("AETHER_WEB_WS_PORT", "8835")
+    monkeypatch.delenv("AETHER_WEB_OPEN", raising=False)
+    monkeypatch.setattr(mod.webbrowser, "open",
+                        lambda url: (_ for _ in ()).throw(RuntimeError("no display")))
+    monkeypatch.setattr(mod.threading, "Timer", lambda _delay, fn: type(
+        "T", (), {"start": staticmethod(fn)})())
+
+    console = mod.start_console()
+    try:
+        assert console is not None
+    finally:
+        console.stop()
