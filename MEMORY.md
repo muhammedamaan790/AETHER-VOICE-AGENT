@@ -379,6 +379,24 @@ Still `<from_run>` and must not be quoted:
   Each server now announces that `serve_forever` has begun, and `stop()` waits on that with a
   bounded timeout.
 
+- **The dedup fix is CONFIRMED by a real call** (`run-20260908T041603Z`): the log reads
+  `[4/7] track already has a pump (already-subscribed); not starting a second`, the diagnostics
+  read `transport: pumps=1 frames_failed=0`, and `audio_ms=34620` for a 35-second call -- 1:1,
+  where it was exactly 2:1 before. The captured audio transcribes cleanly.
+- **The speech floor DID need recalibrating after all, and my earlier "it does not" was wrong.**
+  That conclusion came from one call whose line noise happened to sit at 12.9-15.8 RMS. Two later
+  calls showed noise reaching **1986** -- call-setup bursts the first call did not contain. Against
+  a floor of 35, eleven of fifteen noise utterances were accepted and Whisper hallucinated words
+  onto them ("Good job.", "We'll see you in the next one."), which AETHER then answered.
+
+  Pooled across 28 utterances from three calls: real speech 5560-14971, noise 12-1986, a factor of
+  2.8 apart. `AETHER_SPEECH_FLOOR=2500` admits 0 of 15 noise and loses 0 of 13 speech. Biased to
+  the low end of the viable 2000-3500 band because dropping genuine speech is the worse failure
+  (RULES.md R2.3).
+
+  **The lesson is about sample size, not about telephony.** One call is not a calibration, and a
+  threshold that separates cleanly on one call can be wrong by two orders of magnitude on the next.
+
 ### Standing limitations
 
 - **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is
