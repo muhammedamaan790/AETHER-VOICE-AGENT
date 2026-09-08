@@ -35,6 +35,9 @@ class _Mic:
         self.samplerate = 16000
         self.frame_samples = 320           # 20 ms at 16 kHz, as MicVAD uses
         self.resets = 0
+        # The real `MicVAD` hands finished utterances to the turn loop through this queue.
+        import queue as _queue
+        self.utterances = _queue.Queue()
 
     def set_listening(self, value):
         if self.listening and not value:
@@ -366,3 +369,73 @@ def test_the_snapshot_says_whether_anything_is_interruptible():
                             ("interrupted", False)):
         bridge = WebBridge(phase_source=lambda p=phase: p)
         assert bridge.current_state()["interruptible"] is expected
+
+
+# ============================ stale utterances at intake ============================
+#
+# From a real call: one transcription stalled, and three later utterances -- all loud, clear,
+# accepted speech -- sat unread in the queue until the caller hung up. The turn loop is strictly
+# sequential, so anything that blocks it backs everything up behind it. Answering those when the
+# stall cleared would have been worse than dropping them: a reply to something said forty seconds
+# earlier, after several unanswered questions.
+
+def test_a_lone_utterance_is_never_dropped_however_long_it_waited(spike):
+    """No newer speech means nobody has moved on. Answer it, late or not."""
+    from aether.trace import now_ms
+
+    audio = np.zeros(16000, np.int16)          # 1 s
+    ancient = now_ms() - 120_000               # queued two minutes ago
+    assert spike._is_stale_on_intake(audio, ancient) is False
+    assert spike.utterances_dropped_stale == 0
+
+
+def test_two_quick_questions_are_both_answered(spike):
+    """The common case: a caller asks, pauses, asks again. Neither may be lost."""
+    from aether.trace import now_ms
+
+    audio = np.zeros(16000, np.int16)
+    spike.mic.utterances.put((audio, now_ms()))          # a newer one is waiting
+    just_now = now_ms() - 1200                           # spoken a moment ago
+    assert spike._is_stale_on_intake(audio, just_now) is False
+    assert spike.utterances_dropped_stale == 0
+
+
+def test_an_utterance_the_loop_is_far_too_late_for_is_dropped(spike):
+    """Both conditions met: badly stale AND superseded by newer speech."""
+    from aether.trace import now_ms
+
+    audio = np.zeros(16000, np.int16)
+    spike.mic.utterances.put((audio, now_ms()))
+    stalled = now_ms() - 40_000                          # the observed 40-second stall
+    assert spike._is_stale_on_intake(audio, stalled) is True
+    assert spike.utterances_dropped_stale == 1
+
+
+def test_the_bound_sits_clear_of_a_healthy_turn(spike):
+    """Measured on real calls: healthy turns completed in 2798-5922 ms end to end.
+
+    A turn that slow is not a stall, and its follow-up must still be answered.
+    """
+    from aether.spike import STALE_UTTERANCE_MS
+    from aether.trace import now_ms
+
+    assert STALE_UTTERANCE_MS > 5922, "must not fire on the slowest healthy turn observed"
+    audio = np.zeros(16000, np.int16)
+    spike.mic.utterances.put((audio, now_ms()))
+    slow_but_healthy = now_ms() - 1000 - 5922
+    assert spike._is_stale_on_intake(audio, slow_but_healthy) is False
+
+
+def test_dropping_at_intake_fences_nothing(spike):
+    """It is an intake decision. No generation exists for an utterance never read."""
+    from aether.events import EventType
+    from aether.trace import now_ms
+
+    trace = spike._trace_for_test
+    audio = np.zeros(16000, np.int16)
+    spike.mic.utterances.put((audio, now_ms()))
+    spike._is_stale_on_intake(audio, now_ms() - 40_000)
+
+    assert trace.all(EventType.FENCE_REQUESTED) == []
+    assert trace.all(EventType.GENERATION_CHANGED) == []
+    assert spike.gens.active is None
