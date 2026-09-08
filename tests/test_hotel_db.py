@@ -498,3 +498,80 @@ def test_every_hand_written_synonym_points_at_a_real_database_name():
     services = {s.name for s in store.services()}
     for word, target in _SERVICE_WORDS:
         assert target in services, f"{word!r} points at service {target!r}, which does not exist"
+
+
+# --- surviving the recogniser ------------------------------------------------------------------
+#
+# Every case below is an utterance from a real trace, or the shorthand form of one. The router used
+# to answer only the tidy phrasing, and a phone call does not produce tidy phrasing.
+
+
+def test_a_dish_can_be_named_by_its_shorthand():
+    """"How much is the kebab?" is in a real trace, and it used to fall through to the model."""
+    from aether.hotel.router import route
+
+    for said, dish in [("how much is the kebab", "chicken kebab"),
+                       ("how much is the brownie", "chocolate brownie"),
+                       ("how much is the biryani", "vegetable biryani"),
+                       ("is the curry available", "fish curry")]:
+        decision = route(said)
+        assert decision is not None, f"{said!r} must not need the model"
+        assert decision.params["dish"] == dish, said
+
+
+def test_an_ambiguous_shorthand_is_refused_rather_than_guessed():
+    """The rule `HotelStore.find_item` already applies, applied one stage earlier.
+
+    "the chicken" could be Butter Chicken or Chicken Kebab, and "the masala" could be Paneer Butter
+    Masala or Masala Chai. Picking one would be the confident wrong answer this router exists to
+    avoid, so both reach the model instead.
+    """
+    from aether.hotel.router import _DISH_SHORTHAND, route
+
+    shorthand = dict(_DISH_SHORTHAND)
+    assert "chicken" not in shorthand, "Butter Chicken and Chicken Kebab both claim it"
+    assert "masala" not in shorthand, "Paneer Butter Masala and Masala Chai both claim it"
+    assert route("how much is the chicken") is None
+    assert route("how much is the masala") is None
+
+
+def test_a_word_that_means_something_else_in_a_hotel_is_not_a_dish():
+    """"Is there hot water?" is about plumbing. Answering it with the price of a bottle of Mineral
+    Water would be confidently wrong, so `water` is held out of the shorthand table by name."""
+    from aether.hotel.router import _DISH_SHORTHAND, route
+
+    assert "water" not in dict(_DISH_SHORTHAND)
+    assert route("is there hot water") is None
+
+
+def test_the_recogniser_losing_the_e_from_suite_does_not_cost_a_turn():
+    """From `run-20260908T154108Z`: the caller said "what comes with an executive suite?", it was
+    heard as "executive suit", and the turn spent 1360 ms in Gemini answering what the database
+    answers for nothing. "suite" is pronounced "sweet", so both spellings come back."""
+    from aether.hotel.router import route
+
+    for said in ("what comes with an executive suit", "what comes with an executive sweet"):
+        decision = route(said)
+        assert decision is not None and decision.tool == "room_amenities", said
+        assert decision.params["room_type"] == "Executive Suite"
+    assert route("how much is an executive suit").tool == "room_price"
+
+
+def test_repairing_suite_does_not_break_sweets():
+    """A bare "sweet" still means desserts -- the repair is anchored to a room-type word precisely
+    so that "what sweets do you have" keeps its menu meaning."""
+    from aether.hotel.router import route
+
+    decision = route("what sweets do you have")
+    assert decision is not None and decision.tool == "list_category"
+    assert decision.params["category"] == "desserts"
+
+
+def test_room_meaning_space_is_not_answered_as_room_types():
+    """From a real call: "do you have room service" was heard as "Do you have room for this?", and
+    the general-rooms rule answered it with the list of room types -- a confident answer to a
+    question nobody asked. Falling through to the model is the correct behaviour here."""
+    from aether.hotel.router import route
+
+    assert route("do you have room for this") is None
+    assert route("do you have room service").tool == "service_hours", "the real question still works"
