@@ -79,6 +79,23 @@ _AVOIDANCE_WORDS = (
     "cant eat", "can t eat", "free", "without", "no ", "react to", "safe",
 )
 
+# Words that make a sentence a question about FOOD IN GENERAL rather than about anything specific.
+# Reused through `_find_pair`, so each is matched as a whole word: "dish" must not fire on
+# "dishwasher", and "eat" must not fire on "theatre".
+#
+# Deliberately nouns only, and deliberately paired with a list cue below. On its own each of these
+# appears in plenty of sentences that are not menu questions -- "is the food good", "where is the
+# food court", "can I order a taxi" -- and none of those should be answered from the menu.
+_MENU_NOUNS: tuple[tuple[str, str], ...] = (
+    ("menu", "menu"), ("menus", "menu"),
+    ("dishes", "dish"), ("dish", "dish"),
+    ("food", "food"), ("foods", "food"),
+    ("eat", "eat"), ("cuisine", "cuisine"), ("cuisines", "cuisine"),
+    ("meal", "meal"), ("meals", "meal"),
+    ("dining", "dining"), ("serve", "serve"), ("serving", "serve"),
+    ("order", "order"),
+)
+
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
 _AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
 _ALLERGEN_WORDS = ("allerg", "contain", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
@@ -205,6 +222,28 @@ def route(text: str) -> Route | None:
     # 9. A whole category.
     if category is not None and any(word in spoken for word in _LIST_WORDS):
         return Route("list_category", {"category": category.value}, "category")
+
+    # 10. The broadest menu question, and usually the FIRST one a caller asks: "what's on the
+    #     menu", "what type of dishes are available", "what can I order". Answered from the
+    #     fixture's shape -- which courses exist, which diets are catered for.
+    #
+    #     LAST, so every narrower rule above still wins: "what starters do you have" is a category
+    #     question, not a general one.
+    #
+    #     Conservative by construction: it needs BOTH a food noun and a list cue. "is the food
+    #     good", "where is the food court" and "can I order a taxi" all carry a food noun with no
+    #     list cue and correctly fall through to the model, and "can I book a table for eight"
+    #     carries neither.
+    #
+    #     Left to the model on purpose: anything mentioning an allergy. A vague allergy question
+    #     needs the caller to name the allergen, and answering it with a list of courses would be
+    #     a confident non-answer to the one question where that is dangerous.
+    if (
+        _find_pair(spoken, _MENU_NOUNS)
+        and any(word in spoken for word in _LIST_WORDS)
+        and not any(word in spoken for word in _ALLERGEN_WORDS)
+    ):
+        return Route("menu_overview", {}, "general menu")
 
     # Nothing confident. The LLM takes it -- a slower answer beats a wrong tool.
     return None

@@ -389,3 +389,131 @@ def test_a_spice_question_with_no_price_words_still_asks_about_heat():
                  "is the chicken kebab mild"):
         decision = route(said)
         assert decision is not None and decision.tool == "spice_of", said
+
+
+# ============================ broad menu questions ============================
+#
+# From a live web test: "What type of dishes are available on the table?" reached the model, which
+# replied "...could you let me know which restaurant you are asking about?" -- a question with no
+# answer, because there is one hotel and one menu. The router simply had no rule for the broadest
+# and most likely FIRST question a caller asks.
+
+BROAD_MENU_QUESTIONS = [
+    "What type of dishes are available?",
+    "What type of dishes are available on the table?",
+    "What dishes do you have?",
+    "What food do you have?",
+    "What's on the menu?",
+    "What can I order?",
+    "What food is available?",
+    "What kind of dishes do you serve?",
+    "What are your dining options?",
+    "What do you have to eat?",
+    "Can you tell me about the food?",
+]
+
+
+@pytest.mark.parametrize("said", BROAD_MENU_QUESTIONS)
+def test_a_broad_menu_question_routes_to_the_menu(said):
+    decision = route(said)
+    assert decision is not None, f"{said!r} must not need the model"
+    assert decision.tool == "menu_overview"
+
+
+@pytest.mark.parametrize("said", [
+    "can i book a table for eight",      # a booking; carries no food noun at all
+    "is there parking",
+    "what time do you close",
+    "is the food good",                  # food noun, no list cue -- an opinion, not a menu request
+    "where is the food court",           # food noun, no list cue
+    "can i order a taxi",                # "order", no list cue
+    "do you have room service",
+    "hello",
+    "my name is daniel",
+])
+def test_the_broad_rule_does_not_swallow_non_menu_questions(said):
+    """It needs BOTH a food noun and a list cue. Either alone is not a menu question."""
+    assert route(said) is None
+
+
+def test_a_vague_allergy_question_still_goes_to_the_model():
+    """Answering "any food allergies?" with a list of courses would be a confident non-answer to
+    the one question where that is dangerous. The model can ask which allergen."""
+    assert route("do you have any food allergies information") is None
+    assert route("i have a food allergy what can i eat") is None
+
+
+@pytest.mark.parametrize(("said", "expected"), [
+    ("what starters do you have", "list_category"),
+    ("what desserts do you have", "list_category"),
+    ("do you have vegan options", "find_by_diet"),
+    ("do you have anything mild", "find_by_spice"),
+    ("how much is the chicken kebab", "price_of"),
+    ("is the seafood platter available", "check_availability"),
+    ("does the butter chicken contain nuts", "check_allergens"),
+    ("is the chicken kebab spicy", "spice_of"),
+    ("i have a nut allergy what can i eat", "safe_for"),
+])
+def test_every_narrower_rule_still_wins_over_the_broad_one(said, expected):
+    """The broad rule is tried LAST. A category question is not a general question."""
+    decision = route(said)
+    assert decision is not None and decision.tool == expected
+
+
+def test_what_type_of_dishes_are_available(monkeypatch):
+    """The exact sentence from the live test, through the real pipeline."""
+    spike, _t, rime, llm = build(monkeypatch, "What type of dishes are available on the table?")
+    spike.handle_utterance(AUDIO, 0.0)
+
+    said = rime.spoken[0]
+    assert llm.calls == [], "a menu question must not reach the model"
+    assert said == ("We have starters, mains, desserts and drinks, "
+                    "with vegetarian, non-vegetarian and vegan options.")
+
+
+@pytest.mark.parametrize("said", [
+    "What type of dishes are available?",
+    "What dishes do you have?",
+    "What's on the menu?",
+    "What can I order?",
+    "What food is available?",
+    "What kind of dishes do you serve?",
+])
+def test_broad_menu_questions_are_answered_without_gemini(monkeypatch, said):
+    spike, _t, rime, llm = build(monkeypatch, said)
+    spike.handle_utterance(AUDIO, 0.0)
+    assert llm.calls == [], f"{said!r} must be answered deterministically"
+    assert rime.spoken and rime.spoken[0].startswith("We have ")
+
+
+def test_the_overview_never_asks_which_restaurant(monkeypatch):
+    """The specific wrong answer from the live test. One hotel, one menu, nothing to choose."""
+    spike, _t, rime, _llm = build(monkeypatch, "What's on the menu?")
+    spike.handle_utterance(AUDIO, 0.0)
+    said = rime.spoken[0].lower()
+    for wrong in ("which restaurant", "which outlet", "which branch", "let me know which"):
+        assert wrong not in said
+
+
+def test_the_overview_is_built_from_the_fixture_not_hardcoded(monkeypatch):
+    """Sell out every dessert and the answer stops offering desserts, with no template edit."""
+    from aether.hotel import Category
+
+    spike, _t, rime, _llm = build(monkeypatch, "What's on the menu?")
+    for dish in spike.menu.dishes():
+        if dish.category is Category.DESSERTS:
+            spike.menu.set_available(dish.dish_id, False)
+
+    spike.handle_utterance(AUDIO, 0.0)
+    said = rime.spoken[0]
+    assert "desserts" not in said
+    assert "starters" in said and "mains" in said and "drinks" in said
+
+
+def test_the_overview_is_short_enough_to_say_on_a_phone(monkeypatch):
+    """It answers the SHAPE of the menu. Twenty-nine dish names is not an answer."""
+    spike, _t, rime, _llm = build(monkeypatch, "What food do you have?")
+    spike.handle_utterance(AUDIO, 0.0)
+    said = rime.spoken[0]
+    assert len(said.split()) <= 25, said
+    assert "chicken kebab" not in said, "courses and diets, not a recitation of the menu"

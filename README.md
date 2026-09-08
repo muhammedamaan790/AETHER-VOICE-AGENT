@@ -102,10 +102,16 @@ vegetarian/vegan/non-vegetarian, spice level, allergens and availability (two it
 purpose). Frozen dataclasses, module-level constants, no randomness, no clocks: two runs a week
 apart produce byte-identical answers.
 
-Eight read-only tools — `list_category`, `price_of`, `find_by_diet`, `check_availability`,
-`check_allergens`, `find_by_spice`, `spice_of`, `safe_for` — run through the **existing**
-`ToolRunner`, so fencing, injectable delay and result identity are not reimplemented. A caller can
-never change the menu.
+Nine read-only tools — `menu_overview`, `list_category`, `price_of`, `find_by_diet`,
+`check_availability`, `check_allergens`, `find_by_spice`, `spice_of`, `safe_for` — run through the
+**existing** `ToolRunner`, so fencing, injectable delay and result identity are not reimplemented.
+A caller can never change the menu.
+
+`menu_overview` answers the broadest and usually first question — "what's on the menu?", "what
+dishes do you have?" — with the *shape* of the menu rather than its contents, computed from the
+fixture: "We have starters, mains, desserts and drinks, with vegetarian, non-vegetarian and vegan
+options." Reading twenty-nine dish names down a telephone is not an answer, and **there is one
+hotel and one menu, so AETHER never asks which restaurant the caller means.**
 
 **Menu facts do not go through the LLM.** `aether/hotel/router.py` maps a sentence to a tool by
 keyword and slot, and a template renders the answer for speech (numbers as words, no symbols). The
@@ -223,7 +229,7 @@ Nothing tunes itself.
 
 ## Status
 
-**653 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**734 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |

@@ -312,6 +312,20 @@ Still `<from_run>` and must not be quoted:
   before `price_of` in the router meant "how much is the hot chicken kebab" returned a spice
   level. Price now wins; a spice question with no price words still reaches `spice_of`.
 
+- **The model volunteered rooms, stays and invented facts.** Live web test: "Hello, how are you
+  doing today?" came back as "...how can I help make your stay comfortable today?", and "what time
+  do you close?" as "our main dining room closes at eleven in the evening, but room service is
+  available twenty-four hours a day" -- two specific facts that exist nowhere in this system. The
+  prompt now forbids introducing rooms, reservations, stays, check-in/out or restaurants unless
+  the caller raises them, forbids asking which restaurant (there is one), models the greeting
+  reply it wants, and widens "never invent" from dishes/prices/allergens to hours, rates and
+  services. Verified live against Gemini, not only by prompt assertion.
+- **The router had no rule for the broadest menu question.** "What type of dishes are available on
+  the table?" reached the model, which asked which restaurant the caller meant -- a question with
+  no answer. `menu_overview` now answers it from the fixture's shape. The rule is tried LAST and
+  needs BOTH a food noun and a list cue, so "is the food good", "where is the food court" and
+  "can I order a taxi" still fall through to the model.
+
 ### Standing limitations
 
 - **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is

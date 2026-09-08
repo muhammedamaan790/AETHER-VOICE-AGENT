@@ -184,6 +184,27 @@ def _safe_for(store: MenuStore, *, allergen: str,
     }
 
 
+def _menu_overview(store: MenuStore) -> tuple[list, dict]:
+    """"What's on the menu?" -- the broadest question a caller asks, and the first one they ask.
+
+    Answers the SHAPE of the menu rather than its contents: which courses exist, and which diets
+    are catered for. Reading twenty-nine dish names down a telephone is not an answer.
+
+    Everything is computed from the fixture. Nothing here states a fact the menu does not contain,
+    so a category that sells out entirely stops being offered without anyone editing a template.
+    """
+    available = [d for d in store.dishes() if d.available]
+    categories = [c.value for c in Category
+                  if any(d.category is c for d in available)]
+    diets = [d.value for d in Diet if any(x.diet is d for x in available)]
+    rows = [describe_dish(d) for d in available]
+    return rows, {
+        "categories": categories,
+        "diets": diets,
+        "dish_count": len(available),
+    }
+
+
 # name -> (function, mutates?). None of these mutate: a caller asking about the menu must never be
 # able to change it. Availability edits are staff-side and deliberately absent from this registry.
 HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
@@ -195,6 +216,7 @@ HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     "find_by_spice": (_find_by_spice, False),
     "spice_of": (_spice_of, False),
     "safe_for": (_safe_for, False),
+    "menu_overview": (_menu_overview, False),
 }
 
 
@@ -312,6 +334,23 @@ def _speak_safe_for(result) -> str:
             f"so do check with me before you order.")
 
 
+def _speak_menu_overview(result) -> str:
+    """Courses, then diets. Two facts, one sentence, no dish names.
+
+    Deliberately does NOT ask which restaurant. There is one hotel and one menu, and asking the
+    caller to choose between outlets that do not exist was the single worst answer the live test
+    produced.
+    """
+    categories = result.summary.get("categories") or []
+    diets = result.summary.get("diets") or []
+    if not categories:
+        return "I am sorry, we are not serving anything today."
+    lead = f"We have {say_list(categories)}"
+    if not diets:
+        return f"{lead}."
+    return f"{lead}, with {say_list(diets)} options."
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "list_category": _speak_list_category,
     "price_of": _speak_price_of,
@@ -321,6 +360,7 @@ SPEAK: dict[str, Callable[..., str]] = {
     "find_by_spice": _speak_find_by_spice,
     "spice_of": _speak_spice_of,
     "safe_for": _speak_safe_for,
+    "menu_overview": _speak_menu_overview,
 }
 
 # Spoken when a tool ran but could not answer -- an unknown dish, an unrecognised category. A true

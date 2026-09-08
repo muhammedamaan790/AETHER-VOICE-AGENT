@@ -203,3 +203,80 @@ def test_brevity_is_instructed_not_truncated():
     assert "MAX_OUTPUT_TOKENS = 200" in src
     # no post-hoc sentence chopping
     assert ".split('.')[0]" not in src and '.split(".")[0]' not in src
+
+
+# ============================ conversational register ============================
+#
+# Reported from a live web test: "Hello, how are you doing today?" was answered with
+# "...how can I help make your stay comfortable today?" -- pleasant, and wrong. Nobody had
+# mentioned a stay. AETHER is the duty manager answering the phone, not a reservation desk, and
+# guessing at the caller's business is what makes an agent sound like a bot.
+
+RESERVATION_WORDS = ("reservation", "booking", "book a", "your stay", "check-in", "check in",
+                     "check-out", "check out", "room", "suite")
+
+
+def test_the_prompt_forbids_volunteering_rooms_and_reservations():
+    p = SYSTEM_PROMPT.lower()
+    assert "only what was asked" in p, "the instruction must be to answer the question asked"
+    for topic in ("rooms", "reservations", "stays", "check-in"):
+        assert topic in p, f"the prompt must name {topic!r} as something not to volunteer"
+    assert "unless the caller mentions them first" in p, (
+        "these topics are legitimate when the caller raises them -- the prohibition is on "
+        "introducing them unprompted"
+    )
+
+
+def test_the_prompt_forbids_asking_which_restaurant():
+    """There is one hotel and one menu. Asking the caller to choose an outlet is always wrong."""
+    p = SYSTEM_PROMPT.lower()
+    assert "never ask which restaurant" in p
+    assert "one hotel and one menu" in p
+
+
+def test_the_prompt_models_the_greeting_reply_it_wants():
+    """A prohibition without an example leaves the model to improvise the replacement."""
+    p = SYSTEM_PROMPT.lower()
+    assert "greeting" in p
+    assert "i'm doing well, thank you. what can i help you with?" in p
+
+
+def test_the_prompt_does_not_itself_frame_the_caller_as_a_resident():
+    """The prompt must not seed the assumption it is trying to prevent.
+
+    The only occurrences of these words may be the prohibition itself, so each is checked to sit
+    inside the sentence that forbids volunteering them.
+    """
+    p = SYSTEM_PROMPT.lower()
+    forbidding = p.split("answer only what was asked", 1)[1]
+    before = p.split("answer only what was asked", 1)[0]
+    for word in ("your stay", "reservation", "check-in", "guest room"):
+        assert word not in before, (
+            f"{word!r} appears before the prohibition, framing the caller as a resident"
+        )
+    assert "rooms" in forbidding
+
+
+def test_the_identity_survives_the_new_restraint():
+    """Being concise must not cost the hotel-manager identity the earlier fix established."""
+    p = SYSTEM_PROMPT.lower()
+    assert "duty manager of a hotel" in p
+    for denial in ("text-based", "chatbot", "language model"):
+        assert denial in p
+
+
+def test_the_prompt_forbids_inventing_hours_rates_and_services():
+    """Widened after a live probe, not from theory.
+
+    Asked "what time do you close?", the model answered "our main dining room closes at eleven in
+    the evening, but room service is available twenty-four hours a day" -- two specific facts that
+    exist nowhere in this system, and room service introduced unprompted. For a judged demo an
+    invented fact is worse than an admission: ask twice, get two different opening times.
+    """
+    p = SYSTEM_PROMPT.lower()
+    assert "you do not know opening hours" in p
+    for invented in ("a time", "a rate", "a service"):
+        assert invented in p, f"the prompt must forbid inventing {invented!r}"
+    assert "say briefly that you will check" in p, (
+        "forbidding invention without supplying the fallback leaves the model to improvise"
+    )
