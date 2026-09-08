@@ -397,6 +397,24 @@ Still `<from_run>` and must not be quoted:
   **The lesson is about sample size, not about telephony.** One call is not a calibration, and a
   threshold that separates cleanly on one call can be wrong by two orders of magnitude on the next.
 
+- **Endpointing raised 500 ms -> 1000 ms** (`AETHER_ENDPOINT_MS`, `DEFAULT_ENDPOINT_MS`). At
+  500 ms a mid-sentence pause ended the caller's turn: one question arrived as "Can you tell me
+  what are the...", "put available as", "The middle." and got three useless answers. Measuring the
+  synthetic fixture showed something worse -- at 500 ms the utterance ended **before any trailing
+  silence at all**, i.e. mid-speech, because 25 consecutive unvoiced frames occurred inside the
+  speech itself.
+
+  **Two costs, both paid on every turn.** Turn latency rises by the difference, and in hands-free
+  mode voice interruption lands at end-of-utterance so barge-in slows by the same amount.
+
+  **One measured side effect.** `_ambient_rms` only updates on unvoiced frames while no utterance
+  is active, so the longer the window, the quieter a room must be before it is ever measured. A
+  synthetic room at sigma 0.02 was measured at 500 ms and is not at 1000 ms, widening the
+  already-documented "loud room never measured" limitation. Acceptable because the absolute floor
+  (2500 on telephony) does the work there, and ambient WAS measured on every real call (4.1-24.8).
+  The noise-gate tests now pin `offset_frames` so they keep testing the gate rather than the
+  endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
+
 ### Standing limitations
 
 - **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is

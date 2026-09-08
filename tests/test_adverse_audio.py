@@ -68,18 +68,28 @@ def room_frames(sigma: float, n: int = ROOM_FRAMES, seed: int = 7) -> list[np.nd
     return list((rng.normal(0, sigma, (n, FRAME)) * 32767).astype(np.int16))
 
 
+# These tests are about the NOISE GATE, not about endpointing, so the endpoint window is pinned
+# rather than inherited. `DEFAULT_ENDPOINT_MS` was raised from 500 to 1000 after a real call, and
+# that has a genuine side effect on this sweep: the longer the window, the louder a room has to be
+# before it never yields 50 consecutive unvoiced frames, never leaves `_speech_active`, and so is
+# never measured at all -- widening the known limitation documented below. Pinning keeps these
+# tests measuring the gate, and the interaction gets its own test rather than silently changing
+# what these assert.
+GATE_OFFSET_FRAMES = 25
+
+
 def run_case(room_sigma: float, speech_amp: float) -> dict:
     """Feed room tone then speech, and report what the gate decided and why.
 
     Returns the decision plus the two levels the gate actually measured, so a failing assertion
     shows the evidence behind the decision rather than just the verdict.
     """
-    vad = MicVAD(Trace())
+    vad = MicVAD(Trace(), offset_frames=GATE_OFFSET_FRAMES)
     for f in room_frames(room_sigma):
         vad.process_frame(f)
     for i in range(SPEECH_FRAMES):
         vad.process_frame(voiced_frame(i * FRAME, amp=speech_amp))
-    for _ in range(40):                      # clear webrtcvad's ~6-frame hangover
+    for _ in range(vad.offset_frames + 15):  # clear webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     ended = vad.trace.last(EventType.SPEECH_ENDED)
@@ -174,6 +184,37 @@ def test_the_bar_rises_with_the_measured_room():
     assert quiet["ambient_rms"] < moderate["ambient_rms"], "the tracker followed the room"
 
 
+def test_a_longer_endpoint_widens_the_unmeasured_room_limitation():
+    """MEASURED consequence of raising DEFAULT_ENDPOINT_MS from 500 ms to 1000 ms.
+
+    `_ambient_rms` is only updated on unvoiced frames while no utterance is active. Ending an
+    utterance needs `offset_frames` CONSECUTIVE unvoiced frames, so the longer that window, the
+    quieter a room has to be before the detector ever gets out of "speech active" long enough to
+    measure it. At 500 ms a room at sigma 0.02 was measured and the relative gate rejected the
+    speech; at 1000 ms the same room is never measured and the gate falls back to the absolute
+    floor.
+
+    This is a real trade, taken deliberately: at 500 ms an ordinary mid-sentence pause ended the
+    caller's turn and their question arrived as fragments. The absolute floor -- 2500 on telephony,
+    derived from three real calls -- is what does the work on the phone path, and ambient WAS
+    measured on every one of those calls (4.1-24.8 RMS), so the relative gate is not load-bearing
+    there.
+    """
+    def ambient_at(endpoint_frames: int) -> float | None:
+        vad = MicVAD(Trace(), offset_frames=endpoint_frames)
+        for f in room_frames(0.020):
+            vad.process_frame(f)
+        for i in range(SPEECH_FRAMES):
+            vad.process_frame(voiced_frame(i * FRAME, amp=0.06))
+        for _ in range(vad.offset_frames + 40):
+            vad.process_frame(SILENCE)
+        ended = vad.trace.last(EventType.SPEECH_ENDED)
+        return ended.fields["ambient_rms"] if ended else None
+
+    assert ambient_at(25) is not None, "at 500 ms this room is measured"
+    assert ambient_at(50) is None, "at 1000 ms the same room never is"
+
+
 def test_known_limitation_a_loud_room_is_never_measured_so_the_floor_never_engages():
     """FOUND BY THIS SWEEP, and it is a real hole rather than a quirk of the synthetic audio.
 
@@ -233,7 +274,7 @@ def test_duration_gate_matches_min_speech_ms(n_frames):
         vad.process_frame(SILENCE)
     for i in range(n_frames):
         vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
-    for _ in range(40):
+    for _ in range(vad.offset_frames + 15):    # + webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     ended = vad.trace.last(EventType.SPEECH_ENDED)
@@ -259,7 +300,7 @@ def test_duration_acceptance_is_monotonic():
             vad.process_frame(SILENCE)
         for i in range(n):
             vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
-        for _ in range(40):
+        for _ in range(vad.offset_frames + 15):
             vad.process_frame(SILENCE)
         accepted.append(not vad.utterances.empty())
 
@@ -281,7 +322,7 @@ def test_an_unmeasured_room_never_rejects_on_the_floor():
     assert vad._ambient_rms is None, "precondition: the room has not been measured"
     for i in range(SPEECH_FRAMES):
         vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
-    for _ in range(40):
+    for _ in range(vad.offset_frames + 15):    # + webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     ended = vad.trace.last(EventType.SPEECH_ENDED)
@@ -311,7 +352,7 @@ def test_background_noise_never_reaches_the_fence_callback():
         vad.process_frame(f)
     for i in range(SPEECH_FRAMES):                       # long, but far below the speech floor
         vad.process_frame(voiced_frame(i * FRAME, amp=0.0008))
-    for _ in range(40):
+    for _ in range(vad.offset_frames + 15):    # + webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     assert fences == [], (
@@ -329,7 +370,7 @@ def test_real_speech_still_reaches_the_fence_callback():
         vad.process_frame(f)
     for i in range(SPEECH_FRAMES):
         vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
-    for _ in range(40):
+    for _ in range(vad.offset_frames + 15):    # + webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     assert fences, "close-range speech must still be able to interrupt the agent"
@@ -358,7 +399,7 @@ def test_ducking_is_still_unconditional():
         vad.process_frame(f)
     for i in range(SPEECH_FRAMES):
         vad.process_frame(voiced_frame(i * FRAME, amp=0.0008))   # same noise as above
-    for _ in range(40):
+    for _ in range(vad.offset_frames + 15):    # + webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     assert onsets, "onset (and therefore the duck) still fires on anything voiced"
@@ -505,7 +546,7 @@ def test_the_trace_records_the_peak_and_the_floor_it_was_judged_against():
         vad.process_frame(f)
     for i in range(SPEECH_FRAMES):
         vad.process_frame(voiced_frame(i * FRAME, amp=0.35))
-    for _ in range(40):
+    for _ in range(vad.offset_frames + 15):    # + webrtcvad's ~6-frame hangover
         vad.process_frame(SILENCE)
 
     ended = vad.trace.last(EventType.SPEECH_ENDED)

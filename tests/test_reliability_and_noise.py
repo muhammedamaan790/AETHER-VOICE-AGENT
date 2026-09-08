@@ -149,7 +149,18 @@ def test_build_llm_wraps_the_selected_provider(monkeypatch):
 
 # =========================== 2. background voice / blips ===============================
 
+# These tests are about the noise and duration gates, not about endpointing, so the endpoint
+# window is pinned rather than inherited from DEFAULT_ENDPOINT_MS. That default was raised from
+# 500 ms to 1000 ms after a real call, and a longer window means a noisy room never yields enough
+# consecutive unvoiced frames to be measured -- see
+# `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` in test_adverse_audio.py, which
+# owns that interaction. Without pinning, the relative-gate tests here quietly stop exercising the
+# relative gate.
+GATE_OFFSET_FRAMES = 25
+
+
 def make_vad(trace=None, **kw):
+    kw.setdefault("offset_frames", GATE_OFFSET_FRAMES)
     return MicVAD(trace or Trace(), **kw)
 
 
@@ -158,9 +169,14 @@ def feed(vad, frames):
         vad.process_frame(f)
 
 
-def settle(vad, n=40):
-    """Enough trailing silence to clear WebRTC VAD's ~6-frame hangover and end the utterance."""
-    feed(vad, [SILENCE] * n)
+def settle(vad, n=None):
+    """Enough trailing silence to clear WebRTC VAD's ~6-frame hangover and end the utterance.
+
+    Derived from the detector rather than hardcoded, so tuning AETHER_ENDPOINT_MS cannot silently
+    stop these tests from ever reaching an offset -- which would leave them asserting on an
+    utterance that never ended.
+    """
+    feed(vad, [SILENCE] * (n if n is not None else vad.offset_frames + 15))
 
 
 def test_close_range_speech_is_still_accepted():

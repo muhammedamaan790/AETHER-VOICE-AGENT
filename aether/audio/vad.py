@@ -52,6 +52,38 @@ def _resolve_speech_floor(explicit: float | None) -> float:
         return DEFAULT_SPEECH_FLOOR
 
 
+# How much silence ends an utterance.
+#
+# 1000 ms, raised from 500 ms after a real call. At 500 ms an ordinary mid-sentence pause -- the
+# beat where somebody thinks -- ended the turn, and the rest of the sentence arrived as a separate
+# utterance. One caller's question came through as three fragments:
+#
+#     "Can you tell me what are the..."  /  "put available as"  /  "The middle."
+#
+# AETHER then answered each fragment honestly and uselessly. A second of thinking room is normal
+# on a telephone and must not read as "they have finished".
+#
+# THE COST IS REAL AND IS PAID ON EVERY TURN: this is dead time between the caller stopping and
+# AETHER starting, so turn latency rises by the difference. Interruption by voice lands at
+# end-of-utterance in hands-free mode, so it slows by the same amount. Tune with
+# AETHER_ENDPOINT_MS rather than editing this.
+DEFAULT_ENDPOINT_MS = 1000.0
+
+
+def _resolve_endpoint_frames(explicit: int | None, frame_ms: int) -> int:
+    """Argument, then AETHER_ENDPOINT_MS, then the default. At least one frame, or speech never ends."""
+    if explicit is not None:
+        return int(explicit)
+    raw = (os.environ.get("AETHER_ENDPOINT_MS") or "").strip()
+    endpoint_ms = DEFAULT_ENDPOINT_MS
+    if raw:
+        try:
+            endpoint_ms = float(raw)
+        except ValueError:
+            print(f"[vad] AETHER_ENDPOINT_MS={raw!r} is not a number; using {DEFAULT_ENDPOINT_MS}")
+    return max(1, round(endpoint_ms / frame_ms))
+
+
 class InputDeviceError(RuntimeError):
     """A microphone was explicitly requested and cannot be used. Never silently substituted."""
 
@@ -114,7 +146,7 @@ class MicVAD:
         frame_ms: int = 20,
         aggressiveness: int = 2,
         onset_frames: int = 2,        # 40 ms of voiced audio confirms an onset
-        offset_frames: int = 25,      # 500 ms of silence ends an utterance
+        offset_frames: int | None = None,   # silence that ends an utterance; see DEFAULT_ENDPOINT_MS
         preroll_frames: int = 15,     # 300 ms kept before onset so STT is not clipped
         min_speech_ms: float = 250.0, # shorter than this is a blip, not an utterance
         noise_snr_margin: float = 3.0,# voiced audio must be this much louder than ambient
@@ -128,7 +160,7 @@ class MicVAD:
         self.frame_ms = frame_ms
         self.frame_samples = samplerate * frame_ms // 1000
         self.onset_frames = onset_frames
-        self.offset_frames = offset_frames
+        self.offset_frames = _resolve_endpoint_frames(offset_frames, frame_ms)
         self.preroll_frames = preroll_frames
         self.min_speech_ms = min_speech_ms
         self.noise_snr_margin = noise_snr_margin
