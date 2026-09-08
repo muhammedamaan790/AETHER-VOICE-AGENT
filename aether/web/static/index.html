@@ -55,7 +55,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;fl
 .dot.err{background:var(--alert);box-shadow:0 0 10px rgba(255,84,112,.7)}
 
 /* --- main grid ------------------------------------------------------------------------ */
-.grid{display:grid;grid-template-columns:minmax(380px,1fr) minmax(340px,.86fr);gap:18px;flex:1;min-height:0}
+/* Conversation FIRST and widest: it is what the call is about, and what a viewer reads.
+   The orb and its two controls sit beside it in a narrower column. */
+.grid{display:grid;grid-template-columns:minmax(420px,1.7fr) minmax(300px,.75fr);gap:18px;flex:1;min-height:0}
 @media (max-width:940px){.grid{grid-template-columns:1fr}}
 
 .panel{
@@ -65,8 +67,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;fl
 }
 
 /* --- stage ---------------------------------------------------------------------------- */
-.stage{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:26px 22px 28px;position:relative;overflow:hidden}
-.orb-wrap{position:relative;width:min(330px,68vw);aspect-ratio:1;display:grid;place-items:center}
+.stage{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:16px;padding:24px 20px 26px;position:relative;overflow:hidden}
+.orb-wrap{position:relative;width:min(210px,52vw);aspect-ratio:1;display:grid;place-items:center}
 canvas#orb{width:100%;height:100%;display:block}
 
 .state-line{text-align:center;min-height:56px}
@@ -108,8 +110,8 @@ kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border
   color:var(--ink-faint);border-bottom:1px solid var(--line);font-weight:600;
   display:flex;justify-content:space-between;align-items:center;gap:10px;
 }
-#transcript{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:11px;min-height:220px;max-height:52vh}
-.turn{max-width:86%;padding:11px 14px;border-radius:14px;font-size:13.5px;line-height:1.55;position:relative}
+#transcript{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:60vh}
+.turn{max-width:82%;padding:13px 17px;border-radius:15px;font-size:15px;line-height:1.6;position:relative}
 .turn .who{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.65;margin-bottom:5px;font-weight:600}
 .turn.customer{align-self:flex-end;background:rgba(34,211,238,.13);border:1px solid rgba(34,211,238,.26);border-bottom-right-radius:5px}
 .turn.aether{align-self:flex-start;background:rgba(247,185,85,.11);border:1px solid rgba(247,185,85,.24);border-bottom-left-radius:5px}
@@ -180,7 +182,16 @@ footer{font-size:11px;color:var(--ink-faint);text-align:center;letter-spacing:.0
 
   <div class="grid">
 
-    <!-- ============================ stage ============================ -->
+    <!-- ================ conversation: the main event ================ -->
+    <section class="panel" style="display:flex;flex-direction:column;min-height:0">
+      <h2><span>Conversation</span><span id="turnCount" style="font-family:var(--mono)"></span></h2>
+      <div id="transcript">
+        <div class="empty">Nothing said yet.<br>The conversation appears here as it happens.</div>
+      </div>
+      <div id="recording">not recording</div>
+    </section>
+
+    <!-- ================ the agent, and its two controls ================ -->
     <section class="panel stage">
       <div class="orb-wrap"><canvas id="orb"></canvas></div>
 
@@ -199,38 +210,6 @@ footer{font-size:11px;color:var(--ink-faint);text-align:center;letter-spacing:.0
         </p>
       </div>
     </section>
-
-    <!-- ============================ side ============================ -->
-    <div class="side">
-      <section class="panel" style="display:flex;flex-direction:column;min-height:0">
-        <h2><span>Conversation</span><span id="turnCount" style="font-family:var(--mono)"></span></h2>
-        <div id="transcript">
-          <div class="empty">Nothing said yet.<br>Start listening, then ask about the menu.</div>
-        </div>
-      </section>
-
-      <section class="panel evidence">
-        <h2 style="padding:0 0 12px;border:none">Evidence</h2>
-        <dl class="dl metrics" id="metrics">
-          <div class="metric"><dt>Generation</dt><dd id="mGen">—</dd></div>
-          <div class="metric"><dt>Previous</dt><dd id="mPrev">—</dd></div>
-          <div class="metric"><dt>Phase</dt><dd id="mPhase">—</dd></div>
-          <div class="metric"><dt>Last fence</dt><dd id="mFence">—</dd></div>
-          <div class="metric"><dt>Last discard</dt><dd id="mDiscard">—</dd></div>
-          <div class="metric"><dt>Class</dt><dd id="mClass">—</dd></div>
-          <div class="metric"><dt>Stale leaks</dt><dd id="mLeaks" class="zero">0</dd></div>
-          <div class="metric"><dt>Voice</dt><dd id="mVoice">—</dd></div>
-        </dl>
-        <dl class="dl metrics" id="mLatency" style="margin-top:11px"></dl>
-        <div id="timeline"></div>
-        <div id="recording">not recording</div>
-      </section>
-
-      <section class="panel" style="display:flex;flex-direction:column;min-height:0">
-        <h2><span>Event log</span><span id="feedCount" style="font-family:var(--mono)"></span></h2>
-        <div id="feed"><div class="empty">Canonical events appear here as they are written.</div></div>
-      </section>
-    </div>
   </div>
 
   <footer>
@@ -382,9 +361,6 @@ const els = {
   turnCount:  document.getElementById("turnCount"),
   connDot:    document.getElementById("connDot"),
   connText:   document.getElementById("connText"),
-  timeline:   document.getElementById("timeline"),
-  feed:       document.getElementById("feed"),
-  feedCount:  document.getElementById("feedCount"),
   recording:  document.getElementById("recording"),
 };
 
@@ -458,46 +434,6 @@ function renderTranscript(rows) {
   if (atBottom) els.transcript.scrollTop = els.transcript.scrollHeight;
 }
 
-function renderLatency(latency) {
-  const dl = document.getElementById("mLatency");
-  // The engine decides which metrics are real; the page renders whatever keys it is handed.
-  const entries = Object.entries(latency || {});
-  dl.innerHTML = "";
-  for (const [k, v] of entries) {
-    const box = document.createElement("div");
-    box.className = "metric";
-    const dt = document.createElement("dt");
-    dt.textContent = k.replace(/_ms$/, "").replace(/_/g, " ");
-    const dd = document.createElement("dd");
-    dd.textContent = typeof v === "number" ? `${Math.round(v)} ms` : String(v);
-    box.appendChild(dt); box.appendChild(dd);
-    dl.appendChild(box);
-  }
-}
-
-function renderTimeline(steps) {
-  const list = (steps || []).slice(-14);
-  els.timeline.innerHTML = "";
-  list.forEach((s, i) => {
-    if (i) {
-      const a = document.createElement("span");
-      a.className = "arrow"; a.textContent = "→";
-      els.timeline.appendChild(a);
-    }
-    const el = document.createElement("span");
-    el.className = "step " + s.kind;
-    el.textContent = s.kind === "generation"  ? (s.gen || "?")
-                   : s.kind === "fenced"      ? `${s.gen || "?"} FENCED`
-                   : s.kind === "spoken"      ? `${s.gen || "?"} spoken`
-                   : s.kind === "classified"  ? String(s.detail || "classified")
-                   : s.kind === "backchannel" ? "backchannel"
-                   : s.kind === "cancelled"   ? "cancelled"
-                   : s.kind === "leaked"      ? "LEAKED"
-                   : `${s.gen || "?"} ${s.detail || s.kind}`;
-    els.timeline.appendChild(el);
-  });
-}
-
 function renderControls(s) {
   const listening = !!(s && s.listening);
   // ONE toggle. Its label is derived from what the engine reports, never from what the last
@@ -516,9 +452,6 @@ function renderControls(s) {
 let lastCallActive = null;
 
 function onState(s) {
-  // A new call attached: the engine has already reset its own state, so drop the tail of the
-  // previous conversation from the feed too rather than letting two calls run together.
-  if (s.call_active === true && lastCallActive === false) clearFeed();
   lastCallActive = s.call_active === undefined ? null : s.call_active;
 
   lastState = s;
@@ -529,19 +462,7 @@ function onState(s) {
 
   renderControls(s);
   renderTranscript(s.transcript);
-  renderTimeline(s.timeline);
-  renderLatency(s.latency);
   renderRecording(s);
-
-  setText("mGen", s.generation);
-  setText("mPrev", s.previous_generation);
-  setText("mPhase", s.phase);
-  setText("mFence", s.fence_reason);
-  setText("mDiscard", s.last_discard);
-  setText("mClass", s.last_class);
-  setText("mLeaks", s.leaks == null ? 0 : s.leaks, s.leaks ? "warn" : "zero");
-  const rime = s.rime || {};
-  setText("mVoice", rime.voice ? `${rime.voice} · ${rime.model || "?"}` : null);
 }
 
 function renderRecording(s) {
@@ -564,78 +485,8 @@ function renderRecording(s) {
   ));
 }
 
-/* ---------------------------------------------------------------------------------------------
-   Live event feed. A tail of the canonical event stream as it is written, so the log is visibly
-   being produced rather than merely claimed. Deliberately browser-side and ephemeral: it is a
-   tail, not state, and the engine's own snapshot remains the only source of truth for anything
-   that matters. Capped, because a long call would otherwise grow the DOM without limit.
---------------------------------------------------------------------------------------------- */
-const FEED_MAX = 200;
-let feedSeeded = false;
-
-// Which single field is worth showing per event type. Anything not listed shows nothing rather
-// than a guess -- the trace file has the whole record.
-const FEED_DETAIL = {
-  TranscriptFinal:        ev => JSON.stringify(ev.text || ""),
-  ResponseSpoken:         ev => JSON.stringify(ev.text || ""),
-  FenceRequested:         ev => ev.reason,
-  ResultDiscarded:        ev => ev.reason,
-  InterruptionClassified: ev => `${ev.interruption_class} via ${ev.rule}`,
-  BackchannelDetected:    ev => JSON.stringify(ev.text || ""),
-  CancellationResolved:   ev => ev.cancelled ? "cancelled" : "nothing to cancel",
-  GenerationChanged:      ev => `${ev.from_gen || "-"} -> ${ev.to_gen || "-"}`,
-  TaskStarted:            ev => ev.task,
-  ResultReceived:         ev => ev.task,
-  SpeechEnded:            ev => ev.rejected ? `rejected: ${ev.rejected}` : `${ev.voiced_ms} ms voiced`,
-  ResultLeaked:           ev => "LEAKED",
-};
-
-const FEED_CLASS = {
-  FenceRequested: "fence", ResultDiscarded: "fence", ResultLeaked: "fence",
-  ResponseSpoken: "spoken", InterruptionClassified: "classify",
-  BackchannelDetected: "classify", CancellationResolved: "classify",
-};
-
-function pushFeed(ev) {
-  if (!feedSeeded) { els.feed.innerHTML = ""; feedSeeded = true; }
-  const atBottom = els.feed.scrollHeight - els.feed.scrollTop - els.feed.clientHeight < 40;
-
-  const row = document.createElement("div");
-  row.className = "row " + (FEED_CLASS[ev.type] || "");
-
-  const t = document.createElement("span");
-  t.className = "t";
-  t.textContent = ev.seq != null ? String(ev.seq).padStart(3, "0") : "—";
-
-  const ty = document.createElement("span");
-  ty.className = "ty";
-  ty.textContent = ev.type;
-
-  const g = document.createElement("span");
-  g.className = "g";
-  g.textContent = ev.gen || "";
-
-  const d = document.createElement("span");
-  d.className = "d";
-  const detail = FEED_DETAIL[ev.type];
-  try { d.textContent = detail ? (detail(ev) ?? "") : ""; } catch { d.textContent = ""; }
-
-  row.append(t, ty, g, d);
-  els.feed.appendChild(row);
-  while (els.feed.childElementCount > FEED_MAX) els.feed.removeChild(els.feed.firstChild);
-  els.feedCount.textContent = `${els.feed.childElementCount} shown`;
-  if (atBottom) els.feed.scrollTop = els.feed.scrollHeight;
-}
-
-function clearFeed() {
-  els.feed.innerHTML = '<div class="empty">Canonical events appear here as they are written.</div>';
-  els.feedCount.textContent = "";
-  feedSeeded = false;
-}
-
 /* Events are used ONLY for moments, never as a second copy of state. A fence is a moment. */
 function onEvent(ev) {
-  pushFeed(ev);
   switch (ev.type) {
     case "FenceRequested":
       flash = 1;

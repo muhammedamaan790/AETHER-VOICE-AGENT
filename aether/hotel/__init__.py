@@ -185,6 +185,40 @@ class MenuStore:
         return updated
 
 
+def menu_for_prompt(menu: tuple[Dish, ...] = MENU) -> str:
+    """The menu as compact reference text, for the model that answers what the router could not.
+
+    THE SAFETY NET, and it exists because the router missed once on a real call. A caller asked for
+    the desserts, `base.en` transcribed "dessert" as "Desert", no rule matched, the model answered
+    from nothing -- and invented three dishes and three prices. "Chocolate fudge cake, three
+    hundred and fifty rupees" is not on this menu and never has been.
+
+    The deterministic path is still the answer for menu questions: it is faster and it cannot be
+    wrong. This is what the model sees when that path declines, so a router miss costs a slower
+    answer rather than a fabricated one. Generated from the fixture, so it can never drift from it.
+
+    Sold-out dishes are included and marked, because "do you have the seafood platter" is a
+    question the model may be asked and "I don't know that dish" would be a worse answer than
+    "that one is off today".
+    """
+    lines: list[str] = []
+    for category in Category:
+        rows = [d for d in menu if d.category is category]
+        if not rows:
+            continue
+        lines.append(f"{category.value.upper()}:")
+        for d in rows:
+            bits = [f"{d.name} - {say_price(d.price)}", d.diet.value]
+            if d.spice != "none":
+                bits.append(f"{d.spice} spice")
+            if d.allergens:
+                bits.append("contains " + ", ".join(d.allergens))
+            if not d.available:
+                bits.append("NOT AVAILABLE TODAY")
+            lines.append("  " + "; ".join(bits))
+    return "\n".join(lines)
+
+
 def describe_dish(dish: Dish) -> dict[str, object]:
     """Flatten one dish into the plain dict a tool result carries.
 
