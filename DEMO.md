@@ -9,7 +9,7 @@ and this runbook does not pretend otherwise.
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 643 passed, 2 skipped
+python -m pytest -q                 # expect 751 passed, 2 skipped
 python -m aether.prewarm            # warms the process; prints what it cost
 ```
 
@@ -39,6 +39,12 @@ same console for the duration of each call.
 python -m aether.telephony.agent dev
 ```
 
+If a previous call went wrong, capture the next one so the failure names itself:
+
+```bash
+AETHER_CALL_CAPTURE=call1.wav python -m aether.telephony.agent dev 2>&1 | tee call1.log
+```
+
 Then dial the hotel number. The worker logs numbered stages `[1/7]`…`[7/7]`, so a failure says
 exactly how far it got, and prints a diagnosis when the call ends.
 
@@ -49,7 +55,7 @@ exactly how far it got, and prints a diagnosis when the call ends.
 | # | Do this | What to point at |
 |---|---|---|
 | 1 | Dial the number | Orb: grey → blue. Console shows the connection |
-| 2 | AETHER greets: *"You've reached AETHER, the hotel manager. How may I help you?"* | Orb amber, transcript line appears |
+| 2 | AETHER greets: *"You've reached AETHER, the hotel's manager. How may I help you?"* | Orb amber, transcript line appears |
 | 3 | *"What starters do you have?"* | Answered **without the LLM**. Evidence strip: no `llm_ms` |
 | 4 | *"How much is the chicken kebab?"* | *"…three hundred and eighty rupees."* Exact, from the fixture |
 | 5 | *"Is the chicken kebab spicy?"* | *"…medium spiced."* A different tool, not the price |
@@ -86,6 +92,7 @@ Two lines worth saying out loud, because they are the claim:
 | Symptom | Do |
 |---|---|
 | Call connects, AETHER silent | Let the call end. The worker prints `--- call diagnostics ---` naming the first failed stage: `inbound_audio`, `listening_gate`, `vad`, `stt`, `reply`, `tts`, `outbound_audio` |
+| Greeting heard, then AETHER cannot hear you | Check the `transport:` line. `pumps=2` for one caller means the track was attached twice and two readers were interleaved. `frames_failed` above zero means frames are arriving unconvertible. Re-run with `AETHER_CALL_CAPTURE=call.wav` and listen to what actually arrived |
 | Verdict is `vad` | The report prints `peak_rms` / `floor_rms` next to `speech_floor`. Set `AETHER_SPEECH_FLOOR` from that and restart. Do not guess it |
 | Verdict is `stt` | Speech was heard, words were not. Nothing to tune live — fall back to the local console |
 | Rime rejects a turn | The turn is discarded and the session survives. There is **no fallback voice** by design; say so |

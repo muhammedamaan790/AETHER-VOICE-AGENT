@@ -326,6 +326,32 @@ Still `<from_run>` and must not be quoted:
   needs BOTH a food noun and a list cue, so "is the food good", "where is the food court" and
   "can I order a taxi" still fall through to the model.
 
+- **A real call: greeting heard, AETHER deaf.** The caller's audio track is discovered on two
+  paths -- the `track_subscribed` event, and the sweep of already-subscribed publications after the
+  ~9 s pipeline build -- and in ordinary call timing BOTH fire for the same track. There was no
+  deduplication, so two `rtc.AudioStream` readers pushed every frame into ONE `InboundBridge`
+  sharing one `_carry` buffer.
+
+  **Measured**, because the first simulation was misleading: neat duplication (block A, A, B, B)
+  transcribes *correctly* -- Whisper is robust to a clean stutter. But two independent asyncio
+  tasks drift, and with realistic interleaving the same fixture transcribed **0 of 6 runs**
+  correctly, producing exactly the reported symptom: "Find the product I already ordered is 8
+  orders in alumni" for "Find the priority orders in aisle 9". Do not conclude a double pump is
+  harmless from the tidy case.
+
+  Fixed by deduplicating in `CallBridge.start_inbound` by `track.sid`, falling back to object
+  identity. Both discovery paths are kept -- losing the track entirely is the bug they were written
+  to fix. **The fix has not been exercised by a call.**
+- **One bad frame ended inbound audio for the whole call.** `pump_inbound` wrapped the entire
+  `async for` in a single `try`, so a malformed frame left AETHER deaf for the remainder while the
+  room, the outbound pump and the turn loop kept running -- the call looked alive. Frames are now
+  counted and skipped individually; only a stream failure ends the pump, and `frames_failed`
+  appears in the call diagnostics.
+- **Diagnostics quoted a sample rate they never received.** `InboundBridge` reported the expected
+  `source_rate` (48000), so audio arriving at another rate would have had its duration misstated by
+  the ratio -- 8 kHz audio reading as one sixth of its true length, i.e. "almost nothing arrived".
+  It now records and reports `observed_rate`.
+
 ### Standing limitations
 
 - **The real phone path has never been validated.** See RIME_EVIDENCE Part 6. Every threshold is
