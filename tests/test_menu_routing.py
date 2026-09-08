@@ -517,3 +517,96 @@ def test_the_overview_is_short_enough_to_say_on_a_phone(monkeypatch):
     said = rime.spoken[0]
     assert len(said.split()) <= 25, said
     assert "chicken kebab" not in said, "courses and diets, not a recitation of the menu"
+
+
+# ============================ the hallucinated dessert menu ============================
+#
+# From a real call. The caller asked for the desserts, `base.en` transcribed "dessert" as "Desert",
+# the router matched nothing, the model answered from nothing -- and invented three dishes and
+# three prices: "chocolate fudge cake, three hundred and fifty rupees", "apple crumble, three
+# hundred rupees", "seasonal fruit salad, two hundred and fifty rupees". None exist. It then said
+# it had added one "to your order", which is a transaction this system cannot perform.
+
+@pytest.mark.parametrize("said", [
+    "Tell me all the possible things available in Desert.",     # the exact STT output
+    "tell me all the possible things available in dessert",     # and spelled correctly
+    "what deserts do you have",
+    "show me the desserts",
+    "give me the dessert options",
+    "read me the dessert menu",
+    "what kind of desserts do you serve",
+])
+def test_a_dessert_question_never_reaches_the_model(said):
+    decision = route(said)
+    assert decision is not None, f"{said!r} must be answered from the fixture"
+    assert decision.tool in ("list_category", "menu_overview")
+
+
+def test_the_stt_misspelling_maps_to_desserts():
+    """One missing letter must not be able to cause a fabricated menu."""
+    decision = route("what is available in desert")
+    assert decision is not None and decision.params.get("category") == "desserts"
+
+
+def test_the_broadened_list_words_do_not_swallow_non_menu_questions():
+    """`tell me`, `show me`, `available` and `options` are broad. They still need a category."""
+    for said in ("can i book a table for eight", "is there parking", "what time do you close",
+                 "tell me about the wifi", "show me to my room", "what options do i have for late "
+                 "checkout", "is the food good", "can i order a taxi"):
+        assert route(said) is None, said
+
+
+def test_the_real_desserts_are_what_gets_spoken(monkeypatch):
+    """The five that exist, at the prices that exist."""
+    spike, _t, rime, llm = build(monkeypatch, "Tell me all the possible things available in Desert.")
+    spike.handle_utterance(AUDIO, 0.0)
+
+    said = rime.spoken[0]
+    assert llm.calls == []
+    for real in ("gulab jamun", "chocolate fondant", "seasonal fruit plate"):
+        assert real in said, f"{real} is on the menu and should be offered"
+    for invented in ("fudge cake", "apple crumble", "fruit salad"):
+        assert invented not in said.lower(), f"{invented} does not exist"
+
+
+# --- the safety net for whatever the router still misses ---
+
+def test_the_model_is_given_the_real_menu():
+    """The router will miss again. When it does, the model must have facts rather than invent them."""
+    from aether.hotel import MENU
+    from aether.llm import SYSTEM_PROMPT
+
+    for dish in MENU:
+        assert dish.name in SYSTEM_PROMPT, f"{dish.name} missing from the model's menu"
+    assert "chocolate fudge cake" not in SYSTEM_PROMPT.lower()
+    assert "THIS IS THE ENTIRE MENU" in SYSTEM_PROMPT
+
+
+def test_the_menu_given_to_the_model_is_generated_not_transcribed():
+    """A hand-copied menu would drift from the fixture the moment either changed."""
+    import inspect
+
+    import aether.llm as mod
+
+    assert "_menu_for_prompt()" in inspect.getsource(mod), (
+        "the menu must be generated from the fixture, not pasted into the prompt"
+    )
+
+
+def test_the_model_is_told_it_cannot_complete_transactions():
+    """"I have added the chocolate fudge cake to your order" -- there is no order system."""
+    from aether.llm import SYSTEM_PROMPT
+
+    p = SYSTEM_PROMPT.lower()
+    assert "cannot complete transactions" in p
+    for claim in ("added", "placed", "booked", "confirmed"):
+        assert claim in p, f"the prompt must forbid claiming it has {claim} something"
+
+
+def test_sold_out_dishes_are_marked_for_the_model_not_hidden():
+    """"Do you have the seafood platter" needs "that is off today", not "no such dish"."""
+    from aether.hotel import menu_for_prompt
+
+    text = menu_for_prompt()
+    assert "seafood platter" in text
+    assert "NOT AVAILABLE TODAY" in text

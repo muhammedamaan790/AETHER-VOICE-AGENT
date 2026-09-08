@@ -371,11 +371,30 @@ def test_the_static_ui_exists_and_is_self_contained():
 
 
 def test_the_ui_reacts_to_real_canonical_events():
+    """The page is driven by the canonical vocabulary, not by invented signals.
+
+    NARROWED when the evidence grid and event log were removed for the demo: the page no longer
+    paints `previous_generation`, `fence_reason`, `last_discard` or the timeline. The bridge still
+    computes and sends all of them -- `test_the_snapshot_is_json_serialisable` and the `UiState`
+    fold tests pin that end -- so the data is there for a page that wants it.
+    """
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     for event_type in ("TranscriptFinal", "ResponseSpoken", "FenceRequested", "ResultDiscarded"):
         assert event_type in html, f"{event_type} should drive the UI"
-    for key in ("previous_generation", "fence_reason", "last_discard", "timeline"):
-        assert key in html, f"{key} should be rendered"
+
+
+def test_the_bridge_still_sends_what_the_page_stopped_painting():
+    """Removing a panel must not quietly remove the data behind it."""
+    bridge = WebBridge()
+    for ev in ({"type": "GenerationChanged", "from_gen": "G1", "to_gen": "G2"},
+               {"type": "FenceRequested", "gen": "G2", "reason": "button_interrupt"},
+               {"type": "ResultDiscarded", "gen": "G2", "reason": "stale_generation_llm"}):
+        bridge.state.apply(ev)
+
+    snap = bridge.current_state()
+    for key in ("previous_generation", "fence_reason", "last_discard", "timeline",
+                "last_class", "leaks", "latency"):
+        assert key in snap, f"{key} must still reach the browser"
 
 
 def test_the_latency_whitelist_lives_in_the_bridge_not_the_markup():
@@ -391,9 +410,8 @@ def test_the_latency_whitelist_lives_in_the_bridge_not_the_markup():
     for metric in ("stt_ms", "llm_ms", "tts_ms", "turn_latency_ms",
                    "llm_ttft_ms", "llm_total_ms"):
         assert metric in src, f"{metric} should be forwarded to the UI"
-
-    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    assert "Object.entries(latency" in html, "the UI renders the keys it is given, not a fixed list"
+    # The markup half of this test went with the evidence grid. What it protected -- the engine
+    # deciding which metrics are real, rather than the page hardcoding a list -- lives here.
 
 
 @pytest.fixture
@@ -520,7 +538,7 @@ def test_the_ui_renders_the_one_toggle_and_a_separate_interrupt():
     assert 'id="listenBtn"' in html and 'id="interruptBtn"' in html
     assert html.count('id="listenBtn"') == 1, "exactly one listening toggle"
     assert "push to talk" not in html.lower() and "push-to-talk" not in html.lower()
-    for key in ("transcript", "interruptible", "last_class", "leaks", "speech_active"):
+    for key in ("transcript", "interruptible", "speech_active"):
         assert key in html, f"{key} should drive the UI"
 
 
@@ -725,9 +743,18 @@ def test_the_ui_renders_the_waiting_and_recording_states():
     assert "Waiting for a call" in html
     # The page keys off `call_active`, not off the phase string, so `no_call` is deliberately
     # absent here -- `test_detach_reports_no_call_rather_than_claiming_to_listen` pins that end.
-    assert "recording" in html
-    for key in ("FEED_MAX", "pushFeed", "clearFeed"):
-        assert key in html, f"the live event feed needs {key}"
+    assert "recording" in html, "the trace path must stay visible -- it is the saved-log proof"
+
+
+def test_the_conversation_is_the_largest_thing_on_the_page():
+    """The demo is a conversation. It comes first in the DOM and gets the wider column."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert html.index('id="transcript"') < html.index('id="orb"'), (
+        "the conversation must precede the orb, so it reads first and lays out wider"
+    )
+    assert "EVIDENCE" not in html and "EVENT LOG" not in html, (
+        "the evidence grid and event log were removed to give the conversation the space"
+    )
 
 
 def test_an_idle_console_stops_re_sending_the_same_snapshot():

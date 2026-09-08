@@ -26,6 +26,7 @@ from collections.abc import Iterator, Sequence
 from typing import Protocol
 
 from .conversation import Message
+from .hotel import menu_for_prompt as _menu_for_prompt
 from .sentences import SentenceAccumulator
 from .trace import now_ms
 
@@ -73,7 +74,29 @@ SYSTEM_PROMPT = (
     "The ONLY facts you have are the menu ones handed to you. You do not know opening hours, "
     "room rates, facilities or services. "
     "Never invent a dish, a price, an allergen, a time, a rate or a service; when you do not have "
-    "something, say briefly that you will check and offer to help with the menu."
+    "something, say briefly that you will check and offer to help with the menu. "
+    # Live call: asked to "place me order of chocolate buds", AETHER replied "I have added the
+    # chocolate fudge cake for three hundred and fifty rupees to your order". There is no order
+    # system, nothing was added, and the dish does not exist. Claiming a completed action is worse
+    # than declining one, because the caller then believes it happened.
+    "You cannot complete transactions. Never say you have added, placed, booked, confirmed or "
+    "arranged anything. You may note what the caller wants and say you will pass it on."
+)
+
+# THE MENU ITSELF, appended so a router miss cannot become a fabrication.
+#
+# Menu questions are supposed to be answered deterministically, without the model, and that is
+# still what happens: `aether.hotel.router` is faster and cannot be wrong. But on a real call the
+# router missed once -- `base.en` transcribed "dessert" as "Desert" -- the model answered from
+# nothing, and invented three desserts and three prices. None of them exist.
+#
+# The instruction "never invent a dish" was already in the prompt above and did not hold. A model
+# asked a menu question with no menu in front of it will produce a plausible menu. So it now has
+# the real one: a router miss costs a slower answer instead of a fabricated one.
+SYSTEM_PROMPT = SYSTEM_PROMPT + (
+    "\n\nTHIS IS THE ENTIRE MENU. It is the only food, the only prices and the only allergens "
+    "that exist. If something is not on this list, we do not have it -- say so plainly and offer "
+    "something that is.\n\n" + _menu_for_prompt()
 )
 
 # Voice replies are one or two sentences, so a small cap is a deliberate output-shape choice,

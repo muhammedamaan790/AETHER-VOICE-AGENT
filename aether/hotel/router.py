@@ -33,8 +33,12 @@ _CATEGORY_WORDS: tuple[tuple[str, Category], ...] = tuple(sorted(
         ("main course", Category.MAINS), ("main courses", Category.MAINS),
         ("mains", Category.MAINS), ("main", Category.MAINS), ("entree", Category.MAINS),
         ("desserts", Category.DESSERTS), ("dessert", Category.DESSERTS),
+        # STT spellings, not English. `base.en` transcribed a caller's "dessert" as "Desert" on a
+        # real call; the router missed, the model answered, and it invented three dishes and three
+        # prices that do not exist. A missing letter must not be able to do that.
+        ("deserts", Category.DESSERTS), ("desert", Category.DESSERTS),
         ("sweets", Category.DESSERTS), ("sweet", Category.DESSERTS),
-        ("pudding", Category.DESSERTS),
+        ("pudding", Category.DESSERTS), ("puddings", Category.DESSERTS),
         ("drinks", Category.DRINKS), ("drink", Category.DRINKS),
         ("beverages", Category.DRINKS), ("beverage", Category.DRINKS),
     ),
@@ -99,7 +103,14 @@ _MENU_NOUNS: tuple[tuple[str, str], ...] = (
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
 _AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
 _ALLERGEN_WORDS = ("allerg", "contain", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
-_LIST_WORDS = ("what", "which", "list", "tell me about", "do you have", "any")
+# Ways a caller asks to be told what there is. Broadened after a real call: "tell me all the
+# possible things available in dessert" matched NONE of the original six, so a plain menu question
+# reached the model. Each entry is a phrase people actually used on the calls, not a guess.
+_LIST_WORDS = (
+    "what", "which", "list", "any", "do you have", "have you got", "got any",
+    "tell me", "show me", "give me", "read me", "talk me through",
+    "options", "available", "everything", "all the", "kind of", "type of", "types of",
+)
 
 # Dish names longest-first, so "paneer butter masala" is matched before "paneer tikka" could
 # ambiguously grab "paneer".
