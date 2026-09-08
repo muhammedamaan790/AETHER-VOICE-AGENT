@@ -30,8 +30,8 @@ only the conversation.
 | 5 | I'm allergic to nuts, what can I eat? | If you are avoiding nuts, I would suggest Chicken Kebab, Butter Chicken and Vegetable Biryani. One other dish on the menu contains nuts, so do check with me before you order. |
 | 6 | Do you have anything vegetarian? | Yes. For vegetarian we have Paneer Tikka, Paneer Butter Masala, Vegetable Biryani, Chocolate Brownie, Fresh Fruit Bowl and Fresh Lime Soda, plus two more. |
 | 7 | Actually, what rooms do you have? | We have Standard King, Standard Twin, Deluxe King, Executive Suite and Family Suite, starting at six thousand five hundred rupees a night. |
-| 8 | How much is a deluxe king? | The Deluxe King is eight thousand five hundred rupees a night, and sleeps up to two. |
-| 9 | Is room one oh one free? | Room one oh one is free. It is a Standard King at six thousand five hundred rupees a night. |
+| 8 | How much is an executive suite? | The Executive Suite is twelve thousand five hundred rupees a night, and sleeps up to three. |
+| 9 | Do you have any rooms available? | We have forty one rooms free, starting at six thousand five hundred rupees a night. |
 | 10 | What comes with an executive suite? | The Executive Suite has king bed, living room, wi-fi, smart tv, minibar, city view and breakfast. |
 | 11 | And what time can I check in? | Check-in is from two in the afternoon, and check-out is by twelve noon. |
 | 12 | Do you have room service? | Room Service is available from six in the morning until eleven at night. You can reach it on extension one oh one. |
@@ -40,6 +40,10 @@ only the conversation.
 
 Before turn 1, AETHER opens with the fixed greeting: *"You've reached AETHER, the hotel's manager.
 How may I help you?"*
+
+Turns 8 and 10 are both about the **executive suite** on purpose: one guest, one room, price then
+what's included — the way somebody actually asks. It also keeps the spoken vocabulary small, which
+is what the recogniser is best at.
 
 ## The one beat that needs rehearsing
 
@@ -61,7 +65,7 @@ longer, but it is the **allergy** answer — talking over a safety reply reads b
 | 4 | — | "It will tell you what it hasn't got." |
 | 5 | — | "This is the one question where a confident guess could hurt somebody, so it doesn't guess." |
 | 7 | Transcript: the discarded answer | "I talked over it. That answer was never spoken, and it's marked as such." |
-| 9 | — | "A real room, with its real status. Said as a door — 'one oh one' — not as a number." |
+| 9 | — | "Forty one, counted from the database at the moment I asked." |
 | 12 | `stale leaks: 0`, recording path | "Nothing stale ever reached the caller, and the whole call is on disk." |
 
 ---
@@ -120,5 +124,17 @@ the tool is built for.
 **Reset the browser zoom to 100%** (Ctrl+0) before recording. The console is laid out for a full
 window.
 
-**Say room numbers digit by digit** — "one oh one", not "a hundred and one". That is how AETHER says
-them back, and how the recogniser hears them best.
+**Say room numbers digit by digit** — "three oh five", not "three hundred and five". That is how
+AETHER says them back, and how the recogniser hears them best.
+
+**A spoken room number is the least reliable thing you can say on this call**, which is why the
+script no longer contains one. It was turn 9, *"is room one oh one free?"*, and it did not recognise
+well on a real line: "one oh one" is the same short vowel three times, and the recogniser has no
+menu of room numbers to bias towards the way it effectively does for dish and room-type names. The
+same beat with *"is room three oh five free?"* is more distinct, and if you want a per-room lookup
+on camera that is the one to use — but it is optional, and the answer is a flat *"Room three oh five
+is occupied at the moment."*
+
+Turn 8 was *"how much is a deluxe king?"* for the same reason: "deluxe" is the rarest word in the
+whole script. It is now *"how much is an executive suite?"* — vocabulary that already works in turn
+10, so the call reuses a phrase proven on your own line rather than introducing a new one.
