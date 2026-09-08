@@ -457,29 +457,60 @@ and no greeting existed). Those fixes are tested. **They have not been exercised
 
 | Item | Status |
 |---|---|
-| Worker registers as `aether-hotel` | `<from_run>` |
-| Inbound call reaches the entrypoint | `<from_run>` |
-| Caller's audio track subscribed | `<from_run>` |
-| Greeting heard on the handset | `<from_run>` |
-| Caller transcribed correctly (word accuracy) | `<from_run>` |
-| Rime audio heard on the handset | `<from_run>` |
-| Call ends cleanly, trace closed | `<from_run>` |
-| `diagnose()` verdict for the call | `<from_run>` |
+| Worker registers as `aether-hotel` | **YES** — `run-20260908T023320Z` |
+| Inbound call reaches the entrypoint | **YES** — stages [1/7]…[7/7] all logged |
+| Caller's audio track subscribed | **YES** — and twice, which was the defect |
+| Greeting heard on the handset | **YES** — confirmed by the caller |
+| Caller transcribed correctly (word accuracy) | **NO** — audio doubled and interleaved |
+| Rime audio heard on the handset | **YES** — 6710 ms audible outbound |
+| Call ends cleanly, trace closed | **YES** — caller hangup, teardown, trace written |
+| `diagnose()` verdict for the call | `OK` — **and it was wrong.** See below |
 
-### Telephony audio — every number here is laptop-derived until this table is filled
+**The verdict was `OK` on a call that failed**, because `diagnose()` walks the pipeline for the
+first stage that produced *nothing*, and every stage produced something: audio arrived, speech was
+detected, a transcript existed, a turn was spoken. It has no test for audio that arrives *corrupt*.
+The `transport:` line added afterwards carries `pumps`, which is the fact that would have named
+this defect immediately — `pumps=2` for a single caller.
+
+### Telephony audio — FIRST REAL MEASUREMENT, `run-20260908T023320Z`
+
+A call was answered on 2026-09-08 (23 s, inbound +919840870678). The caller heard the greeting and
+AETHER could not understand them; the cause was a transport defect, not levels. **The audio itself
+was measured, and this is the first telephony evidence in this repository.**
+
+Every utterance the VAD saw on that call:
+
+| duration | voiced | peak rms | mean rms | ambient | floor | outcome |
+|---|---|---|---|---|---|---|
+| 2440 ms | 960 ms | **15.8** | 10.5 | 4.1 | 35.0 | rejected `below_noise_floor` |
+| 1320 ms | 540 ms | **6372.5** | 1478.6 | 8.0 | 35.0 | accepted |
+| 3100 ms | 2280 ms | **10174.2** | 2121.0 | 11.1 | 35.0 | accepted |
+| 3000 ms | 1220 ms | **12.9** | 8.1 | 5.6 | 35.0 | rejected `below_noise_floor` |
+| 1520 ms | 300 ms | **207.4** | 75.2 | 13.1 | 39.3 | accepted |
+| 3700 ms | 3040 ms | **10071.8** | 3378.4 | 11.9 | 35.7 | accepted |
 
 | Item | Laptop value | Real-call value |
 |---|---|---|
-| `AETHER_SPEECH_FLOOR` | 35 (calibrated on a laptop mic) | `<from_run>` |
-| Inbound `peak_rms` during speech | — | `<from_run>` |
-| Inbound `floor_rms` (ambient) | — | `<from_run>` |
-| `min_speech_ms` | 250 | `<from_run>` |
-| Endpointing (trailing silence) | 500 ms | `<from_run>` |
-| STT word accuracy | — | `<from_run>` |
+| `AETHER_SPEECH_FLOOR` | 35 | **35 — unchanged, and correct.** See below |
+| Inbound `peak_rms` during speech | 8422–12441 | **6372–10174** |
+| Inbound `floor_rms` (ambient) | 3.6–24.8 | **4.1–13.1** |
+| Line noise peak (rejected) | — | **12.9–15.8** |
+| `min_speech_ms` | 250 | 250 — no utterance was rejected as `too_short` |
+| Endpointing (trailing silence) | 500 ms | 500 ms — every utterance endpointed |
+| STT word accuracy | — | `<from_run>` — audio was garbled by the transport defect |
 
-**None of these transfers.** Telephony audio is narrowband, codec-compressed, carrier-processed and
-network-jittered; a threshold derived from a laptop microphone has no reason to hold. Recalibration
-is expected and is the single most likely day-of failure.
+**The prediction that thresholds would not transfer was WRONG, and that is worth stating plainly.**
+Telephony speech peaked at 6372–10174 RMS against a floor of 35 — a margin of 180x to 290x, close
+to the laptop's own 8422–12441. Line noise sat at 12.9–15.8 and was correctly rejected. `35` was
+derived on a laptop and happens to be right for this carrier and handset.
+
+**No threshold was changed, and none should be** until a call is observed rejecting real speech.
+The separation here is wide enough that recalibration would be tuning against noise.
+
+Still unmeasured: **STT word accuracy on narrowband audio.** Both transcripts from this call came
+from doubled, interleaved audio, so they say nothing about Whisper on clean telephony. `base.en`
+fell through all six temperature fallbacks (compression ratio 9.82, i.e. near-total repetition) on
+the garbled input — which is evidence of the transport defect, not of narrowband performance.
 
 ### Interruption on a call
 
