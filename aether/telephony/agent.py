@@ -21,9 +21,14 @@ asyncio is not the mechanism *inside* the audio callback, and may be used outsid
 frames are handed to `process_frame` from an async task, which is a plain function call; the turn
 loop runs on its own thread exactly as it does locally. Nothing new runs on a realtime callback.
 
-Scope: this registers, connects, bridges audio and tears down cleanly. **No call has been made with
-it.** Thresholds are still laptop-calibrated and are expected to need re-deriving on real telephony
-audio (see the plan's §6).
+Scope: this registers, connects, bridges audio and tears down cleanly. A real call has now reached
+it -- the caller heard the greeting, and AETHER could not understand a word they said. The cause was
+the caller's track being attached on both discovery paths, so two `rtc.AudioStream` readers
+interleaved into one bridge; `start_inbound` now deduplicates by track sid. **The fix has not itself
+been exercised by a call.**
+
+Thresholds are still laptop-calibrated and are expected to need re-deriving on real telephony audio
+(RIME_EVIDENCE.md Part 6, which is still all placeholders).
 """
 
 from __future__ import annotations
@@ -32,7 +37,9 @@ import asyncio
 import logging
 import os
 import threading
+import wave
 
+import numpy as np
 from livekit import rtc
 from livekit.agents import AgentServer, JobContext, cli
 
@@ -71,21 +78,50 @@ class CallBridge:
         # call hung until LiveKit killed it with "entrypoint did not exit in time". The room's
         # disconnect handlers now set this, so the wait is released by the call actually ending.
         self._closing = closing
+        # Frames that arrived and could not be converted. Counted rather than fatal -- see
+        # `pump_inbound` -- and surfaced in the call diagnostics, because "audio arrived but none
+        # of it was usable" must not look like "no audio arrived".
+        self.frames_failed = 0
+        # Every track this bridge has already started a pump for, by sid. See `hotel_call.attach`.
+        self.attached: set[str] = set()
+        # Opt-in capture of exactly what the VAD was handed. Off unless AETHER_CALL_CAPTURE is set.
+        self._capture: list[np.ndarray] = []
+        self._capture_path = os.environ.get("AETHER_CALL_CAPTURE", "").strip() or None
 
     # --- audio in ---------------------------------------------------------------------
 
     async def pump_inbound(self, track: rtc.Track) -> None:
-        """Caller audio → AETHER. Ends when the track does, which is how a hangup arrives."""
+        """Caller audio → AETHER. Ends when the track does, which is how a hangup arrives.
+
+        A frame that cannot be converted is COUNTED AND SKIPPED, not fatal. The `try` used to wrap
+        the whole loop, so one malformed frame ended inbound audio for the remainder of the call
+        while the room, the outbound pump and the turn loop all kept running: the call stayed up,
+        the greeting had already played, and AETHER was deaf from that moment on with a single line
+        in the log to say so. A bad frame is 20 ms of audio; it must cost 20 ms, not the call.
+
+        Only a failure of the stream itself ends the pump, because at that point there is no more
+        audio to read.
+        """
         stream = rtc.AudioStream(track)
         try:
             async for event in stream:
                 if self._closing.is_set():
                     break
-                # `push` resamples, rebuffers into exact VAD frames, and honours STANDBY. A frame
-                # of the wrong size would otherwise be dropped silently by `process_frame`.
-                self.inbound.push(to_chunk(event.frame))
+                try:
+                    # `push` resamples, rebuffers into exact VAD frames, and honours STANDBY. A
+                    # frame of the wrong size would otherwise be dropped silently by
+                    # `process_frame`.
+                    self.inbound.push(to_chunk(event.frame))
+                except Exception:
+                    self.frames_failed += 1
+                    # Only the first few, then silence: a systematically bad stream would
+                    # otherwise fill the log at fifty lines a second and bury everything else.
+                    # The count is what matters, and it is reported in the call diagnostics.
+                    if self.frames_failed <= 3:
+                        logger.exception("inbound frame %d could not be converted; skipping",
+                                         self.frames_failed)
         except Exception:
-            logger.exception("inbound pump stopped")
+            logger.exception("inbound stream ended early")
         finally:
             await stream.aclose()
 
@@ -115,8 +151,61 @@ class CallBridge:
     def start_outbound(self) -> None:
         self._tasks.append(asyncio.create_task(self.pump_outbound()))
 
-    def start_inbound(self, track: rtc.Track) -> None:
+    def start_inbound(self, track: rtc.Track) -> bool:
+        """Start one pump for this track. Returns False if it already has one.
+
+        THE DEDUP, and it belongs here rather than at the call site because this object owns the
+        pumps. A track is discovered on two paths -- the `track_subscribed` event, and the sweep of
+        already-subscribed publications after the pipeline is built -- and in the ordinary timing
+        of a call BOTH fire for the same track: the event lands during the ~9 s build and is
+        queued, then the sweep finds the same publication once it is subscribed.
+
+        Without this check that started two `rtc.AudioStream` readers on one track, both pushing
+        into ONE `InboundBridge` with one `_carry` buffer. Every frame arrived twice, interleaved
+        non-deterministically, and the 320-sample rebuffering was scrambled across two producers --
+        so the caller heard the greeting and AETHER could not understand a word, while
+        `samples_received` looked healthy because it had doubled.
+
+        Both discovery paths are kept: either can legitimately be the one that fires, and losing
+        the track entirely is the bug that pair was written to fix.
+        """
+        sid = getattr(track, "sid", None) or id(track)
+        if sid in self.attached:
+            return False
+        self.attached.add(sid)
+        if self._capture_path:
+            # Tap the frames the VAD is handed -- after resampling and rebuffering -- so the
+            # capture is what AETHER heard, not what the transport sent.
+            self.inbound.on_frame = self._capture.append
         self._tasks.append(asyncio.create_task(self.pump_inbound(track)))
+        return True
+
+    def write_capture(self) -> str | None:
+        """Write the captured inbound audio, if capture was enabled. Returns the path.
+
+        Off unless AETHER_CALL_CAPTURE names a file. This records a real caller's voice, so it is
+        a deliberate act and never a default.
+
+        Never raises: a failed capture must not disturb the teardown of a call.
+        """
+        if not self._capture_path or not self._capture:
+            return None
+        try:
+            pcm = np.concatenate(self._capture)
+            # Open the file FIRST, then hand the handle to `wave`. Letting `wave.open` do the
+            # opening leaves a half-built `Wave_write` behind when the path is bad, whose
+            # destructor then raises during garbage collection -- noise in an unrelated place,
+            # long after the failure this method already handled.
+            with open(self._capture_path, "wb") as handle:
+                with wave.open(handle, "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(self.spike.mic.samplerate)
+                    wav.writeframes(pcm.tobytes())
+            return self._capture_path
+        except Exception:
+            logger.exception("call capture could not be written")
+            return None
 
     async def aclose(self) -> None:
         """Stop both pumps and fence anything in flight.
@@ -253,9 +342,12 @@ async def hotel_call(ctx: JobContext) -> None:
         if bridge is None:
             logger.info("[3/7] caller audio (%s) queued until the pipeline is ready", source)
             pending_tracks.append(track)
-        else:
+        elif bridge.start_inbound(track):
             logger.info("[4/7] inbound pump starting (%s)", source)
-            bridge.start_inbound(track)
+        else:
+            # Expected, not an error: both discovery paths found the same track. Logged so the
+            # log still shows what happened rather than silently dropping a line.
+            logger.info("[4/7] track already has a pump (%s); not starting a second", source)
 
     # --- handlers FIRST, before connect ------------------------------------------------
     # Registering these after `connect()` is what lost the track-subscribed event on call one.
@@ -324,11 +416,15 @@ async def hotel_call(ctx: JobContext) -> None:
         # BEFORE `shutdown()` closes the trace. The report is read out of the trace, so ordering
         # it after teardown would produce an empty diagnosis of the call that just happened.
         try:
-            logger.info("\n%s", format_report(
-                diagnose(trace, inbound=bridge.inbound, outbound=bridge.outbound)
-            ))
+            report = diagnose(trace, inbound=bridge.inbound, outbound=bridge.outbound)
+            report["inbound_frames_failed"] = bridge.frames_failed
+            report["inbound_pumps"] = len(bridge.attached)
+            logger.info("\n%s", format_report(report))
         except Exception:
             logger.exception("diagnostics failed")
+        captured = bridge.write_capture()
+        if captured:
+            logger.info("inbound audio captured: %s", captured)
         stop_console(console)
         spike.shutdown()
         logger.info("[7/7] call ended: trace=%s", trace.path)

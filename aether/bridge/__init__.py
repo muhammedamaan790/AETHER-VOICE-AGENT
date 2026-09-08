@@ -32,6 +32,7 @@ phone call as it does on a laptop.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -89,6 +90,17 @@ class InboundBridge:
         self.peak_rms = 0.0             # loudest block seen -- the speech level
         self.floor_rms: float | None = None   # quietest block seen -- the ambient level
         self._rms_sum = 0.0
+        # The rate the chunks ACTUALLY carry, observed rather than assumed. `source_rate` above is
+        # what the caller expected; if a transport delivers something else the audio path still
+        # resamples correctly off `chunk.sample_rate`, but a report quoting the expected rate would
+        # state a duration wrong by the ratio between them and send the next investigation to the
+        # wrong place.
+        self.observed_rate: int | None = None
+
+        # Optional tap on the frames handed to the VAD -- exactly those samples, after resampling
+        # and rebuffering, before any detection. Used by the call capture to write what the VAD
+        # heard rather than what the transport sent. `None` costs nothing.
+        self.on_frame: Callable[[np.ndarray], None] | None = None
 
     def push(self, chunk: AudioChunk) -> int:
         """Feed one transport block in. Returns how many VAD frames it produced.
@@ -98,6 +110,7 @@ class InboundBridge:
         """
         self.chunks_received += 1
         self.samples_received += int(len(chunk.data))
+        self.observed_rate = int(chunk.sample_rate)
         if len(chunk.data):
             block = np.asarray(chunk.data, dtype=np.float32)
             rms = float(np.sqrt(np.mean(block * block)))
@@ -121,10 +134,22 @@ class InboundBridge:
         size = self.mic.frame_samples
         n_full = len(buf) // size
         for i in range(n_full):
-            self.mic.process_frame(buf[i * size:(i + 1) * size])
+            frame = buf[i * size:(i + 1) * size]
+            if self.on_frame is not None:
+                self.on_frame(frame)
+            self.mic.process_frame(frame)
         self._carry = buf[n_full * size:].copy()
         self.frames_delivered += n_full
         return n_full
+
+    def _rate_for_duration(self) -> int:
+        """The rate to convert `samples_received` into a duration with.
+
+        The OBSERVED rate wins over the expected one. Reporting 48 kHz for audio that actually
+        arrived at 8 kHz would understate the call's duration six-fold, which reads as "almost no
+        audio arrived" -- the wrong diagnosis, argued from a number that was never measured.
+        """
+        return self.observed_rate or self.source_rate
 
     @property
     def mean_rms(self) -> float:
@@ -136,13 +161,14 @@ class InboundBridge:
         return {
             "chunks_received": self.chunks_received,
             "samples_received": self.samples_received,
-            "audio_ms": round(self.samples_received / self.source_rate * 1000.0, 1),
+            "audio_ms": round(self.samples_received / self._rate_for_duration() * 1000.0, 1),
             "frames_delivered": self.frames_delivered,
             "frames_dropped_not_listening": self.frames_dropped_not_listening,
             "peak_rms": round(self.peak_rms, 1),
             "mean_rms": round(self.mean_rms, 1),
             "floor_rms": None if self.floor_rms is None else round(self.floor_rms, 1),
             "source_rate": self.source_rate,
+            "observed_rate": self.observed_rate,
             "vad_rate": self.mic.samplerate,
             "speech_floor": round(float(self.mic.speech_floor()), 1),
         }

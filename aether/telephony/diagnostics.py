@@ -118,6 +118,15 @@ def format_report(report: dict[str, Any]) -> str:
         stats = report.get(key) or {}
         if stats:
             lines.append(f"{key:9}: " + "  ".join(f"{k}={v}" for k, v in stats.items()))
+    # Transport-level facts the caller may have attached. Reported on their own line because they
+    # answer a different question from the pipeline counts: not "how far did a turn get" but
+    # "was the audio that arrived intact". `pumps` above 1 for a single caller means one track was
+    # attached twice and two readers were interleaved into one buffer -- audio arrives, doubled and
+    # scrambled, and every count below still looks healthy.
+    transport = {k: report[k] for k in ("inbound_pumps", "inbound_frames_failed")
+                 if report.get(k) is not None}
+    if transport:
+        lines.append("transport: " + "  ".join(f"{k[8:]}={v}" for k, v in transport.items()))
     lines.append(
         "pipeline : "
         f"onsets={report['speech_onsets']}  transcripts={report['transcripts']}"
