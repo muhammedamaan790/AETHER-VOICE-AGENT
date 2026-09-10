@@ -49,6 +49,7 @@ from .lang import ACKNOWLEDGEMENT as LANG_ACK
 from .lang import DEFAULT as LANG_DEFAULT
 from .lang import (
     HOTEL_GREETING,
+    ACKNOWLEDGEMENT,
     LANGUAGE_HINT,
     SELECT_FALLBACK,
     SELECT_RETRY,
@@ -193,6 +194,11 @@ class Day1Spike:
         # the subject: proposed during the turn, committed only once the caller has heard it.
         self.suggestion: Suggestion | None = None
         self._pending_suggestion: Suggestion | None = None
+        # AETHER offered the language list mid-call and is owed an answer. A closed question, exactly
+        # like the opening one, so the same recognition hint and phone-line mishearings apply -- and,
+        # like every other piece of conversational state, only once the caller has HEARD the offer.
+        self.awaiting_switch = False
+        self._pending_switch_offer = False
         # The hotel menu, and the runner that executes its tools under the SAME fencing the audio
         # path uses. Deterministic lookups answer menu questions without the LLM; anything the
         # router is not confident about still goes to Gemini.
@@ -384,6 +390,7 @@ class Day1Spike:
         # leak fencing exists to prevent, wearing a different hat.
         self._pending_subject = None
         self._pending_suggestion = None
+        self._pending_switch_offer = False
         for fenced_gen, fence_reason in self.barge.drain_fenced():
             # The reason comes from whoever fenced, never from here. A hardcoded string would have
             # recorded a button press as "meaningful_interruption" and quietly destroyed the one
@@ -407,7 +414,10 @@ class Day1Spike:
         # A closed question gets a closed vocabulary. While AETHER waits for "English, Hindi, or
         # Spanish?" the recogniser is told that is what it is listening for; on every other turn it
         # is told nothing. Proven on the caller's own audio from a failed call (see `stt.py`).
-        self.stt.prompt = LANGUAGE_HINT if self.awaiting_language else None
+        # Also after a mid-call offer of the language list: without it, "Hindi" said mid-call met the
+        # same unhinted `base.en` that heard "in the" three times on a real line.
+        self.stt.prompt = (LANGUAGE_HINT if (self.awaiting_language or self.awaiting_switch)
+                           else None)
         text = self.stt.transcribe(audio, turn_id=self._turn, gen=None)
         final = self.trace.last(EventType.TRANSCRIPT_FINAL)
         timing.transcript = final.t if final else None
@@ -543,6 +553,9 @@ class Day1Spike:
             # to a question they were not asked.
             self.suggestion = self._pending_suggestion
             self._pending_suggestion = None
+            if self._pending_switch_offer:
+                self.awaiting_switch = True
+                self._pending_switch_offer = False
 
             # Asked once, here, rather than in each of the three speak paths: the gate is the
             # authority on when audio actually left, and it knows by the time the turn is spoken.
@@ -787,6 +800,7 @@ class Day1Spike:
         offered Hindi.
         """
         self.awaiting_language = True
+        self.awaiting_switch = False
         self._selection_misses = 0
         self.language = LANG_DEFAULT
 
@@ -827,6 +841,17 @@ class Day1Spike:
             # The real hotel greeting, now that there is a language to say it in.
             return HOTEL_GREETING.get(self.language.code, HOTEL_GREETING["eng"])
 
+        if self.awaiting_switch:
+            # Answering the offer AETHER just made. One chance, no loop: anything that is not a
+            # language falls straight through as an ordinary turn, because the caller may simply
+            # have moved on -- and asking again would be the loop that made a real caller hang up.
+            self.awaiting_switch = False
+            chosen = names_language(text) or heard_as_language(text)
+            if chosen is not None:
+                self._set_language(chosen)
+                print(f"  LANGUAGE: switched to {self.language.code} on the offer")
+                return ACKNOWLEDGEMENT.get(self.language.code, ACKNOWLEDGEMENT["eng"])
+
         wanted = detect_switch(text, self.language)
         if wanted is None:
             # "Can we switch language?" names no language, so switching would be a guess. Offer the
@@ -835,6 +860,8 @@ class Day1Spike:
             if asks_for_options(text):
                 offer = language_offer(self.language)
                 print(f"  LANGUAGE: offering {offer}")
+                # The offer is a closed question; its answer is treated like the opening's.
+                self._pending_switch_offer = True
                 return offer
             return None
         was = self.language

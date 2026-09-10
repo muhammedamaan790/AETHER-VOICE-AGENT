@@ -4,7 +4,7 @@ Every claim here names the file, test or trace that backs it. Where something is
 measured, it says so — a rubric that rewards transparent method punishes overclaiming, and the
 "What we did not build" section at the end is not an afterthought.
 
-**Reproduce everything:** `python -m pytest -q` → **1475 passed, 2 skipped**.
+**Reproduce everything:** `python -m pytest -q` → **1525 passed, 2 skipped**.
 
 ---
 
@@ -25,7 +25,7 @@ showing the previous answer to recover from when they do.
 |---|---|
 | User and context | [`PRD.md`](PRD.md) §1–§2 |
 | The product | [`README.md`](README.md) |
-| What a real call sounds like | [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) — 12 turns, every answer quoted from the running system |
+| What a real call sounds like | [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) — seven English turns and a Hindi switch, every answer quoted from the running system |
 
 ## Hard voice engineering — 25%
 
@@ -43,7 +43,7 @@ superseded turn cannot reach the speaker even if it completes.
 |---|---|---|
 | Interruption semantics, six classes | `aether/classify/`, `aether/interruption/` | `tests/test_classifier.py`, `tests/test_interruption_coordinator.py` |
 | Generation fencing, four layers | `aether/supervisor/generations.py`, `aether/audio/player.py` | `tests/test_acceptance.py` A–H |
-| A fenced **mutation** never lands | `aether/tools/` | `tests/test_warehouse_tools.py:185` — needs a mutable store, which is why `aether/warehouse/` still exists |
+| A fenced **mutation** never lands | `aether/tools/`, `aether/hotel/bookings.py` | `tests/test_bookings.py` — a caller who changes their mind mid-booking leaves no row behind; mutation-tested (moving the fence check after the tool body fails seven tests). `tests/test_warehouse_tools.py` proves the same in a second domain |
 | Telephony under real line conditions | `aether/bridge/`, `aether/telephony/` | [`RIME_EVIDENCE.md`](RIME_EVIDENCE.md) Part 6 |
 | Endpointing and speech floor, calibrated from real calls | `aether/audio/vad.py` | Part 6 — floor moved 35 → **2500** on 28 pooled utterances |
 | Surviving recogniser error | `aether/hotel/router.py` | `tests/test_hotel_db.py`, and below |
@@ -112,7 +112,7 @@ a door — "three oh five", not "three hundred and five". Asserted in `tests/tes
 
 ## Evidence and reproducibility — 20%
 
-**1477 automated tests — 1475 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
+**1527 automated tests — 1525 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
 refuse to fake a result: `AETHER_UNSAFE_MODE` has no bypass path to exercise, and `ResultSalvaged`
 is not implemented and is not emitted to look like evidence.
 

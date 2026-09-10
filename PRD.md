@@ -53,7 +53,9 @@ engine is not hotel-specific, and `aether/warehouse/` remains as a second domain
 
 - A general-purpose voice assistant platform.
 - Multiple domain implementations.
-- A property-management system (bookings, payments, auth, dashboards, CRUD). Hotel data is **read-only**.
+- A property-management system (payments, auth, dashboards, general CRUD). AETHER takes **room and
+  table bookings and cancels them**, and nothing else writes: every hotel fact stays unwritable
+  behind a `sqlite3` authorizer.
 - Elaborate UI beyond an observability panel and trace output.
 - RAG infrastructure, custom model training, multi-agent architecture.
 - Suspend/resume stacks. (Single-slot suspend/resume is an optional Day-5 stretch only.)
@@ -62,9 +64,10 @@ engine is not hotel-specific, and `aether/warehouse/` remains as a second domain
 
 ### FR-1 Conversation
 - FR-1.1 Answer general/conversational questions via the LLM knowledge path.
-- FR-1.2 Answer hotel questions via deterministic tools over `data/aether_hotel.db`, read-only,
-  with no model in the path, in every supported language. (`aether/warehouse/` keeps a second,
-  mutable domain under test -- the read-only hotel cannot exercise fenced *mutation*.)
+- FR-1.2 Answer hotel questions via deterministic tools over `data/aether_hotel.db`, with no model
+  in the path, in every supported language. Facts are never written; bookings are, through three
+  mutating tools whose fenced invocations never land (`tests/test_bookings.py`).
+  (`aether/warehouse/` remains as a second domain proving the engine is not hotel-specific.)
 - FR-1.3 Answer general, non-hotel questions (definitions, arithmetic, small talk) normally via
   the LLM. Refusing them is a defect, not caution.
 - FR-1.4 **A hotel detail the database does not hold is answered by the LLM, naturally**, as the

@@ -283,15 +283,18 @@ asserting the result is discarded, `ResultLeaked` is absent, and nothing enters 
 
 Two task paths, one supervisor:
 
-- **Hotel tools** — nineteen deterministic, read-only lookups over `data/aether_hotel.db` via
-  `aether/hotel/` (menu with category, price, diet, allergens and availability; fifty rooms and
-  five room types; services; check-in and check-out times; reservations; and fifteen hotel policies
-  covering parking, wi-fi, breakfast, pets, smoking, payment, cancellation, transfers and more). The database is opened
-  `mode=ro`, so a write is refused by SQLite rather than by convention. Tools accept an injectable
-  delay so delayed-result races are reproducible. The warehouse fixture (`aether/warehouse/`)
-  remains as the second domain that proves the runner is domain-agnostic — and, because it is the
-  only **mutable** store, it is what keeps the fenced-mutation path under test. The read-only hotel
-  structurally cannot exercise "the mutation never landed".
+- **Hotel tools** — twenty-three deterministic tools over `data/aether_hotel.db` via `aether/hotel/`:
+  twenty that read (menu with category, price, diet, allergens and availability; fifty rooms and five
+  room types; services; check-in and check-out times; reservations; twenty-seven hotel policies from
+  parking and wi-fi to the spa, the deposit and ID at check-in) and **three that write** —
+  `reserve_room`, `reserve_table`, `cancel_booking`. Facts are read through a `mode=ro` connection;
+  the one read-write connection (`aether/hotel/bookings.py`) sits behind a `sqlite3` authorizer that
+  refuses every write outside `reservations`, `table_bookings`, `guests` and `rooms.status`. Booking
+  tools are declared mutating, so `ToolRunner` checks the fence after its delay and before the body:
+  a fenced booking never lands. The running system writes to a gitignored working copy, never the
+  committed file. Tools accept an injectable delay so delayed-result races are reproducible. The
+  warehouse fixture (`aether/warehouse/`) remains as a second domain proving the runner is not
+  hotel-specific; it is no longer the only mutable store.
 - **LLM knowledge path** — general Q&A. In controlled tests it is backed by a deterministic stub so
   fixtures are reproducible; the live demo uses the real model.
 

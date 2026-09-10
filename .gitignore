@@ -42,3 +42,9 @@ recordings/
 Thumbs.db
 
 *.bak
+
+# The running system's working copy of the hotel. Bookings land here and never in the committed
+# database -- see LIVE_DB_PATH in aether/hotel/db.py. Reset with scripts/reset_hotel_db.py.
+data/*.live.db
+data/*.live.db.partial
+*.db-journal

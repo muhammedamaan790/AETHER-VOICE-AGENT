@@ -219,3 +219,75 @@ def test_the_launcher_names_the_capture_beside_the_log() -> None:
         encoding="utf-8")
     assert 'log.with_suffix(".wav")' in source
     assert 'env["AETHER_CALL_CAPTURE"]' in source
+
+
+# --- the mid-call switch, made reliable the same way ---------------------------------------------
+#
+# The demo switches to Hindi MID-CALL, and until this change that "Hindi" met the same unhinted
+# `base.en` that heard "in the" three times on the real line. The fix treats AETHER's offer of the
+# language list as what it is -- a closed question -- so its answer gets the opening's treatment.
+
+def _offer(spike, monkeypatch) -> None:
+    _say(spike, monkeypatch, "English")                   # the opening choice
+    _say(spike, monkeypatch, "can we switch language")    # AETHER offers the list
+
+
+def test_the_answer_to_the_offer_gets_the_hint_and_the_next_turn_does_not(monkeypatch) -> None:
+    spike, _t, _r, _l = _selecting(monkeypatch, "English")
+    _offer(spike, monkeypatch)
+    seen: list[object] = []
+    original = spike.stt.transcribe
+
+    def spy(audio, **kwargs):
+        seen.append(getattr(spike.stt, "prompt", None))
+        return original(audio, **kwargs)
+
+    monkeypatch.setattr(spike.stt, "transcribe", spy)
+    _say(spike, monkeypatch, "Hindi")
+    _say(spike, monkeypatch, "what starters do you have")
+    assert seen == [LANGUAGE_HINT, None]
+
+
+@pytest.mark.parametrize("heard", THE_CALL)
+def test_a_phone_line_mishearing_still_answers_the_offer(heard, monkeypatch) -> None:
+    from aether.lang import ACKNOWLEDGEMENT
+
+    spike, _t, rime, _l = _selecting(monkeypatch, "English")
+    _offer(spike, monkeypatch)
+    _say(spike, monkeypatch, heard)
+    assert spike.language is HINDI, f"{heard!r} did not answer the offer"
+    assert rime.spoken[-1] == ACKNOWLEDGEMENT["hin"]
+
+
+def test_an_offer_the_caller_talked_over_is_never_answered(monkeypatch) -> None:
+    """The invariant again: a question the caller never heard cannot be answered by their next
+    words. Without the pending/commit step, "in the" after a talked-over offer would switch."""
+    spike, _t, rime, _l = _selecting(monkeypatch, "English")
+    _say(spike, monkeypatch, "English")
+    original = rime.speak
+
+    def talk_over(text, **kwargs):
+        spike.barge.on_speech_onset()
+        spike.barge.on_voiced_progress(400.0)
+        return original(text, **kwargs)
+
+    monkeypatch.setattr(rime, "speak", talk_over)
+    _say(spike, monkeypatch, "can we switch language")
+    monkeypatch.setattr(rime, "speak", original)
+
+    assert not spike.awaiting_switch
+    _say(spike, monkeypatch, "in the")
+    assert spike.language is ENGLISH
+
+
+def test_moving_on_after_the_offer_is_an_ordinary_turn_with_no_loop(monkeypatch) -> None:
+    from aether.hotel import HotelStore
+
+    spike, _t, rime, _l = _selecting(monkeypatch, "English")
+    _offer(spike, monkeypatch)
+    _say(spike, monkeypatch, "what starters do you have")
+
+    assert spike.language is ENGLISH
+    assert not spike.awaiting_switch
+    for item in HotelStore().in_category("starters"):
+        assert item.name in rime.spoken[-1]

@@ -847,5 +847,16 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     ):
         return Route("menu_overview", {}, "general menu")
 
+    # A BARE NOUN, said on its own. "Menu." / "The menu, please." A caller who says only the thing
+    # they want is asking for it -- and on a real call on 2026-09-10 the recogniser received exactly
+    # one word, "menu", and AETHER asked the caller to repeat themselves. Only when the WHOLE
+    # utterance is the noun (give or take "the" and "please"), so this can never capture a sentence
+    # the rules above deliberately let through.
+    bare = [w for w in spoken.split() if w not in ("the", "please", "a", "your", "our")]
+    if bare in (["menu"], ["menus"]):
+        return Route("menu_overview", {}, "bare menu")
+    if bare in (["rooms"], ["room", "types"]):
+        return Route("list_room_types", {}, "bare rooms")
+
     # Nothing confident. The LLM takes it -- a slower answer beats a wrong tool.
     return None

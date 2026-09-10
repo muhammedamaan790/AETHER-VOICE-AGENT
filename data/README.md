@@ -43,19 +43,30 @@ Views `available_menu`, `available_rooms` and `current_reservations` exist in th
 reads the base tables and filters in Python, so availability logic is testable without a database
 round-trip.
 
-`schema.sql` and `seed.sql` in [`hotel_db/`](hotel_db/) are the files the database was built from,
-kept for regeneration and for reading the column definitions without opening SQLite.
+`schema.sql` and `seed.sql` in [`hotel_db/`](hotel_db/) are **generated from** the database by
+`scripts/dump_hotel_db.py`, for reading it without opening SQLite, and a test fails if they drift.
+(This paragraph used to call them "the files the database was built from". Nothing ever built it
+from them, and by the time that was noticed they described a hotel with no policies and no way to
+book a table.)
 
-## Read-only, and enforced
+## Facts read-only, bookings fenced — both enforced by SQLite
 
-[`aether/hotel/db.py`](../aether/hotel/db.py) opens the file as `file:...?mode=ro` via the SQLite
-URI, so an `INSERT` raises `OperationalError` from the driver. That is a property of the connection,
-not a convention a future edit could quietly drop, and a test asserts it. There is no tool that
-creates, cancels or modifies anything: reservations, orders and room changes are **not** implemented.
-Every tool result is stamped `mutates: false`.
+[`aether/hotel/db.py`](../aether/hotel/db.py) reads through a `file:...?mode=ro` connection, so a
+write there raises `OperationalError` from the driver. The one read-write connection lives in
+[`aether/hotel/bookings.py`](../aether/hotel/bookings.py) behind a `sqlite3` authorizer that allows
+writes to `reservations`, `table_bookings`, `guests` and the single column `rooms.status`, and denies
+everything else mid-statement — so a price, an allergen or a room number cannot be changed by any
+code path. Three tools write (`reserve_room`, `reserve_table`, `cancel_booking`) and are stamped
+`mutates: true`; the rest are `mutates: false`.
 
-`state_version` is therefore fixed at `0` — it exists because `ToolRunner` stamps it onto every
-result, and a read-only world never advances it.
+**The running system never writes this committed file.** It works on `aether_hotel.live.db`, a
+gitignored copy made on first use and refreshed when the shipped file is newer, so rehearsal
+bookings cannot drift the hotel away from what the documents describe.
+`python scripts/reset_hotel_db.py` discards it.
+
+`state_version` now moves. It was stamped on every result from the start and sat at `0` while
+nothing could write; each booking advances it, so a late answer is recognisable as describing a
+hotel that has since changed.
 
 ## What changed when this replaced the Python fixture
 
