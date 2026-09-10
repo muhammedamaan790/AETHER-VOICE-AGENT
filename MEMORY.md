@@ -104,7 +104,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1277 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1333 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -448,6 +448,18 @@ Still `<from_run>` and must not be quoted:
   endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
 
 ### Fixed 2026-09-10
+
+- **Every keyword table was matched with `in`, and one of them finally bit.** Substring matching
+  inside a sentence is a latent wrong-answer generator, and "night" is inside "tonight". The same
+  trap was sitting unexploded elsewhere: "any" is inside "company", `"no "` is inside "casino ",
+  "rate" is inside "corporate". Fixing it by making everything a whole word was not available --
+  some tables MEAN a prefix, and `"allerg"` exists to catch allergy/allergic/allergen at once.
+  So intent is now declared per entry: a trailing `*` marks a stem, everything else is a whole
+  word or a phrase, and `_says()` compiles it. `tests/test_keyword_matching.py` walks EVERY table
+  in the router and proves no entry can fire inside a longer word, so a table added later is
+  covered without anyone remembering to come back.
+  Verified by replaying all **414** distinct utterances from real traces: **2 changed**, both
+  AETHER's own output lines that had been routing wrongly, both now correctly unrouted.
 
 - **"Is it available tonight?" answered "we have forty-one rooms free".** Two separate defects, one
   symptom. First, `_ROOM_WORDS` was matched with `in`, and **"night" is a substring of "tonight"**,
