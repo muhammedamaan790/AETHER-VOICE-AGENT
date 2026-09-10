@@ -398,13 +398,51 @@ def test_a_database_question_never_reaches_the_model(question):
     assert route(question) is not None, f"{question!r} must be answered from the database"
 
 
+# Questions the hotel genuinely holds no row for. "Do you have a swimming pool?" and "Do you have a
+# gym?" used to live here and were MOVED OUT on 2026-09-10, because the database now answers them --
+# which is the change working, not the test weakening. The assertion below is untouched; only the
+# examples moved, and each replacement was checked to have no row behind it.
 @pytest.mark.parametrize("question", [
-    "What time do you close?", "Is there parking?", "Can I book a table for eight?",
-    "Hello, how are you?", "Do you have a swimming pool?", "Where are you located?",
+    "What time do you close?", "Can I book a table for eight?",
+    "Hello, how are you?", "Do you have a rooftop terrace?",
+    "What is your star rating?", "Is there a temple nearby?",
 ])
 def test_a_question_the_database_cannot_answer_still_reaches_the_model(question):
-    """The router must stay conservative. A wrong tool is worse than a slower answer."""
+    """The router must stay conservative. A wrong tool is worse than a slower answer.
+
+    "Is there parking?" and "Where are you located?" used to be in this list and have MOVED to the
+    deterministic side: the database grew a `hotel_policies` table and a hotel-info tool, so they
+    are now facts rather than guesses. The examples that remain are things this hotel genuinely has
+    no record of, which is the property being tested.
+    """
     assert route(question) is None
+
+
+@pytest.mark.parametrize(("question", "tool"), [
+    ("Is there parking?", "hotel_policy"),
+    ("Do you have wifi?", "hotel_policy"),
+    ("Can I bring my dog?", "hotel_policy"),
+    ("Is breakfast included?", "hotel_policy"),
+    ("Can I have a late check out?", "hotel_policy"),
+    ("What is your cancellation policy?", "hotel_policy"),
+    ("How can I pay?", "hotel_policy"),
+    ("Where are you located?", "hotel_info"),
+    ("How many floors does the hotel have?", "hotel_info"),
+])
+def test_the_commonest_hotel_questions_are_now_answered_from_the_database(question, tool):
+    """These are what a hotel line is actually asked, and until the policies table existed every
+    one of them reached the model with no fact behind it."""
+    decision = route(question)
+    assert decision is not None, f"{question!r} must not need the model"
+    assert decision.tool == tool
+
+
+def test_late_check_out_is_not_swallowed_by_the_check_in_rule():
+    """"Late check out" contains the check-out words but is a different question: one asks a time,
+    the other asks whether it is possible and what it costs."""
+    assert route("what time is check out").tool == "check_in_out"
+    assert route("can I have a late check out").tool == "hotel_policy"
+    assert route("is early check in possible").params["topic"] == "early_check_in"
 
 
 def test_every_deterministic_answer_is_speakable(runner):
@@ -575,3 +613,98 @@ def test_room_meaning_space_is_not_answered_as_room_types():
 
     assert route("do you have room for this") is None
     assert route("do you have room service").tool == "service_hours", "the real question still works"
+
+
+# --- the database must not contradict itself --------------------------------------------------
+#
+# Referential and semantic consistency, asserted rather than assumed. A hotel that says 41 rooms are
+# free in one place and lists 39 in another is worse than one that says nothing: the caller cannot
+# tell which answer is the lie.
+
+
+def _raw():
+    import sqlite3
+
+    from aether.hotel import DEFAULT_DB_PATH
+
+    db = sqlite3.connect(f"file:{DEFAULT_DB_PATH.as_posix()}?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+def test_every_room_number_agrees_with_its_floor():
+    """Room 305 is on floor 3. A room whose number and floor disagree would make two answers about
+    the same room contradict each other."""
+    db = _raw()
+    try:
+        wrong = [(r["room_number"], r["floor"]) for r in db.execute("select * from rooms")
+                 if int(str(r["room_number"])[0]) != r["floor"]]
+    finally:
+        db.close()
+    assert not wrong, f"room number and floor disagree: {wrong}"
+
+
+def test_the_views_agree_with_the_tables_they_summarise():
+    """`available_rooms` and `available_menu` are convenience views. If they drift from the base
+    tables the hotel has two different opinions about what is free."""
+    db = _raw()
+    try:
+        assert (db.execute("select count(*) from available_rooms").fetchone()[0]
+                == db.execute("select count(*) from rooms where status='available'").fetchone()[0])
+        assert (db.execute("select count(*) from available_menu").fetchone()[0]
+                == db.execute("select count(*) from menu_items where available=1").fetchone()[0])
+    finally:
+        db.close()
+
+
+def test_dietary_labels_do_not_contradict_each_other():
+    """A vegan dish is necessarily vegetarian, and a vegetarian dish cannot declare fish.
+
+    This is the allergy path's data integrity: `safe_for` suggests dishes to somebody avoiding an
+    ingredient, so a mislabelled row is the one bug here that could actually hurt a person.
+    """
+    db = _raw()
+    try:
+        rows = db.execute("select * from menu_items").fetchall()
+    finally:
+        db.close()
+    assert not [r["name"] for r in rows if r["vegan"] and not r["vegetarian"]]
+    assert not [r["name"] for r in rows if r["vegetarian"] and "fish" in (r["allergens"] or "").lower()]
+
+
+def test_reservations_reference_real_rooms_and_guests():
+    db = _raw()
+    try:
+        rooms = {r["room_id"] for r in db.execute("select room_id from rooms")}
+        guests = {g["guest_id"] for g in db.execute("select guest_id from guests")}
+        res = db.execute("select * from reservations").fetchall()
+    finally:
+        db.close()
+    for r in res:
+        assert r["room_id"] in rooms, r["reservation_id"]
+        assert r["guest_id"] in guests, r["reservation_id"]
+        assert r["check_in"] < r["check_out"], r["reservation_id"]
+
+
+def test_no_room_is_both_free_and_actively_booked():
+    """The contradiction a caller would actually catch: told a room is free, then told it is booked."""
+    db = _raw()
+    try:
+        booked = {r["room_id"] for r in db.execute(
+            "select room_id from reservations where status in ('confirmed','checked_in')")}
+        clash = [r["room_number"] for r in db.execute("select * from rooms")
+                 if r["room_id"] in booked and r["status"] == "available"]
+    finally:
+        db.close()
+    assert not clash, f"rooms marked available but actively booked: {clash}"
+
+
+def test_a_policy_the_hotel_does_not_offer_is_not_also_priced():
+    """"We do not offer currency exchange, and it costs 500 rupees" is not an answer."""
+    db = _raw()
+    try:
+        bad = [p["topic"] for p in db.execute("select * from hotel_policies")
+               if not p["available"] and p["fee_inr"] is not None]
+    finally:
+        db.close()
+    assert not bad, bad

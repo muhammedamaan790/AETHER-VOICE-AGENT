@@ -213,11 +213,29 @@ class _STT:
 
 
 class _Rime:
+    """A fake speaker that still knows which language it was built for.
+
+    The language matters: the real `build_tts(language=...)` returns a DIFFERENT speaker per
+    language, because Rime bakes speaker/model/lang into the connect URL. A fake that ignored the
+    argument would report `astra` on a Hindi call and quietly hide a switch that never happened --
+    so it carries the same config the real one would.
+
+    All the fakes for a session share one `spoken` list, so a test can read everything said across a
+    language switch from the object it was handed.
+    """
+
     name, transport = "rime", "fake"
 
-    def __init__(self):
-        self.spoken: list[str] = []
-        self.config = type("c", (), {"model": "mistv3", "voice": "astra"})()
+    def __init__(self, language=None, spoken=None):
+        from aether.lang import DEFAULT
+
+        language = language or DEFAULT
+        self.spoken: list[str] = [] if spoken is None else spoken
+        self.config = type("c", (), {
+            "model": language.rime_model,
+            "voice": language.rime_voice,
+            "language": language.code,
+        })()
         self.last_latency_ms = 1.0
 
     def speak(self, text, *, gate, gen, turn_id=None, is_valid=None):
@@ -253,7 +271,13 @@ def build(monkeypatch, said):
     monkeypatch.setattr("aether.spike.MicVAD", lambda *a, **k: _Mic())
     monkeypatch.setattr("aether.spike.WhisperSTT", lambda *a, **k: _STT(said))
     monkeypatch.setattr("aether.spike.build_llm", lambda: llm)
-    monkeypatch.setattr("aether.spike.build_tts", lambda *a, **k: rime)
+
+    def _fake_tts(_trace, samplerate=48000, language=None):
+        # One speaker per language, exactly as the real factory does, sharing the `spoken` list so
+        # a caller still sees everything said across a switch.
+        return rime if language is None else _Rime(language, spoken=rime.spoken)
+
+    monkeypatch.setattr("aether.spike.build_tts", _fake_tts)
     spike = Day1Spike(trace, input_mode=HANDS_FREE)
     spike.rime = rime
     monkeypatch.setattr(spike, "_streaming_enabled", False)
