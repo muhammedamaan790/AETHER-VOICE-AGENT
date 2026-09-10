@@ -414,7 +414,7 @@ Nothing tunes itself.
 
 ## Status
 
-**1446 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**1475 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |

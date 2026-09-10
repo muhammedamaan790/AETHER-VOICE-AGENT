@@ -92,11 +92,22 @@ body{
 @media (max-width:960px){.stage{grid-template-columns:1fr}}
 .card{border:1px solid var(--line);border-radius:14px;background:var(--panel)}
 /* The conversation is FIRST in the DOM -- it is what the call is about and it reads first --
-   and grid places it in the right-hand column to match the reference. */
-.conversation{grid-column:2;display:flex;flex-direction:column;min-height:0}
-.aside{grid-column:1;display:flex;flex-direction:column;gap:16px;min-height:0;overflow-y:auto;padding-right:4px}
+   and grid places it in the right-hand column to match the reference.
+   BOTH COLUMNS ARE PINNED TO ROW 1. Without it, auto-placement put the conversation at row 1
+   column 2, then moved its cursor PAST column 1 -- so the aside, asking for column 1, landed on a
+   new row 2. That is where the long-standing empty space came from: nothing top-left, nothing
+   under the conversation, and each row sized to its content instead of the conversation filling
+   the height. */
+.main-col{grid-column:2;grid-row:1;display:flex;flex-direction:column;gap:16px;min-height:0}
+.conversation{flex:1 1 auto;display:flex;flex-direction:column;min-height:0}
+/* The voice card sits under the conversation, laid out across the width it now has. */
+.voice-card{flex:0 0 auto;display:flex;align-items:center;gap:26px;padding:10px 22px;flex-wrap:wrap}
+.voice-card .voice{padding:4px 0;flex:0 0 auto}
+.voice-side{flex:1 1 280px;min-width:0}
+.aside{grid-column:1;grid-row:1;display:flex;flex-direction:column;gap:16px;min-height:0;overflow-y:auto;padding-right:4px}
 @media (max-width:960px){
-  .conversation,.aside{grid-column:1}
+  /* One column: the two must STACK, so row 1 is released or they would sit on top of each other. */
+  .main-col,.aside{grid-column:1;grid-row:auto}
   /* Below the two-column breakpoint the fixed frame stops helping: two stacked panels cannot both
      fit a phone screen, so hand scrolling back to the page and let the panels take their height. */
   html,body{height:auto}
@@ -236,6 +247,7 @@ footer{font-size:11.5px;color:var(--ink-dim);text-align:center;letter-spacing:.0
 
   <div class="stage">
 
+    <div class="main-col">
     <section class="card conversation">
       <div class="conv-head">
         <h2>Live Conversation</h2>
@@ -254,6 +266,26 @@ footer{font-size:11.5px;color:var(--ink-dim);text-align:center;letter-spacing:.0
 
       <div id="recording">not recording — no call in progress</div>
     </section>
+
+      <div class="card voice-card">
+        <div class="voice">
+          <div class="orb-wrap"><canvas id="orb"></canvas></div>
+          <div class="state" id="phaseLabel">Connecting</div>
+          <div class="meta" id="phaseNote">Waiting for the engine</div>
+        </div>
+        <div class="voice-side">
+        <div class="controls">
+          <button id="listenBtn" type="button">Start Listening</button>
+          <button id="interruptBtn" type="button">Interrupt</button>
+        </div>
+        <p class="hint">
+          The toggle controls whether AETHER <em>hears</em> the caller. Interrupt stops what it is
+          <em>doing</em> — it never closes the microphone.<br>
+          <kbd>Space</kbd> interrupt · <kbd>L</kbd> listening
+        </p>
+        </div>
+      </div>
+    </div>
 
     <aside class="aside">
       <div class="card">
@@ -291,23 +323,6 @@ footer{font-size:11.5px;color:var(--ink-dim);text-align:center;letter-spacing:.0
             <span class="k">Stale leaks</span><span class="v" id="factLeaks">0</span>
           </div>
         </div>
-      </div>
-
-      <div class="card">
-        <div class="voice">
-          <div class="orb-wrap"><canvas id="orb"></canvas></div>
-          <div class="state" id="phaseLabel">Connecting</div>
-          <div class="meta" id="phaseNote">Waiting for the engine</div>
-        </div>
-        <div class="controls">
-          <button id="listenBtn" type="button">Start Listening</button>
-          <button id="interruptBtn" type="button">Interrupt</button>
-        </div>
-        <p class="hint">
-          The toggle controls whether AETHER <em>hears</em> the caller. Interrupt stops what it is
-          <em>doing</em> — it never closes the microphone.<br>
-          <kbd>Space</kbd> interrupt · <kbd>L</kbd> listening
-        </p>
       </div>
     </aside>
   </div>

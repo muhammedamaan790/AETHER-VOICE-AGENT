@@ -175,8 +175,15 @@ _BOOK_NOUNS = ("booking", "reservation", "बुकिंग", "reserva")
 
 # The intent has to be about DOING it, not describing it. "What is your cancellation policy" and
 # "can I book a room" are different sentences, and only one of them should take a booking.
+# Romanised Hindi sits alongside Devanagari throughout, because BOTH reach the router: Whisper
+# returns Devanagari for a Hindi utterance, but the same caller in an English-language session is
+# transcribed as "mujhe do raat ke liye room book krna hai" -- which is what a real Indian hotel
+# line sounds like, and which matched nothing at all until 2026-09-10.
 _BOOK_INTENT = ("i want", "i would like", "i need", "can i", "could i", "please", "make",
-                "for me", "get me", "set up", "arrange", "मुझे", "चाहिए", "कर दीजिए", "कीजिए",
+                "for me", "get me", "set up", "arrange",
+                "मुझे", "चाहिए", "कर दीजिए", "कीजिए", "करना है", "करनी है", "कर दो",
+                "mujhe", "mujhko", "chahiye", "karna hai", "karni hai", "krna hai", "krni hai",
+                "kar dijiye", "kar do", "karo", "kar dena", "chahiye tha",
                 "quiero", "quisiera", "necesito", "puede", "me gustaria", "me gustaría")
 
 _TABLE_WORDS = ("table", "tables", "मेज", "टेबल", "mesa", "mesas")
@@ -487,7 +494,7 @@ def _find_party_size(spoken: str) -> int | None:
     # frame and turned a two-night room booking into a table for two -- the caller asked to sleep
     # somewhere and was offered dinner.
     match = re.search(
-        r"(?:for|के लिए|para)\s+(\d{1,2}|\S+)(?!\s*(?:night|nights|day|days|week|weeks"
+        r"(?:for|के लिए|ke liye|para)\s+(\d{1,2}|\S+)(?!\s*(?:night|nights|day|days|week|weeks"
         r"|रात|रातों|दिन|noche|noches|dia|dias|día|días))",
         spoken)
     if match:
@@ -496,8 +503,11 @@ def _find_party_size(spoken: str) -> int | None:
             return int(token)
         if token in _SMALL_NUMBERS:
             return _SMALL_NUMBERS[token]
-    # Hindi puts the number before the phrase: "चार लोगों के लिए".
-    match = re.search(r"(\S+)\s+(?:लोगों|लोग|जनों)", spoken)
+    # Hindi puts the number BEFORE the phrase: "चार लोगों के लिए", "char logon ke liye". English
+    # word order is the reason the rule above cannot find it -- there is no number after "for".
+    match = re.search(
+        r"(\S+)\s+(?:लोगों|लोग|जनों|logon|log|logo|jano|jane|admi|aadmi|people|persons|person)",
+        spoken)
     if match and match.group(1) in _SMALL_NUMBERS:
         return _SMALL_NUMBERS[match.group(1)]
     return None
@@ -664,11 +674,21 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
                      or _find_pair(spoken, _MENU_NOUNS) is not None)
 
     party = _find_party_size(spoken)
+    nights = _find_nights(spoken)
     if _says(spoken, _CANCEL_WORDS) and (reference := _find_reference(spoken)):
         return Route("cancel_booking", {"reference": reference}, "cancel booking")
 
     wants_to_book = _says(spoken, _BOOK_VERBS) or (
         _says(spoken, _BOOK_NOUNS) and _says(spoken, _BOOK_INTENT)
+    ) or (
+        # Hindi asks for a room without any word for "book": "kamra chahiye do raat ke liye" is
+        # a booking, and "मुझे कमरा चाहिए" is how it is actually said. Allowed ONLY with a stay or
+        # a party size attached, because "room ka rate chahiye" is a price question and wanting
+        # something is not, on its own, asking to have it reserved. A mutating tool gets the most
+        # conservative rule in the file.
+        _says(spoken, _BOOK_INTENT) and (nights or party) and (room_type or room_number
+                                                               or _says(spoken, _ROOM_NOUNS)
+                                                               or _says(spoken, _TABLE_WORDS))
     )
     # A table word counts as intent on its own: "reserve a table for twenty" carries no "can I"
     # and no recognisable party size, and falling through to the model there means the caller is
@@ -680,7 +700,6 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
         # mean when they say it.
         if _says(spoken, _TABLE_WORDS) or (party and not room_type and not room_number):
             return Route("reserve_table", {"party_size": party or 2}, "book a table")
-        nights = _find_nights(spoken)
         stay = {"nights": nights} if nights else {}
         if room_number:
             return Route("reserve_room", {"room": room_number, **stay}, "book a named room")

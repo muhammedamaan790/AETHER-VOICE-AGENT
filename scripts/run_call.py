@@ -92,14 +92,26 @@ def main() -> None:
     command = [sys.executable, "-m", "aether.telephony.agent", *forwarded]
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
 
+    # AUDIO CAPTURE HAD THE SAME BUG THE LOGS DID. `AETHER_CALL_CAPTURE=call3.wav` is a fixed name,
+    # so every call overwrote the last -- and the recording of a failed call is the one you most
+    # need to keep. Capture stays opt-in (it records a real person's voice); when it is on, the file
+    # is named beside the log with the same stamp, so the audio, the log and the trace pair by name.
+    capture = None
+    if (os.environ.get("AETHER_CALL_CAPTURE") or "").strip():
+        capture = log.with_suffix(".wav")
+        env["AETHER_CALL_CAPTURE"] = str(capture)
+
     header = [
         "# AETHER telephony worker",
         f"# started : {started_wall.isoformat()}",
         f"# command : {' '.join(forwarded)}",
         f"# log     : {log}",
+        f"# capture : {capture if capture is not None else 'off (set AETHER_CALL_CAPTURE to record)'}",
         "",
     ]
     print(f"log        : {log}")
+    if capture is not None:
+        print(f"capture    : {capture}")
     print("(this file is new for this run; nothing to rename, nothing to overwrite)\n")
 
     code = 1

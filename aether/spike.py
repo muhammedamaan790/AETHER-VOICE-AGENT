@@ -49,7 +49,10 @@ from .lang import ACKNOWLEDGEMENT as LANG_ACK
 from .lang import DEFAULT as LANG_DEFAULT
 from .lang import (
     HOTEL_GREETING,
+    LANGUAGE_HINT,
+    SELECT_FALLBACK,
     SELECT_RETRY,
+    heard_as_language,
     asks_for_options,
     detect_switch,
     language_offer,
@@ -75,6 +78,11 @@ from .trace import Trace, now_ms
 # Voiced duration that promotes a duck into a full stop. Placeholder until Day 3.
 # Only consulted in open-mic mode; push-to-talk never promotes a duck, because it never ducks.
 MEANINGFUL_SPEECH_MS = 300.0
+
+# Answers to "English, Hindi, or Spanish?" that name no language before AETHER stops asking and
+# carries on in English. Two, because the first retry is useful and the third ask is where a real
+# caller hung up.
+MAX_SELECTION_MISSES = 2
 
 # How long an utterance may sit unread before the loop is too late to answer it, measured from the
 # moment the caller stopped speaking. Only applied when NEWER speech is already waiting -- see
@@ -172,6 +180,7 @@ class Day1Spike:
         # and console entry points opt in explicitly with `begin_language_selection()`. Making it
         # default true would silently turn the first utterance of every test into a language answer.
         self.awaiting_language = False
+        self._selection_misses = 0
         # Session-scoped conversation history. Owned by this pipeline instance, never by the
         # provider object, so two sessions can never share or leak context.
         self.history = ConversationHistory()
@@ -395,6 +404,10 @@ class Day1Spike:
         # over that audio has to be recognised as one, so the gate is asked as well.
         in_flight = self.barge.turn_in_flight or self.gate.is_playing
         self.mic.set_context(turn_id=self._turn, gen=None)
+        # A closed question gets a closed vocabulary. While AETHER waits for "English, Hindi, or
+        # Spanish?" the recogniser is told that is what it is listening for; on every other turn it
+        # is told nothing. Proven on the caller's own audio from a failed call (see `stt.py`).
+        self.stt.prompt = LANGUAGE_HINT if self.awaiting_language else None
         text = self.stt.transcribe(audio, turn_id=self._turn, gen=None)
         final = self.trace.last(EventType.TRANSCRIPT_FINAL)
         timing.transcript = final.t if final else None
@@ -774,6 +787,7 @@ class Day1Spike:
         offered Hindi.
         """
         self.awaiting_language = True
+        self._selection_misses = 0
         self.language = LANG_DEFAULT
 
     def _language_answer(self, text: str) -> str | None:
@@ -792,10 +806,20 @@ class Day1Spike:
             # "English" is a real choice even though English is what the recogniser is already
             # running. `detect_switch` deliberately ignores the current language and would have
             # left an English-choosing caller being asked forever.
-            chosen = names_language(text)
+            # The exact names first, then what a phone line turns them into -- the second table is
+            # only consulted here, where the question is closed and the nearest sound is right.
+            chosen = names_language(text) or heard_as_language(text)
             if chosen is None:
+                self._selection_misses += 1
+                if self._selection_misses >= MAX_SELECTION_MISSES:
+                    # Stop asking. The failed call asked three times and the caller hung up.
+                    self.awaiting_language = False
+                    self._selection_misses = 0
+                    print("  LANGUAGE: not understood twice -- continuing in English")
+                    return SELECT_FALLBACK
                 print("  LANGUAGE: not understood, asking again")
                 return SELECT_RETRY
+            self._selection_misses = 0
             self.awaiting_language = False
             self._set_language(chosen)
             print(f"  LANGUAGE: selected {self.language.code} "
