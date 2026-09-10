@@ -24,6 +24,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from ._foreign import to_router_language
+from .context import Subject, resolve
 from .db import HotelStore
 
 # The store the router reads its vocabulary from. Dish names, categories and room types all come
@@ -128,7 +129,15 @@ _MENU_NOUNS: tuple[tuple[str, str], ...] = (
 
 # Rooms, services and timings. Each needs its own noun, so a sentence about the menu can never be
 # answered with a room rate.
-_ROOM_WORDS = ("room", "rooms", "suite", "suites", "stay", "night", "nights", "book a room")
+# Matched as WHOLE WORDS through `_says_word`, unlike most tables here, because "night" is a
+# substring of "tonight" -- and "is the chicken kebab available tonight" was therefore answered with
+# "we have forty-one rooms free". A confident answer about the wrong table is the exact failure this
+# router exists to avoid, and it had been sitting behind an `in` test.
+#
+# The inflections substring matching used to catch for free are listed explicitly now, or "we are
+# staying three nights" would stop being a room question.
+_ROOM_WORDS = ("room", "rooms", "suite", "suites", "stay", "staying", "stays",
+               "night", "nights", "tonight", "book a room")
 _SERVICE_WORDS_GENERIC = ("service", "services", "facilities", "amenities")
 _CHECKIN_WORDS = ("check in", "check-in", "checkin", "check out", "check-out", "checkout",
                   "checking in", "checking out", "arrival time", "departure time")
@@ -337,6 +346,16 @@ def _find_category(spoken: str) -> Category | None:
     return None
 
 
+def _says_word(spoken: str, words: tuple[str, ...]) -> bool:
+    """`any(word in spoken)`, but on whole words. See `_ROOM_WORDS` for why that matters.
+
+    Not applied to every table on purpose: `_ALLERGEN_WORDS` and `_AVOIDANCE_WORDS` deliberately
+    hold PREFIXES ("allerg" for allergy/allergic/allergen) and `_AVOIDANCE_WORDS` holds "no " with
+    its trailing space. Word boundaries would silently break both.
+    """
+    return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", spoken) for word in words)
+
+
 def _find_pair(spoken: str, table: tuple[tuple[str, str], ...]) -> str | None:
     for word, value in table:
         if re.search(rf"\b{re.escape(word)}\b", spoken):
@@ -412,7 +431,47 @@ def _find_room_number(spoken: str) -> str | None:
     return None
 
 
-def route(text: str) -> Route | None:
+def names_something(spoken: str) -> bool:
+    """Whether the sentence already says what it is about.
+
+    The gate on conversational memory: if the caller named a dish, a room, a category, a room type,
+    a service or a policy, that is the subject and nothing remembered may override it. Memory fills
+    a gap; it never argues with the sentence in front of it.
+    """
+    return any((
+        _find_dish(spoken) is not None,
+        _find_category(spoken) is not None,
+        _find_room_number(spoken) is not None,
+        _find_pair(spoken, _ROOM_TYPE_WORDS) is not None,
+        _find_pair(spoken, _SERVICE_WORDS) is not None,
+        _find_pair(spoken, _POLICY_WORDS) is not None,
+    ))
+
+
+def subject_of(decision: "Route | None", spoken: str) -> tuple[str | None, str | None]:
+    """What this turn was about, as (phrase, kind), for the next turn to refer back to.
+
+    Read from the DECISION rather than from the sentence, so the remembered subject is the thing
+    AETHER actually looked up -- not something the caller mentioned in passing and was not answered
+    about.
+    """
+    if decision is None:
+        return None, None
+    params = decision.params
+    if "dish" in params:
+        return params["dish"], "dish"
+    if "room" in params:
+        return f"room {params['room']}", "room"
+    if params.get("room_type"):
+        return str(params["room_type"]).lower(), "room_type"
+    if "category" in params:
+        return params["category"], "category"
+    if "topic" in params:
+        return str(params["topic"]).replace("_", " "), "policy"
+    return None, None
+
+
+def route(text: str, subject: Subject | None = None) -> Route | None:
     """Pick a menu tool for this sentence, or None to let the LLM handle it.
 
     Order is by specificity, not by frequency: a sentence naming a dish AND asking about allergens
@@ -425,6 +484,12 @@ def route(text: str) -> Route | None:
     spoken = _repair_asr(to_router_language(normalise(text)))
     if not spoken:
         return None
+
+    # Conversational memory, applied ONLY into a gap: a sentence that names its own subject is
+    # never overridden, and a sentence with no referring word is left alone to fall through to the
+    # model. See `context.py` for why this is the smallest version that fixes the real complaint.
+    if subject is not None and not names_something(spoken):
+        spoken = _repair_asr(resolve(spoken, subject))
 
     dish = _find_dish(spoken)
     category = _find_category(spoken)
@@ -487,7 +552,12 @@ def route(text: str) -> Route | None:
     #    answered it with the list of room types -- a confident answer to a question nobody asked.
     #    Falling through costs a slower answer from a model that has the whole hotel in its prompt;
     #    answering the wrong question costs the claim.
-    if any(word in spoken for word in _ROOM_WORDS) and "room for" not in spoken:
+    # `not dish`: "tonight" is a room word -- "do you have anything free tonight" is a room
+    # question and always was. But so is "is the chicken kebab available tonight", which is not.
+    # When the caller has NAMED a dish, the sentence is about the dish, and the room branch must
+    # not claim it just because a time word appeared. This is the ordering fix for a bug that
+    # answered "we have forty-one rooms free" to a question about a kebab.
+    if _says_word(spoken, _ROOM_WORDS) and not dish and "room for" not in spoken:
         if any(word in spoken for word in _STATUS_WORDS):
             return Route("room_availability", {}, "rooms+availability")
         if any(word in spoken for word in _LIST_WORDS) or any(

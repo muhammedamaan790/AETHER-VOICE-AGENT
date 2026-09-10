@@ -133,12 +133,24 @@ longer, but it is the **allergy** answer -- talking over a safety reply reads ba
 
 ## If a judge asks something live
 
-Two rules, and they matter more than they look:
+**Pronouns now work.** Ask *"how much is the chicken kebab?"* and then *"is it available
+tonight?"* and the second question is answered about the kebab. That used to answer *"we have forty
+one rooms free"* — confidently, about the wrong table — and this sheet used to carry a rule telling
+you never to use a pronoun. A rule telling a human to avoid a defect is not a fix, so the defect was
+fixed instead.
 
-1. **Name the subject in every question.** The router has no conversational memory.
-2. **Never use a pronoun for the previous turn.** *"Is that available tonight?"* after asking about
-   the chicken kebab answers *"We have forty one rooms free"* — confidently, and about the wrong
-   table.
+Worth knowing about how far it goes, because a judge may push:
+
+1. **One subject, not a conversation.** It remembers the last thing you were told about, not a
+   history. "The first one" and "the other one" are not understood.
+2. **Naming something always wins.** Say a dish, a room or a policy and that is the subject,
+   whatever came before.
+3. **An interrupted answer is never referred back to.** If you talk over an answer, "it" does not
+   mean that — you never heard it, so it is not part of the conversation. That is the same rule
+   that keeps a fenced turn out of the transcript, and it is worth pointing at if anyone asks
+   whether the memory could go stale.
+4. **A question with no pronoun and no subject still goes to the model.** Guessing what an unmarked
+   fragment refers to is exactly the confident-error class this router avoids.
 
 These are verified answers. Anything here is safe to ask on camera.
 
@@ -172,10 +184,14 @@ dates, and **never the guest's name** — that is deliberate, and worth saying i
 ## Traps
 
 **Only fifty rooms exist: x01 to x10 on five floors.** 101–110, 201–210, and so on to 510. There is
-no room 412, no 350, no 220. A judge picking a room at random will usually pick one that does not
-exist, and the answer is *"I am sorry, I could not find that. Could you say it again?"* — honest,
-but it sounds like a mishearing rather than "no such room". If it happens, say so: it refuses to
-invent a room. Or ask *"is room nine nine nine free?"* deliberately and make it a feature.
+no room 412, no 350, no 220. **This is now a good beat rather than a trap** — ask *"is room nine
+nine nine free?"* on purpose and AETHER says *"We do not have a room nine nine nine. Our rooms are
+numbered one zero one to five one zero."* It names the room as absent and offers the range that
+exists, in all three languages, and the range is read from the database rather than written down.
+
+It used to answer with the generic *"I could not find that, could you say it again?"*, which
+describes a mishearing — so a caller who spoke perfectly clearly would repeat the same impossible
+number, louder. Fixed 2026-09-10.
 
 **"Does the butter chicken contain nuts?"** answers *"The Butter Chicken contains dairy."* It tells
 you what the dish does contain rather than answering yes or no. True and safe, but it can sound like

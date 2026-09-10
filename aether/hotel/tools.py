@@ -251,9 +251,22 @@ def _menu_overview(store: HotelStore) -> tuple[list, dict]:
 # --- room tools ----------------------------------------------------------------------------
 
 def _room_status(store: HotelStore, *, room: str) -> tuple[list, dict]:
-    """"Is room three oh five free?" -- one room, by number."""
-    found = store.room(room)
-    return [_room(found)], {"number": found.number, "status": found.status,
+    """"Is room three zero five free?" -- one room, by number.
+
+    A number the hotel does not have is an ANSWER, not a failure. It used to raise, which rendered
+    the generic "I could not find that, could you say it again?" -- and that sentence describes a
+    mishearing. A caller who asked clearly about room four one two heard AETHER apparently fail to
+    hear them, and would say it again, louder. What they need to be told is that the room does not
+    exist, and which numbers do.
+    """
+    try:
+        found = store.room(room)
+    except UnknownRecord:
+        lowest, highest = store.room_number_bounds()
+        digits = "".join(ch for ch in str(room) if ch.isdigit())
+        return [], {"number": digits or str(room), "exists": False,
+                    "lowest": lowest, "highest": highest}
+    return [_room(found)], {"number": found.number, "status": found.status, "exists": True,
                             "room_type": found.room_type, "rate": found.rate}
 
 
@@ -482,6 +495,15 @@ def _speak_describe_item(result) -> str:
 
 
 def _speak_room_status(result) -> str:
+    # No such room. Said as a fact, with the range that DOES exist, so the caller can correct
+    # themselves instead of repeating a number that will never work.
+    if not result.summary.get("exists", True):
+        lowest = say_room_number(result.summary["lowest"])
+        highest = say_room_number(result.summary["highest"])
+        asked = say_room_number(result.summary["number"])
+        return (f"We do not have a room {asked}. Our rooms are numbered "
+                f"{lowest} to {highest}.")
+
     room = result.records[0]
     number = say_room_number(room["number"])
     spoken = {
@@ -698,6 +720,9 @@ NOT_FOUND = "I am sorry, I could not find that. Could you say it again?"
 # in it is information; finding no dish by that name is not.
 _EMPTY_IS_AN_ANSWER = frozenset({
     "list_category", "find_by_diet", "safe_for", "room_availability", "menu_overview",
+    # "there is no room four one two" is information. Without this the renderer falls through to
+    # the not-found sentence, which sounds like a mishearing rather than an answer.
+    "room_status",
 })
 
 

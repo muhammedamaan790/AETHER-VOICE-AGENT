@@ -55,7 +55,9 @@ from .lang import (
     language_offer,
     names_language,
 )
+from .hotel.context import Subject
 from .hotel.router import route as route_menu
+from .hotel.router import subject_of
 from .hotel.tools import HOTEL_TOOLS, render
 from .events import EventType
 from .interruption import BargeInCoordinator
@@ -169,6 +171,11 @@ class Day1Spike:
         # Session-scoped conversation history. Owned by this pipeline instance, never by the
         # provider object, so two sessions can never share or leak context.
         self.history = ConversationHistory()
+        # What "it" refers to. One subject, never a history -- see `aether/hotel/context.py`.
+        # `_pending_subject` is this turn's candidate; it only becomes `subject` if the answer is
+        # actually spoken, which is what stops a fenced turn from being referred back to.
+        self.subject = Subject()
+        self._pending_subject: tuple[str | None, str | None] | None = None
         # The hotel menu, and the runner that executes its tools under the SAME fencing the audio
         # path uses. Deterministic lookups answer menu questions without the LLM; anything the
         # router is not confident about still goes to Gemini.
@@ -354,6 +361,11 @@ class Day1Spike:
         timing = TurnTiming(speech_ended=ended.t if ended else None)
 
         self._turn += 1
+        # Drop any subject held by a turn that never reached the spoken boundary. Without this an
+        # abandoned turn's subject would sit here and be committed by the NEXT turn -- so "it" would
+        # refer to something the caller was interrupted out of ever hearing, which is precisely the
+        # leak fencing exists to prevent, wearing a different hat.
+        self._pending_subject = None
         for fenced_gen, fence_reason in self.barge.drain_fenced():
             # The reason comes from whoever fenced, never from here. A hardcoded string would have
             # recorded a button press as "meaningful_interruption" and quietly destroyed the one
@@ -499,6 +511,11 @@ class Day1Spike:
             # pollute history -- the existing fencing stays the authority and history just rides
             # behind it. Level 1: a turn is remembered whole or not at all (MEMORY.md section 4).
             self.history.commit_turn(text, reply)
+            # What "it" will mean on the next turn. Committed HERE and nowhere else, for the same
+            # reason history is: a fenced turn was never heard, so it cannot be referred back to.
+            if self._pending_subject is not None:
+                self.subject.remember(*self._pending_subject)
+                self._pending_subject = None
 
             # Asked once, here, rather than in each of the three speak paths: the gate is the
             # authority on when audio actually left, and it knows by the time the turn is spoken.
@@ -647,7 +664,7 @@ class Day1Spike:
         Returns None on every uncertain path -- no route, a stale result, or a tool that could not
         answer -- so the LLM gets the sentence. A slower answer is better than a confident wrong one.
         """
-        decision = route_menu(text)
+        decision = route_menu(text, self.subject)
         if decision is None:
             return None
 
@@ -666,6 +683,10 @@ class Day1Spike:
         if spoken is None:
             return None
         print(f"  MENU[{decision.tool}] via {decision.reason}: {spoken}")
+        # Held, not committed. `_pending_subject` becomes `self.subject` at the spoken boundary
+        # alongside `history.commit_turn`, and is dropped on every fenced path -- so "it" can only
+        # ever refer to something the caller actually heard. Same rule as history, same reason.
+        self._pending_subject = subject_of(decision, text)
         return spoken
 
     def _set_language(self, language) -> bool:

@@ -104,7 +104,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1260 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1277 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -448,6 +448,36 @@ Still `<from_run>` and must not be quoted:
   endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
 
 ### Fixed 2026-09-10
+
+- **"Is it available tonight?" answered "we have forty-one rooms free".** Two separate defects, one
+  symptom. First, `_ROOM_WORDS` was matched with `in`, and **"night" is a substring of "tonight"**,
+  so any sentence containing "tonight" was a room question. Second, the room branch runs before the
+  menu branch (deliberately -- "how much is an executive suite" contains a price word), so it
+  claimed the sentence even when a dish was named. Room words are now matched as whole words, and
+  the room branch yields when the caller has NAMED a dish. `_ALLERGEN_WORDS` and `_AVOIDANCE_WORDS`
+  deliberately keep substring matching -- they hold prefixes like "allerg" and "no " with its
+  trailing space -- so the whole-word helper is applied surgically rather than everywhere.
+  "tonight" is now itself a room word, so "do you have anything free tonight" still routes to rooms.
+
+- **The router had no conversational memory, and the demo sheet had a rule telling the presenter to
+  work around it.** A rule telling a human to avoid a defect is not a fix. `aether/hotel/context.py`
+  holds ONE subject -- the last concrete thing the caller was told about -- and splices it in where
+  a referring word sits. Deliberately the smallest version that fixes the real complaint: a sentence
+  that names its own subject is never overridden, a sentence with no referring word is left alone to
+  fall through to the model, and "one" is not treated as a pronoun because it appears in "room one
+  zero one" and "one night".
+  **Committed at the spoken boundary, next to `history.commit_turn`, and cleared at the start of
+  every turn.** So a fenced turn leaves no subject: "it" can only mean something the caller actually
+  heard. That is the golden invariant applied to reference rather than to output, and putting the
+  update beside history rather than in the router is what makes it fall out for free. The subtle
+  leak -- a fenced turn's pending subject still sitting there when the NEXT turn commits -- has its
+  own test.
+
+- **An unknown room sounded like a mishearing.** "Is room four one two free" rendered the generic
+  "I could not find that, could you say it again?", so a caller who spoke clearly heard the agent
+  fail to hear them and repeated the same impossible number louder. `_room_status` now treats an
+  absent room as an ANSWER: it names the room and offers the range that does exist, in all three
+  languages, with the bounds DERIVED from the rooms table like `floors()` rather than written down.
 
 - **Room numbers were said digit by digit in all three languages**, because the English convention
   was copied into the other two -- the Hindi docstring literally said "for the same reason as in

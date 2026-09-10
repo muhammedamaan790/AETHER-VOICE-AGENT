@@ -250,6 +250,11 @@ def _speak_describe_item(result) -> str:
 
 
 def _speak_room_status(result) -> str:
+    if not result.summary.get("exists", True):
+        return (f"हमारे यहाँ कमरा {say_room_number(result.summary['number'])} नहीं है। "
+                f"हमारे कमरे {say_room_number(result.summary['lowest'])} से "
+                f"{say_room_number(result.summary['highest'])} तक हैं।")
+
     room = result.records[0]
     number = say_room_number(room["number"])
     spoken = {
