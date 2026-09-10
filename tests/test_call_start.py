@@ -194,3 +194,35 @@ def test_the_bare_noun_rule_captures_nothing_larger() -> None:
     for said in ("is the food good", "where is the food court", "rooms with a view"):
         decision = route(said)
         assert decision is None or decision.reason not in ("bare menu", "bare rooms")
+
+
+# --- 4. the caller must not wait for Whisper --------------------------------------------------------
+
+def test_a_warm_executor_is_ready_before_a_call_arrives() -> None:
+    """Two calls on 2026-09-10 spent 13.0 s and 17.3 s between answering and the greeting, because
+    the job executor was built cold when the call arrived. A warm build measures about 2 s."""
+    from aether.telephony import agent
+
+    assert agent.server.setup_fnc is agent.warm_job_executor
+    # Private, because the SDK exposes no reader for it -- and worth the coupling: the dev default
+    # is 0, which is the whole bug. If a version bump renames it, this test says so loudly.
+    assert agent.server._num_idle_processes >= 1
+
+
+def test_the_executor_warm_up_never_takes_a_call_down(monkeypatch) -> None:
+    """Best-effort, like `prewarm` itself: a warm-up that raises must not stop the call."""
+    from aether.telephony import agent
+
+    def boom() -> None:
+        raise RuntimeError("no model on this machine")
+
+    monkeypatch.setattr(agent, "prewarm", boom)
+    agent.warm_job_executor(None)
+
+
+def test_the_build_is_timed_in_the_log() -> None:
+    """The dead air is the caller's, so it is measured on every call, not inferred afterwards."""
+    from aether.telephony import agent
+
+    src = inspect.getsource(agent)
+    assert "pipeline ready in %.0f ms" in src

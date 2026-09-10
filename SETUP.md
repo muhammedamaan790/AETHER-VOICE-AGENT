@@ -148,7 +148,7 @@ uses. Never put a comment on the same line as a value: everything after `=` is r
 python -m pytest -q
 ```
 
-This runs the test suite. Expect **1525 passed, 2 skipped** after about three minutes. The two skips are
+This runs the test suite. Expect **1528 passed, 2 skipped** after about three minutes. The two skips are
 features that deliberately don't exist, and each test says which.
 
 ```powershell
