@@ -11,6 +11,13 @@ webrtcvad-wheels>=2.0 # VAD (prebuilt wheels; the original `webrtcvad` needs a C
 faster-whisper>=1.2   # local STT
 av>=14.0              # MP3 decode for Rime responses (bundles FFmpeg; also a faster-whisper dep)
 
+# Telephony. Required for the phone path (`python scripts/run_call.py`); the local console and
+# the whole test suite run without it. It was installed but NOT listed here until 2026-09-10,
+# which meant a judge following the README could not have reproduced the telephony demo.
+livekit-agents>=1.8          # the worker, JobExecutorType.THREAD, and the `dev`/`start` CLI
+livekit>=1.1                 # `livekit.rtc`, used directly rather than through AgentSession
+livekit-api>=1.2             # SIP trunk and dispatch calls
+
 pytest>=8.0
 pytest-asyncio>=0.23
 

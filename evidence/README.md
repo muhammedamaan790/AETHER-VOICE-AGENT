@@ -6,20 +6,26 @@ One real run of the demo script — 16 turns, spoken into the pipeline, recorded
 as it happened. It is the artifact behind the latency and safety claims made in
 [`RIME_EVIDENCE.md`](../RIME_EVIDENCE.md) and [`JUDGING.md`](../JUDGING.md).
 
-**Input path: not recorded, so not claimed.** This is real speech through the real pipeline, but the
-trace does not say whether the audio arrived from a telephone or from the local microphone, and it
-cannot be inferred after the fact: the event vocabulary is identical on both paths, and
-`AETHER_SPEECH_FLOOR=2500` — the value derived from three real phone calls — is set in `.env`, so it
-applies to the laptop as well. Everything below is therefore stated as a property of the pipeline,
-not of the telephone. Telephony-specific evidence lives in
-[`RIME_EVIDENCE.md`](../RIME_EVIDENCE.md) Part 6, measured separately.
+**Input path: a real inbound telephone call**, and that is established by evidence rather than
+asserted. The trace itself does not record whether audio came from a phone or a microphone — the
+event vocabulary is identical on both. What settles it is `demo-call-worker.log`, the LiveKit/SIP
+worker's own log for the same run: **all sixteen turns carry identical `stt`/`llm`/`tts`/`turn`
+latencies in both files**, and the log is unambiguously telephony (`agent name : aether-hotel`,
+`[4/7] inbound pump starting`, `pumps=1`, `inbound audio captured`).
 
-That the trace cannot answer this is itself a gap, and it is recorded in
-[`JUDGING.md`](../JUDGING.md) rather than papered over.
+**Traces recorded after 2026-09-10 answer this by themselves.** Each one carries `input_path` --
+`telephony` or `local_microphone` -- stamped once by whichever entry point owns the session. This
+file predates the field and was deliberately **not** back-filled: the value would be true, but the
+file would then be claiming the run observed something it never observed, and evidence that is
+edited after the fact is not evidence. So this call keeps its worker log, and future calls will not
+need one.
 
 Traces are normally gitignored (`traces/*.jsonl`). This one is committed on purpose: a claim about
 latency is worth what the file behind it is worth. It was audited for secrets before being added —
-no credential-shaped strings, and no value from `.env` appears anywhere in it. The trace writer's
+no credential-shaped strings, no phone number, no token and no email. **One value was redacted:**
+the LiveKit project URL appeared once, on the `registered worker` line, and is now `<redacted>` --
+the same marker the trace writer uses. It is not a credential, but it identifies an account and
+there is no reason to publish it. Everything else in the file is verbatim. The trace writer's
 own redaction is visible as 48 `<redacted>` markers.
 
 ### What it records

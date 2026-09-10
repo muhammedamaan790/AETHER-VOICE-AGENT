@@ -31,6 +31,9 @@ recordings/
 *.wav
 *.mp3
 *.log
+# The negations must come AFTER the patterns they undo -- git applies the LAST matching rule, so
+# putting `!evidence/*.log` above `*.log` silently did nothing.
+!evidence/*.log
 
 # Editors / OS
 .vscode/
