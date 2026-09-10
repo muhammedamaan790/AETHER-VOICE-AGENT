@@ -170,6 +170,13 @@ no nuts" is not.
 
 ## Three languages
 
+AETHER **understands** and **answers** in English, Hindi and Spanish, from one database. Those are
+two separate mechanisms and both are tested: `aether/hotel/_foreign.py` maps what a caller says onto
+the English keywords the router keys on, and the per-language renderers turn the row that comes back
+into a sentence. A Hindi caller asking "चिकन कबाब कितने का है" reaches the same `price_of` row an
+English caller reaches, and hears the same number — with no model in the path either time.
+
+
 AETHER answers a hotel in India, so it speaks **English, Hindi and Spanish**.
 
 **The call opens by asking which language**, before any hotel greeting — *"Welcome to AETHER, your
@@ -373,7 +380,7 @@ Nothing tunes itself.
 
 ## Status
 
-**1206 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**1260 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
