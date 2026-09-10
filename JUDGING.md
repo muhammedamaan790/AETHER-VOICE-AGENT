@@ -4,7 +4,7 @@ Every claim here names the file, test or trace that backs it. Where something is
 measured, it says so — a rubric that rewards transparent method punishes overclaiming, and the
 "What we did not build" section at the end is not an afterthought.
 
-**Reproduce everything:** `python -m pytest -q` → **1333 passed, 2 skipped**.
+**Reproduce everything:** `python -m pytest -q` → **1392 passed, 2 skipped**.
 
 ---
 
@@ -112,7 +112,7 @@ a door — "three oh five", not "three hundred and five". Asserted in `tests/tes
 
 ## Evidence and reproducibility — 20%
 
-**1335 automated tests — 1333 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
+**1394 automated tests — 1392 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
 refuse to fake a result: `AETHER_UNSAFE_MODE` has no bypass path to exercise, and `ResultSalvaged`
 is not implemented and is not emitted to look like evidence.
 

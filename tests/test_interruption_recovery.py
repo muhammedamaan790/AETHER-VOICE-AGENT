@@ -15,6 +15,12 @@ exactly as the input thread does. No sleeps and no thresholds are used to create
 test places the fence at an exact point by construction.
 """
 
+# Transcripts here are placeholders -- this file tests the streaming/LLM path, not routing.
+# They were single tokens ("q", "a question") until 2026-09-10, when AETHER learned to
+# answer a one-word unrecognisable fragment with "could you say that again?" instead of
+# handing it to the model. That is the intended behaviour, so the placeholders became
+# sentences a caller could actually say. Every assertion below is unchanged.
+
 from __future__ import annotations
 
 import threading
@@ -39,7 +45,7 @@ class ScriptedSTT:
         self._texts = list(texts)
 
     def transcribe(self, audio, *, turn_id=None, gen=None):
-        text = self._texts.pop(0) if self._texts else "another question"
+        text = self._texts.pop(0) if self._texts else "what else can you tell me"
         self.trace.emit(EventType.TRANSCRIPT_FINAL, turn_id=turn_id, gen=gen, text=text)
         return text
 
@@ -212,7 +218,7 @@ def test_interrupt_while_speaking_fences_and_stops_the_old_response(monkeypatch)
 def test_the_old_response_never_resumes(monkeypatch):
     """After the fence, late chunks for the old generation must still be refused."""
     rime = StreamingRime(chunks=4)
-    s, _ = make_session(monkeypatch, ["q1"], ScriptedLLM(["answer one"]), rime=rime)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["answer one"]), rime=rime)
     rime.on_chunk = lambda i: interrupt(s) if i == 1 else None
     s.handle_utterance(AUDIO, 0.0)
 
@@ -249,7 +255,7 @@ def test_interrupt_while_llm_is_thinking_fences_the_generation(monkeypatch):
 
 def test_stale_llm_answer_never_reaches_the_gate(monkeypatch):
     llm = BlockingLLM("STALE ANSWER")
-    s, _ = make_session(monkeypatch, ["q1"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
 
     worker = threading.Thread(target=s.handle_utterance, args=(AUDIO, 0.0))
     worker.start()
@@ -272,7 +278,7 @@ def test_fence_immediately_before_the_llm_returns(monkeypatch):
             interrupt(s)               # fence lands on the last instruction before returning
             return "answer that raced the fence"
 
-    s, trace = make_session(monkeypatch, ["q1"], FenceAtReturnLLM())
+    s, trace = make_session(monkeypatch, ["what is your star rating"], FenceAtReturnLLM())
     s.handle_utterance(AUDIO, 0.0)
 
     assert s.rime.calls == []
@@ -282,7 +288,7 @@ def test_fence_immediately_before_the_llm_returns(monkeypatch):
 
 def test_fence_after_the_llm_returns_but_before_tts_starts(monkeypatch):
     rime = StreamingRime()
-    s, trace = make_session(monkeypatch, ["q1"], ScriptedLLM(["an answer"]), rime=rime)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["an answer"]), rime=rime)
     rime.on_chunk = lambda i: interrupt(s) if i == 0 else None   # before the first chunk
 
     s.handle_utterance(AUDIO, 0.0)
@@ -294,7 +300,7 @@ def test_fence_after_the_llm_returns_but_before_tts_starts(monkeypatch):
 
 def test_fence_during_rime_streaming_stops_mid_utterance(monkeypatch):
     rime = StreamingRime(chunks=10)
-    s, trace = make_session(monkeypatch, ["q1"], ScriptedLLM(["a long answer"]), rime=rime)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["a long answer"]), rime=rime)
     rime.on_chunk = lambda i: interrupt(s) if i == 3 else None
 
     s.handle_utterance(AUDIO, 0.0)
@@ -306,7 +312,7 @@ def test_fence_during_rime_streaming_stops_mid_utterance(monkeypatch):
 
 def test_stale_rime_chunks_arriving_after_a_fence_are_refused(monkeypatch):
     """The gate is the final authority even if the client keeps pushing."""
-    s, _ = make_session(monkeypatch, ["q1"], ScriptedLLM(["a"]))
+    s, _ = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["a"]))
     s.gate.set_active_generation("G1")
     s.gens.allocate(turn_id=1)
 
@@ -341,7 +347,7 @@ def test_recovery_immediately_after_an_interruption(monkeypatch):
 
 def test_multiple_interruptions_in_sequence(monkeypatch):
     rime = StreamingRime(chunks=6)
-    s, trace = make_session(monkeypatch, ["q1", "q2", "q3"],
+    s, trace = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby", "what else can you tell me"],
                             ScriptedLLM(["a1", "a2", "a3"]), rime=rime)
 
     rime.on_chunk = lambda i: interrupt(s) if i == 1 else None
@@ -362,7 +368,7 @@ def test_multiple_interruptions_in_sequence(monkeypatch):
 
 def test_generation_ids_stay_monotonic_across_interruptions(monkeypatch):
     rime = StreamingRime(chunks=4)
-    s, trace = make_session(monkeypatch, ["q1", "q2", "q3"],
+    s, trace = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby", "what else can you tell me"],
                             ScriptedLLM(["a1", "a2", "a3"]), rime=rime)
     rime.on_chunk = lambda i: interrupt(s) if i == 1 else None
     s.handle_utterance(AUDIO, 0.0)
@@ -379,7 +385,7 @@ def test_generation_ids_stay_monotonic_across_interruptions(monkeypatch):
 
 def test_an_interrupted_response_does_not_enter_history(monkeypatch):
     rime = StreamingRime(chunks=6)
-    s, _ = make_session(monkeypatch, ["q1"], ScriptedLLM(["an answer the user never finished hearing"]),
+    s, _ = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["an answer the user never finished hearing"]),
                         rime=rime)
     rime.on_chunk = lambda i: interrupt(s) if i == 2 else None
 
@@ -405,7 +411,7 @@ def test_history_after_interruption_then_recovery_holds_only_the_completed_turn(
 
 def test_a_thinking_interruption_leaves_history_untouched(monkeypatch):
     llm = BlockingLLM("never heard")
-    s, _ = make_session(monkeypatch, ["q1"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
     worker = threading.Thread(target=s.handle_utterance, args=(AUDIO, 0.0))
     worker.start()
     llm.started.wait(timeout=5.0)
@@ -422,7 +428,7 @@ def test_a_thinking_interruption_leaves_history_untouched(monkeypatch):
 def test_no_audio_of_a_fenced_generation_is_ever_audible(monkeypatch, fence_at_chunk):
     """The property itself, swept across every point in the stream at which a fence can land."""
     rime = StreamingRime(chunks=6)
-    s, trace = make_session(monkeypatch, ["q1"], ScriptedLLM(["an answer"]), rime=rime)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["an answer"]), rime=rime)
     rime.on_chunk = lambda i: interrupt(s) if i == fence_at_chunk else None
 
     s.handle_utterance(AUDIO, 0.0)
@@ -437,7 +443,7 @@ def test_no_audio_of_a_fenced_generation_is_ever_audible(monkeypatch, fence_at_c
 def test_a_generation_that_is_never_fenced_is_fully_audible(monkeypatch):
     """The guard must not be so eager that a normal turn stops being heard."""
     rime = StreamingRime(chunks=5, samples=480)
-    s, trace = make_session(monkeypatch, ["q1"], ScriptedLLM(["a clean answer"]), rime=rime)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["a clean answer"]), rime=rime)
 
     s.handle_utterance(AUDIO, 0.0)
 
@@ -451,7 +457,7 @@ def test_a_generation_that_is_never_fenced_is_fully_audible(monkeypatch):
 
 def test_turn_in_flight_is_cleared_on_every_exit_path(monkeypatch):
     """A stuck flag would arm barge-in forever and fence generations that were never in flight."""
-    s, _ = make_session(monkeypatch, ["q1", ""], ScriptedLLM(["a1"]))
+    s, _ = make_session(monkeypatch, ["what is your star rating", ""], ScriptedLLM(["a1"]))
 
     s.handle_utterance(AUDIO, 0.0)                     # normal completion
     assert s.barge.turn_in_flight is False
@@ -462,7 +468,7 @@ def test_turn_in_flight_is_cleared_on_every_exit_path(monkeypatch):
 
 def test_barge_in_is_not_armed_when_the_agent_is_idle(monkeypatch):
     """Speaking to an idle agent starts a turn; it must not fence a generation."""
-    s, trace = make_session(monkeypatch, ["q1"], ScriptedLLM(["a1"]))
+    s, trace = make_session(monkeypatch, ["what is your star rating"], ScriptedLLM(["a1"]))
 
     assert s.gate.is_playing is False and s.barge.turn_in_flight is False
     interrupt(s)

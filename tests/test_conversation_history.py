@@ -10,6 +10,12 @@ The negative case alone would be satisfied by never recording anything, so the p
 tested just as hard.
 """
 
+# Transcripts here are placeholders -- this file tests the streaming/LLM path, not routing.
+# They were single tokens ("q", "a question") until 2026-09-10, when AETHER learned to
+# answer a one-word unrecognisable fragment with "could you say that again?" instead of
+# handing it to the model. That is the intended behaviour, so the placeholders became
+# sentences a caller could actually say. Every assertion below is unchanged.
+
 from __future__ import annotations
 
 import threading
@@ -185,7 +191,7 @@ def test_completed_turn_is_committed_and_next_turn_receives_it(monkeypatch):
 
 def test_context_grows_across_three_turns(monkeypatch):
     llm = RecordingLLM(["a1", "a2", "a3"])
-    s, _ = make_session(monkeypatch, ["q1", "q2", "q3"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby", "what else can you tell me"], llm)
     for _ in range(3):
         s.handle_utterance(AUDIO, 0.0)
 
@@ -239,7 +245,7 @@ def test_next_generation_cannot_see_the_fenced_answer(monkeypatch):
 def test_fenced_after_llm_before_tts_is_not_committed(monkeypatch):
     """LLM succeeded, but the turn never became spoken -- so it is not part of the conversation."""
     llm = RecordingLLM(["An answer that was never heard."])
-    s, trace = make_session(monkeypatch, ["a question", "next"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby"], llm)
 
     real_speak = s.rime.speak
 
@@ -259,7 +265,7 @@ def test_fenced_after_llm_before_tts_is_not_committed(monkeypatch):
 def test_not_committed_when_the_output_gate_refuses_the_audio(monkeypatch):
     """The gate is the completed/spoken boundary. If it refuses, nothing was heard."""
     llm = RecordingLLM(["An answer the gate rejected."])
-    s, trace = make_session(monkeypatch, ["a question"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
     s.gate.refuse = True
 
     s.handle_utterance(AUDIO, 0.0)
@@ -271,7 +277,7 @@ def test_not_committed_when_the_output_gate_refuses_the_audio(monkeypatch):
 def test_llm_returning_successfully_is_not_by_itself_a_completed_turn(monkeypatch):
     """Guards the rule directly: 'the LLM returned' != 'the assistant turn completed'."""
     llm = RecordingLLM(["answer"])
-    s, _ = make_session(monkeypatch, ["q"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
     s.gate.refuse = True
 
     s.handle_utterance(AUDIO, 0.0)
@@ -298,7 +304,7 @@ def test_history_does_not_leak_between_sessions(monkeypatch):
 
 def test_two_histories_are_independent_objects():
     a, b = ConversationHistory(), ConversationHistory()
-    a.commit_turn("q", "a")
+    a.commit_turn("what is your star rating", "a")
     assert len(a) == 2 and len(b) == 0
 
 
@@ -360,7 +366,7 @@ def test_fence_generation_never_references_history():
 
 def test_history_contains_only_role_and_content(monkeypatch):
     llm = RecordingLLM(["a1", "a2"])
-    s, _ = make_session(monkeypatch, ["q1", "q2"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby"], llm)
     s.handle_utterance(AUDIO, 0.0)
     s.handle_utterance(AUDIO, 0.0)
 
@@ -372,7 +378,7 @@ def test_history_contains_only_role_and_content(monkeypatch):
 
 def test_no_internal_metadata_appears_in_model_facing_history(monkeypatch):
     llm = RecordingLLM(["a1", "a2"])
-    s, _ = make_session(monkeypatch, ["q1", "q2"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby"], llm)
     s.handle_utterance(AUDIO, 0.0)
     s.handle_utterance(AUDIO, 0.0)
 
@@ -411,13 +417,15 @@ def test_context_for_appends_the_current_message_without_storing_it():
 
 def test_messages_returns_a_copy():
     h = ConversationHistory()
-    h.commit_turn("q", "a")
+    h.commit_turn("what is your star rating", "a")
     got = h.messages()
     got[0]["content"] = "mutated"
-    assert h.messages()[0]["content"] == "q"
+    assert h.messages()[0]["content"] == "what is your star rating"
 
 
 def test_history_is_bounded():
+    # This one builds its own turns with `f"q{i}"` and never goes near the pipeline, so it keeps
+    # the terse placeholders -- there is no recogniser here to fail.
     h = ConversationHistory(max_turns=2)
     for i in range(5):
         h.commit_turn(f"q{i}", f"a{i}")

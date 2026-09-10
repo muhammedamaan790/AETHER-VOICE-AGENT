@@ -16,6 +16,12 @@ httpx client, so a stable identity across turns means no new TCP/TLS handshake p
 All of it rides on the existing `ResponseSpoken` event -- no new event type.
 """
 
+# Transcripts here are placeholders -- this file tests the streaming/LLM path, not routing.
+# They were single tokens ("q", "a question") until 2026-09-10, when AETHER learned to
+# answer a one-word unrecognisable fragment with "could you say that again?" instead of
+# handing it to the model. That is the intended behaviour, so the placeholders became
+# sentences a caller could actually say. Every assertion below is unchanged.
+
 from __future__ import annotations
 
 import numpy as np
@@ -98,7 +104,7 @@ class ScriptedSTT:
         self.trace, self._texts = trace, list(texts)
 
     def transcribe(self, audio, *, turn_id=None, gen=None):
-        text = self._texts.pop(0) if self._texts else "q"
+        text = self._texts.pop(0) if self._texts else "what is your star rating"
         self.trace.emit(EventType.TRANSCRIPT_FINAL, turn_id=turn_id, gen=gen, text=text)
         return text
 
@@ -112,7 +118,7 @@ class SilentMic:
     def set_context(self, **k): ...
 
 
-def make_session(monkeypatch, llm, transcripts=("q",)):
+def make_session(monkeypatch, llm, transcripts=("what is your star rating",)):
     monkeypatch.setenv("AETHER_LLM_STREAMING", "1")
     trace = Trace()
     gate = AudioGate(trace)
@@ -209,7 +215,7 @@ def test_a_recreated_transport_would_be_visible(monkeypatch):
 
 def test_client_init_cost_is_recorded_once_not_per_turn(monkeypatch):
     llm = TimedStreamingLLM(["A sentence here."])
-    s, trace = make_session(monkeypatch, llm, transcripts=("q1", "q2"))
+    s, trace = make_session(monkeypatch, llm, transcripts=("what is your star rating", "is there a temple nearby"))
 
     s.handle_utterance(AUDIO, 0.0)
     s.handle_utterance(AUDIO, 0.0)
@@ -311,7 +317,7 @@ def test_gemini_adapter_records_ttft_on_the_raw_chunk(monkeypatch):
 
     from aether.llm import GeminiLLM
     llm = GeminiLLM("key-not-real", "gemini-3.8-flash")
-    sentences = list(llm.respond_stream("q"))
+    sentences = list(llm.respond_stream("what is your star rating"))
 
     assert sentences == ["The capital of France is Paris."]
     t = llm.last_stream_timing
@@ -342,7 +348,7 @@ def test_gemini_adapter_records_timing_even_if_the_consumer_stops_early(monkeypa
     from aether.llm import GeminiLLM
     llm = GeminiLLM("key-not-real", "gemini-3.8-flash")
 
-    stream = llm.respond_stream("q")
+    stream = llm.respond_stream("what is your star rating")
     next(stream)          # take one sentence, then abandon the stream as a fence does
     stream.close()
 

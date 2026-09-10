@@ -55,7 +55,11 @@ from .lang import (
     language_offer,
     names_language,
 )
+from .lang import DID_YOU_MEAN, NEVER_MIND, SAY_AGAIN
+from .hotel.clarify import Suggestion, confirms, nearest
+from .hotel.clarify import sounds_like_a_recognition_failure
 from .hotel.context import Subject
+from .hotel.router import Route
 from .hotel.router import route as route_menu
 from .hotel.router import subject_of
 from .hotel.tools import HOTEL_TOOLS, render
@@ -176,6 +180,10 @@ class Day1Spike:
         # actually spoken, which is what stops a fenced turn from being referred back to.
         self.subject = Subject()
         self._pending_subject: tuple[str | None, str | None] | None = None
+        # An offer AETHER has actually made and is waiting on an answer to. Same two-stage rule as
+        # the subject: proposed during the turn, committed only once the caller has heard it.
+        self.suggestion: Suggestion | None = None
+        self._pending_suggestion: Suggestion | None = None
         # The hotel menu, and the runner that executes its tools under the SAME fencing the audio
         # path uses. Deterministic lookups answer menu questions without the LLM; anything the
         # router is not confident about still goes to Gemini.
@@ -366,6 +374,7 @@ class Day1Spike:
         # refer to something the caller was interrupted out of ever hearing, which is precisely the
         # leak fencing exists to prevent, wearing a different hat.
         self._pending_subject = None
+        self._pending_suggestion = None
         for fenced_gen, fence_reason in self.barge.drain_fenced():
             # The reason comes from whoever fenced, never from here. A hardcoded string would have
             # recorded a button press as "meaningful_interruption" and quietly destroyed the one
@@ -516,6 +525,11 @@ class Day1Spike:
             if self._pending_subject is not None:
                 self.subject.remember(*self._pending_subject)
                 self._pending_subject = None
+            # The offer becomes live only now, for the same reason: a caller who talked over
+            # "did you mean the Deluxe King?" never heard it, and their next word is not an answer
+            # to a question they were not asked.
+            self.suggestion = self._pending_suggestion
+            self._pending_suggestion = None
 
             # Asked once, here, rather than in each of the three speak paths: the gate is the
             # authority on when audio actually left, and it knows by the time the turn is spoken.
@@ -664,9 +678,21 @@ class Day1Spike:
         Returns None on every uncertain path -- no route, a stale result, or a tool that could not
         answer -- so the LLM gets the sentence. A slower answer is better than a confident wrong one.
         """
+        # A pending "did you mean X?" is answered before anything else: the caller is replying to
+        # AETHER's question, not asking a new one. `confirms` returns None for anything that is
+        # neither yes nor no, which means they moved on -- so the offer is dropped rather than
+        # argued with.
         decision = route_menu(text, self.subject)
+        if decision is None and self.suggestion is not None:
+            answer = confirms(text)
+            offered, self.suggestion = self.suggestion, None
+            if answer is True:
+                decision = Route(offered.tool, dict(offered.params), "confirmed suggestion")
+            elif answer is False:
+                return NEVER_MIND.get(self.language.code, NEVER_MIND["eng"])
+
         if decision is None:
-            return None
+            return self._clarify(text)
 
         result = self.tools.run(
             decision.tool, gen=gen.id, turn_id=self._turn,
@@ -688,6 +714,31 @@ class Day1Spike:
         # ever refer to something the caller actually heard. Same rule as history, same reason.
         self._pending_subject = subject_of(decision, text)
         return spoken
+
+    def _clarify(self, text: str) -> str | None:
+        """Nothing routed. Offer the nearest real thing, ask for a repeat, or step aside.
+
+        Returning None hands the sentence to the model, which stays the right answer for a real
+        question the database cannot serve (RULES.md R8b.3). This only intercepts input that looks
+        like the RECOGNITION failed -- and the two are told apart by evidence: a near-miss against
+        a name the hotel actually has, or a fragment too short to be a question at all.
+        """
+        suggestion = nearest(text)
+        if suggestion is not None:
+            # Held, not committed -- exactly like `_pending_subject`. If the caller talks over the
+            # question, they never heard it, so their next "yes" must not confirm it.
+            self._pending_suggestion = suggestion
+            template = DID_YOU_MEAN.get(self.language.code, DID_YOU_MEAN["eng"])
+            spoken = template.format(suggestion.phrase)
+            print(f"  CLARIFY[{suggestion.heard!r} -> {suggestion.phrase!r} "
+                  f"score={suggestion.score}]: {spoken}")
+            return spoken
+
+        if sounds_like_a_recognition_failure(text):
+            print(f"  CLARIFY[not understood]: asking for a repeat")
+            return SAY_AGAIN.get(self.language.code, SAY_AGAIN["eng"])
+
+        return None
 
     def _set_language(self, language) -> bool:
         """Make `language` the one AETHER listens and speaks in. Returns whether anything changed.

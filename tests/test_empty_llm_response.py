@@ -11,6 +11,12 @@ The correct behaviour is a safe, silent failure: no synthesis, no history, no in
 the session survives to take the next turn.
 """
 
+# Transcripts here are placeholders -- this file tests the streaming/LLM path, not routing.
+# They were single tokens ("q", "a question") until 2026-09-10, when AETHER learned to
+# answer a one-word unrecognisable fragment with "could you say that again?" instead of
+# handing it to the model. That is the intended behaviour, so the placeholders became
+# sentences a caller could actually say. Every assertion below is unchanged.
+
 from __future__ import annotations
 
 import numpy as np
@@ -149,7 +155,7 @@ def test_empty_llm_response_is_never_sent_to_rime(monkeypatch, empty):
 
 def test_empty_llm_response_is_recorded_as_discarded(monkeypatch):
     llm = ScriptedLLM([""])
-    s, trace = make_session(monkeypatch, ["a question"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)
 
@@ -163,7 +169,7 @@ def test_empty_llm_response_is_recorded_as_discarded(monkeypatch):
 def test_empty_llm_response_does_not_enter_history(monkeypatch):
     """Level-1 semantics hold: an unspoken turn is not a completed turn."""
     llm = ScriptedLLM([""])
-    s, _ = make_session(monkeypatch, ["a question"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)
 
@@ -173,7 +179,7 @@ def test_empty_llm_response_does_not_enter_history(monkeypatch):
 def test_no_answer_is_invented_for_an_empty_response(monkeypatch):
     """Requirement: do not fabricate an assistant response. Silence, not substitution."""
     llm = ScriptedLLM([""])
-    s, trace = make_session(monkeypatch, ["a question"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)
 
@@ -206,7 +212,7 @@ def test_session_survives_an_empty_response_and_the_next_turn_works(monkeypatch)
 def test_llm_provider_error_does_not_kill_the_session(monkeypatch):
     """A 503 from the provider (observed live) must be survivable, not fatal."""
     llm = ExplodingLLM(RuntimeError("503 UNAVAILABLE"))
-    s, trace = make_session(monkeypatch, ["a question"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)   # must not raise
 
@@ -221,7 +227,7 @@ def test_tts_failure_does_not_kill_the_session(monkeypatch):
     """The original crash was a Rime 400 unwinding past the run loop."""
     llm = ScriptedLLM(["something sayable"])
     rime = RecordingRime(raises=RuntimeError("400 Bad Request"))
-    s, trace = make_session(monkeypatch, ["a question"], llm, rime=rime)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm, rime=rime)
 
     s.handle_utterance(AUDIO, 0.0)   # must not raise
 
@@ -235,7 +241,7 @@ def test_tts_failure_does_not_kill_the_session(monkeypatch):
 def test_fencing_still_takes_priority_over_the_empty_check(monkeypatch):
     """A fenced generation is discarded as stale, not as empty -- fencing stays authoritative."""
     llm = ScriptedLLM([""])
-    s, trace = make_session(monkeypatch, ["a question"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     original = llm.respond
 
