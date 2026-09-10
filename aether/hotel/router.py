@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from dataclasses import dataclass
 
 from ._foreign import to_router_language
@@ -106,8 +107,8 @@ _ALLERGEN_NAMES: tuple[tuple[str, str], ...] = tuple(sorted(
 # these cues must be present too, so the narrower `safe_for` tool only fires when the caller has
 # actually said they are avoiding something.
 _AVOIDANCE_WORDS = (
-    "allerg", "intolerant", "intolerance", "avoid", "avoiding", "cannot eat", "can not eat",
-    "cant eat", "can t eat", "free", "without", "no ", "react to", "safe",
+    "allerg*", "intoleran*", "avoid*", "cannot eat", "can not eat",
+    "cant eat", "can t eat", "free", "without", "no", "react to", "safe",
 )
 
 # Words that make a sentence a question about FOOD IN GENERAL rather than about anything specific.
@@ -136,8 +137,21 @@ _MENU_NOUNS: tuple[tuple[str, str], ...] = (
 #
 # The inflections substring matching used to catch for free are listed explicitly now, or "we are
 # staying three nights" would stop being a room question.
-_ROOM_WORDS = ("room", "rooms", "suite", "suites", "stay", "staying", "stays",
-               "night", "nights", "tonight", "book a room")
+# Nouns that make a sentence a room question ON THEIR OWN. Say "room" or "suite" and you are
+# asking about a room, whatever else is in the sentence.
+_ROOM_NOUNS = ("room", "rooms", "suite", "suites", "book a room")
+
+# Words that SUPPORT a room reading without establishing one. They are about time and duration, and
+# they sit just as naturally in a menu question -- "what starters do you have tonight" is not a
+# question about rooms. So these only claim a sentence that mentions no food at all.
+#
+# Getting this wrong is how "is the chicken kebab available tonight" came to be answered with "we
+# have forty-one rooms free": "night" was matched as a substring of "tonight", and a time word was
+# treated as though it were a room noun. Both halves are fixed, and both halves are needed.
+_ROOM_TIME_WORDS = ("stay", "staying", "stays", "night", "nights", "tonight")
+
+# The union, for anything that just wants to know whether rooms were mentioned at all.
+_ROOM_WORDS = _ROOM_NOUNS + _ROOM_TIME_WORDS
 _SERVICE_WORDS_GENERIC = ("service", "services", "facilities", "amenities")
 _CHECKIN_WORDS = ("check in", "check-in", "checkin", "check out", "check-out", "checkout",
                   "checking in", "checking out", "arrival time", "departure time")
@@ -215,7 +229,9 @@ _HOTEL_INFO_WORDS = ("where are you", "where is the hotel", "your address", "hot
 
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
 _AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
-_ALLERGEN_WORDS = ("allerg", "contain", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
+# `allerg*` and `contain*` are STEMS: allergy/allergic/allergen, contains/containing. Everything
+# else is a whole word, so "nuts" cannot fire on "doughnuts".
+_ALLERGEN_WORDS = ("allerg*", "contain*", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
 # Ways a caller asks to be told what there is. Broadened after a real call: "tell me all the
 # possible things available in dessert" matched NONE of the original six, so a plain menu question
 # reached the model. Each entry is a phrase people actually used on the calls, not a guess.
@@ -346,14 +362,41 @@ def _find_category(spoken: str) -> Category | None:
     return None
 
 
-def _says_word(spoken: str, words: tuple[str, ...]) -> bool:
-    """`any(word in spoken)`, but on whole words. See `_ROOM_WORDS` for why that matters.
+@lru_cache(maxsize=None)
+def _compile(entry: str) -> re.Pattern[str]:
+    """One keyword-table entry as a pattern that says what it means.
 
-    Not applied to every table on purpose: `_ALLERGEN_WORDS` and `_AVOIDANCE_WORDS` deliberately
-    hold PREFIXES ("allerg" for allergy/allergic/allergen) and `_AVOIDANCE_WORDS` holds "no " with
-    its trailing space. Word boundaries would silently break both.
+    THE BUG THIS CLOSES. Every table here used to be matched with plain `in`, which is substring
+    matching, and substring matching inside a sentence is a hazard that only shows up when the
+    right word finally arrives. It did: "night" is inside "tonight", so "is the chicken kebab
+    available tonight" was answered with "we have forty-one rooms free". The same trap was sitting
+    unexploded in several other tables -- "any" is inside "company", "no " is inside "casino ",
+    "like" is inside "unlikely".
+
+    Fixing it by making everything a whole word would have broken the tables that MEAN a prefix:
+    "allerg" is there to catch allergy, allergic, allergen and allergies at once. So intent is now
+    written down per entry instead of assumed table-wide:
+
+        "nuts"       whole word   -- matches "nuts", not "doughnuts"
+        "allerg*"    stem         -- matches allergy/allergic/allergen, but only at a word start
+        "how much"   phrase       -- whole words at both ends
+
+    A trailing `*` is the only special character, and no keyword in this file legitimately contains
+    one.
     """
-    return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", spoken) for word in words)
+    if entry.endswith("*"):
+        return re.compile(rf"(?<!\w){re.escape(entry[:-1])}\w*")
+    return re.compile(rf"(?<!\w){re.escape(entry.strip())}(?!\w)")
+
+
+def _says(spoken: str, entries: tuple[str, ...]) -> bool:
+    """Whether the sentence contains any of these keywords, each matched as it declares."""
+    return any(_compile(entry).search(spoken) for entry in entries)
+
+
+# Kept as a distinct name because `_ROOM_WORDS` is the table whose substring match caused a real
+# wrong answer, and the call site reads better for saying so.
+_says_word = _says
 
 
 def _find_pair(spoken: str, table: tuple[tuple[str, str], ...]) -> str | None:
@@ -515,15 +558,15 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
         return Route("hotel_policy", {"topic": policy}, "policy")
 
     # A1. The hotel itself: where it is, how big it is, how to reach it.
-    if any(phrase in spoken for phrase in _HOTEL_INFO_WORDS):
+    if _says(spoken, _HOTEL_INFO_WORDS):
         return Route("hotel_info", {}, "hotel info")
 
     # A. Check-in and check-out times. Read from the hotel row, so the model never guesses them.
-    if any(word in spoken for word in _CHECKIN_WORDS):
+    if _says(spoken, _CHECKIN_WORDS):
         return Route("check_in_out", {}, "check-in/out")
 
     # B. A reservation on a named room.
-    if room_number and any(word in spoken for word in _RESERVATION_WORDS):
+    if room_number and _says(spoken, _RESERVATION_WORDS):
         return Route("reservation_for_room", {"room": room_number}, "room+reservation")
 
     # C. The status of a named room: "is room three oh five free".
@@ -536,12 +579,12 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
 
     # E. What a room type costs, or what comes with it.
     if room_type:
-        if any(word in spoken for word in ("amenities", "come with", "comes with", "include",
-                                           "included", "facilities", "what is in")):
+        if _says(spoken, ("amenities", "come with", "comes with", "include",
+                          "included", "facilities", "what is in")):
             return Route("room_amenities", {"room_type": room_type}, "room type+amenities")
-        if any(word in spoken for word in _PRICE_WORDS) or "rate" in spoken:
+        if _says(spoken, _PRICE_WORDS) or _says(spoken, ("rate", "rates")):
             return Route("room_price", {"room_type": room_type}, "room type+price")
-        if any(word in spoken for word in _STATUS_WORDS):
+        if _says(spoken, _STATUS_WORDS):
             return Route("room_availability", {"room_type": room_type}, "room type+availability")
         return Route("room_price", {"room_type": room_type}, "room type only")
 
@@ -552,32 +595,34 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     #    answered it with the list of room types -- a confident answer to a question nobody asked.
     #    Falling through costs a slower answer from a model that has the whole hotel in its prompt;
     #    answering the wrong question costs the claim.
-    # `not dish`: "tonight" is a room word -- "do you have anything free tonight" is a room
-    # question and always was. But so is "is the chicken kebab available tonight", which is not.
-    # When the caller has NAMED a dish, the sentence is about the dish, and the room branch must
-    # not claim it just because a time word appeared. This is the ordering fix for a bug that
-    # answered "we have forty-one rooms free" to a question about a kebab.
-    if _says_word(spoken, _ROOM_WORDS) and not dish and "room for" not in spoken:
-        if any(word in spoken for word in _STATUS_WORDS):
+    # A room noun claims the sentence outright. A time word only claims one that mentions no food:
+    # "do you have anything free tonight" is a room question, "what starters do you have tonight"
+    # is not, and neither is "is the chicken kebab available tonight".
+    mentions_food = (dish is not None or category is not None
+                     or _find_pair(spoken, _MENU_NOUNS) is not None)
+    asks_about_rooms = _says(spoken, _ROOM_NOUNS) or (
+        _says(spoken, _ROOM_TIME_WORDS) and not mentions_food
+    )
+    if asks_about_rooms and "room for" not in spoken:
+        if _says(spoken, _STATUS_WORDS):
             return Route("room_availability", {}, "rooms+availability")
-        if any(word in spoken for word in _LIST_WORDS) or any(
-                word in spoken for word in _PRICE_WORDS):
+        if _says(spoken, _LIST_WORDS) or _says(spoken, _PRICE_WORDS):
             return Route("list_room_types", {}, "room types")
 
     # G. Services in general: "what services do you offer".
-    if (any(word in spoken for word in _SERVICE_WORDS_GENERIC)
-            and any(word in spoken for word in _LIST_WORDS)):
+    if (_says(spoken, _SERVICE_WORDS_GENERIC)
+            and _says(spoken, _LIST_WORDS)):
         return Route("list_services", {}, "services")
 
     # ---- the menu rules ---------------------------------------------------------------------
 
     # 1. Allergens about a named dish. First because it is the answer that matters most to get
     #    right, and because "does X contain nuts" also contains price-ish and list-ish words.
-    if dish and any(word in spoken for word in _ALLERGEN_WORDS):
+    if dish and _says(spoken, _ALLERGEN_WORDS):
         return Route("check_allergens", {"dish": dish}, "dish+allergen")
 
     # 2. Availability of a named dish.
-    if dish and any(word in spoken for word in _AVAILABLE_WORDS):
+    if dish and _says(spoken, _AVAILABLE_WORDS):
         return Route("check_availability", {"dish": dish}, "dish+availability")
 
     # 3. Price of a named dish. BEFORE the spice rule, because an explicit price question is the
@@ -585,7 +630,7 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     #    stray "hot" must not turn it into an answer about heat. Getting this order wrong was a
     #    real regression -- every price question containing a spice word answered the wrong
     #    question.
-    if dish and any(word in spoken for word in _PRICE_WORDS):
+    if dish and _says(spoken, _PRICE_WORDS):
         return Route("price_of", {"dish": dish}, "dish+price")
 
     # 4. "Is the chicken kebab spicy?" / "tell me about the paneer tikka".
@@ -593,7 +638,7 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     #    THE DATABASE RECORDS NO SPICE LEVEL -- only a prose description. So this reads the hotel's
     #    own description back rather than inventing a heat rating. Still before the bare-dish
     #    fallback, because a question about what a dish IS must not be answered with its price.
-    if dish and (spice is not None or any(w in spoken for w in _DESCRIBE_WORDS)):
+    if dish and (spice is not None or _says(spoken, _DESCRIBE_WORDS)):
         return Route("describe_item", {"dish": dish}, "dish+describe")
 
     # 5. A dish named with no other signal -- treat as "tell me about it", which is its price.
@@ -603,7 +648,7 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     # 6. An allergy with no dish named: "I have a nut allergy, what can I eat?". Requires BOTH an
     #    allergen and an avoidance cue, so "do you have any fish" stays a menu browse rather than
     #    becoming a medical question.
-    if allergen and any(word in spoken for word in _AVOIDANCE_WORDS):
+    if allergen and _says(spoken, _AVOIDANCE_WORDS):
         params: dict[str, object] = {"allergen": allergen}
         if category is not None:
             params["category"] = category
@@ -621,7 +666,7 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     #  through to the model, which is told the menu and told never to invent.)
 
     # 9. A whole category.
-    if category is not None and any(word in spoken for word in _LIST_WORDS):
+    if category is not None and _says(spoken, _LIST_WORDS):
         return Route("list_category", {"category": category}, "category")
 
     # 10. The broadest menu question, and usually the FIRST one a caller asks: "what's on the
@@ -641,8 +686,8 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     #     a confident non-answer to the one question where that is dangerous.
     if (
         _find_pair(spoken, _MENU_NOUNS)
-        and any(word in spoken for word in _LIST_WORDS)
-        and not any(word in spoken for word in _ALLERGEN_WORDS)
+        and _says(spoken, _LIST_WORDS)
+        and not _says(spoken, _ALLERGEN_WORDS)
     ):
         return Route("menu_overview", {}, "general menu")
 
