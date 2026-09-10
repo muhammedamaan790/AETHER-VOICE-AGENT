@@ -144,6 +144,32 @@ ACKNOWLEDGEMENT = {
     "eng": "Of course, I will continue in English. How may I help you?",
 }
 
+# Offered when the recogniser produced something close to a real name but not close enough to act
+# on. A QUESTION, never an answer: the caller confirms before any fact is spoken, so a wrong guess
+# costs one turn and can never put a wrong price in their ear. `{}` is the name, which stays in the
+# hotel's own spelling in every language -- "Chicken Kebab" is what the kitchen calls it.
+DID_YOU_MEAN = {
+    "eng": "Sorry, I did not quite catch that. Did you mean {}?",
+    "hin": "माफ़ कीजिए, मैं ठीक से समझ नहीं पाई। क्या आपका मतलब {} था?",
+    "spa": "Perdone, no le he entendido bien. ¿Se refería a {}?",
+}
+
+# When nothing was close to anything. Saying this is more useful than answering a question the
+# caller did not ask: it tells them the line is the problem, not the hotel.
+SAY_AGAIN = {
+    "eng": "Sorry, I did not catch that. Could you say it again?",
+    "hin": "माफ़ कीजिए, मैं सुन नहीं पाई। क्या आप फिर से कहेंगे?",
+    "spa": "Perdone, no le he oído bien. ¿Puede repetirlo?",
+}
+
+# After a "no" to a suggestion. Deliberately does NOT re-offer or guess again -- a second guess
+# after a rejected first is how a caller ends up arguing with a machine.
+NEVER_MIND = {
+    "eng": "My mistake. What would you like to know?",
+    "hin": "माफ़ कीजिए। आप क्या जानना चाहेंगे?",
+    "spa": "Disculpe. ¿Qué desea saber?",
+}
+
 # The words that ask for a language. Matched on the **English** transcript, because that is what
 # `base.en` produces before any switch has happened -- the recogniser cannot be asked to hear Hindi
 # until it has been told to load a Hindi-capable model, so the request itself must survive being

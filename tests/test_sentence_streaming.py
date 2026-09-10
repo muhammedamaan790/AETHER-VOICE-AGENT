@@ -11,6 +11,12 @@ not stream thinking as text, so a one-sentence reply arrives as a single chunk a
 nothing for it. These tests pin the mechanism, not a latency claim.
 """
 
+# Transcripts here are placeholders -- this file tests the streaming/LLM path, not routing.
+# They were single tokens ("q", "a question") until 2026-09-10, when AETHER learned to
+# answer a one-word unrecognisable fragment with "could you say that again?" instead of
+# handing it to the model. That is the intended behaviour, so the placeholders became
+# sentences a caller could actually say. Every assertion below is unchanged.
+
 from __future__ import annotations
 
 import numpy as np
@@ -178,7 +184,7 @@ class ScriptedSTT:
         self.trace, self._texts = trace, list(texts)
 
     def transcribe(self, audio, *, turn_id=None, gen=None):
-        text = self._texts.pop(0) if self._texts else "another question"
+        text = self._texts.pop(0) if self._texts else "what else can you tell me"
         self.trace.emit(EventType.TRANSCRIPT_FINAL, turn_id=turn_id, gen=gen, text=text)
         return text
 
@@ -225,7 +231,7 @@ def emitted(gate, blocks=40):
 
 def test_each_sentence_is_spoken_as_it_arrives(monkeypatch):
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine."])
-    s, trace = make_session(monkeypatch, ["q"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)
 
@@ -239,12 +245,12 @@ def test_each_sentence_is_spoken_as_it_arrives(monkeypatch):
 
 def test_history_holds_the_complete_reply_after_a_successful_stream(monkeypatch):
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine."])
-    s, _ = make_session(monkeypatch, ["q"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)
 
     assert s.history.messages() == [
-        {"role": "user", "content": "q"},
+        {"role": "user", "content": "what is your star rating"},
         {"role": "assistant", "content": "Paris is the capital. It sits on the Seine."},
     ]
 
@@ -253,7 +259,7 @@ def test_history_holds_the_complete_reply_after_a_successful_stream(monkeypatch)
 
 def test_fencing_before_the_first_sentence_speaks_nothing(monkeypatch):
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine."])
-    s, trace = make_session(monkeypatch, ["q"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
     llm.on_sentence = lambda i: interrupt(s) if i == 0 else None
 
     s.handle_utterance(AUDIO, 0.0)
@@ -266,7 +272,7 @@ def test_fencing_before_the_first_sentence_speaks_nothing(monkeypatch):
 
 def test_fencing_after_the_first_sentence_stops_the_rest(monkeypatch):
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine.", "Lyon is south."])
-    s, trace = make_session(monkeypatch, ["q"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
     llm.on_sentence = lambda i: interrupt(s) if i == 1 else None
 
     s.handle_utterance(AUDIO, 0.0)
@@ -279,7 +285,7 @@ def test_fencing_after_the_first_sentence_stops_the_rest(monkeypatch):
 
 def test_no_stale_audio_is_audible_after_a_mid_stream_fence(monkeypatch):
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine.", "Lyon is south."])
-    s, _ = make_session(monkeypatch, ["q"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
     llm.on_sentence = lambda i: interrupt(s) if i == 1 else None
 
     s.handle_utterance(AUDIO, 0.0)
@@ -292,7 +298,7 @@ def test_no_stale_audio_is_audible_after_a_mid_stream_fence(monkeypatch):
 def test_a_partial_stream_is_never_committed_to_history(monkeypatch):
     """Level 1: a turn is remembered whole or not at all."""
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine."])
-    s, _ = make_session(monkeypatch, ["q"], llm)
+    s, _ = make_session(monkeypatch, ["what is your star rating"], llm)
     llm.on_sentence = lambda i: interrupt(s) if i == 1 else None
 
     s.handle_utterance(AUDIO, 0.0)
@@ -302,7 +308,7 @@ def test_a_partial_stream_is_never_committed_to_history(monkeypatch):
 
 def test_recovery_after_a_streamed_interruption(monkeypatch):
     llm = StreamingLLM(["First answer here.", "Second part follows."])
-    s, trace = make_session(monkeypatch, ["q1", "q2"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby"], llm)
     llm.on_sentence = lambda i: interrupt(s) if i == 1 else None
     s.handle_utterance(AUDIO, 0.0)
 
@@ -319,7 +325,7 @@ def test_recovery_after_a_streamed_interruption(monkeypatch):
 
 def test_a_stream_that_fails_midway_speaks_nothing_further_and_invents_nothing(monkeypatch):
     llm = StreamingLLM(["Paris is the capital.", "It sits on the Seine."], fail_after=1)
-    s, trace = make_session(monkeypatch, ["q"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)   # must not raise
 
@@ -331,7 +337,7 @@ def test_a_stream_that_fails_midway_speaks_nothing_further_and_invents_nothing(m
 
 def test_a_stream_that_yields_nothing_is_discarded_not_invented(monkeypatch):
     llm = StreamingLLM([])
-    s, trace = make_session(monkeypatch, ["q"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
 
     s.handle_utterance(AUDIO, 0.0)
 
@@ -343,7 +349,7 @@ def test_a_stream_that_yields_nothing_is_discarded_not_invented(monkeypatch):
 
 def test_the_session_survives_a_failed_stream_and_the_next_turn_works(monkeypatch):
     llm = StreamingLLM(["Broken."], fail_after=0)
-    s, trace = make_session(monkeypatch, ["q1", "q2"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating", "is there a temple nearby"], llm)
     s.handle_utterance(AUDIO, 0.0)
 
     llm._sentences = ["A good answer this time."]
@@ -358,7 +364,7 @@ def test_the_session_survives_a_failed_stream_and_the_next_turn_works(monkeypatc
 
 def test_streaming_can_be_disabled_and_the_blocking_path_still_works(monkeypatch):
     llm = StreamingLLM(["One sentence answer."])
-    s, trace = make_session(monkeypatch, ["q"], llm)
+    s, trace = make_session(monkeypatch, ["what is your star rating"], llm)
     monkeypatch.setenv("AETHER_LLM_STREAMING", "0")
     s._streaming_enabled = False
 
@@ -376,7 +382,7 @@ def test_a_provider_without_streaming_uses_the_blocking_path(monkeypatch):
         def respond(self, user_text, history=None):
             return "A blocking answer."
 
-    s, trace = make_session(monkeypatch, ["q"], BlockingOnly())
+    s, trace = make_session(monkeypatch, ["what is your star rating"], BlockingOnly())
 
     s.handle_utterance(AUDIO, 0.0)
 

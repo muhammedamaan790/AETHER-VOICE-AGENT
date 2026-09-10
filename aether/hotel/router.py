@@ -20,11 +20,12 @@ can never bypass fencing.
 from __future__ import annotations
 
 import re
-import unicodedata
 from functools import lru_cache
 from dataclasses import dataclass
 
 from ._foreign import to_router_language
+from ._text import is_kept as _is_kept_char
+from ._text import normalise as _normalise
 from .context import Subject, resolve
 from .db import HotelStore
 
@@ -317,25 +318,11 @@ class Route:
     reason: str          # which rule matched, recorded in the trace for auditability
 
 
-def _is_kept(ch: str) -> bool:
-    r"""Whether `normalise` keeps this character.
-
-    COMBINING MARKS ARE KEPT, and that is the whole reason this is a function rather than the
-    one-line `[^\w\s-]` it used to be. Python's `\w` is `str.isalnum()` plus underscore, and a
-    Devanagari vowel sign is category Mn/Mc, for which `isalnum()` is False. So the old expression
-    deleted every matra and virama: "मेन्यू में क्या है" normalised to "म न य म क य ह", and no
-    Hindi keyword could ever match. Hindi routing was impossible, not merely unimplemented.
-
-    Tested by category rather than by codepoint range so the next script -- Tamil, Arabic, Thai --
-    works without another edit here.
-    """
-    return (ch.isalnum() or ch.isspace() or ch in "-_"
-            or unicodedata.category(ch).startswith("M"))
-
-
-def normalise(text: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace. STT output is not tidy."""
-    return " ".join("".join(ch if _is_kept(ch) else " " for ch in text.lower()).split())
+# Text preparation lives in `_text` so `clarify` can use exactly the same rule. Re-exported here
+# because the whole suite imports `normalise` from the router, and because this is where a reader
+# looking for "what happens to the transcript first" will come.
+normalise = _normalise
+_is_kept = _is_kept_char
 
 
 def _find_dish(spoken: str) -> str | None:
