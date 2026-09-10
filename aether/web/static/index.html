@@ -61,22 +61,22 @@ body{
 .brand{display:flex;align-items:center;gap:15px}
 .crest{
   width:48px;height:48px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;
-  border:1.5px solid var(--gold);color:var(--gold-bright);font-family:var(--serif);font-size:22px;
+  border:1.5px solid var(--gold);color:var(--gold-bright);font-family:var(--serif);font-size:23px;
   background:radial-gradient(circle at 35% 30%,rgba(212,169,74,.22),transparent 70%);
 }
-.brand h1{margin:0;font-size:31px;letter-spacing:.22em;font-weight:600;line-height:1.1}
-.brand p{margin:4px 0 0;font-size:12px;letter-spacing:.28em;color:var(--ink-dim);text-transform:uppercase}
+.brand h1{margin:0;font-size:32px;letter-spacing:.22em;font-weight:600;line-height:1.1}
+.brand p{margin:4px 0 0;font-size:13px;letter-spacing:.28em;color:var(--ink-dim);text-transform:uppercase}
 .status-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .pill{
   display:inline-flex;align-items:center;gap:9px;padding:10px 18px;border-radius:999px;
   border:1px solid var(--line);background:rgba(255,255,255,.02);
-  font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink);white-space:nowrap;
+  font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink);white-space:nowrap;
 }
 .pill.on{border-color:rgba(53,199,106,.35);color:#cfe9d8}
 .pill .bead{width:9px;height:9px;border-radius:50%;background:var(--ink-faint)}
 .pill.on .bead{background:var(--live);box-shadow:0 0 10px rgba(53,199,106,.7)}
-.pill .clock{font-family:var(--mono);letter-spacing:.06em;font-size:16px;color:var(--ink)}
-.rec{display:inline-flex;align-items:center;gap:9px;font-size:13px;letter-spacing:.18em;
+.pill .clock{font-family:var(--mono);letter-spacing:.06em;font-size:17px;color:var(--ink)}
+.rec{display:inline-flex;align-items:center;gap:9px;font-size:14px;letter-spacing:.18em;
      text-transform:uppercase;color:var(--ink-dim);white-space:nowrap}
 .rec .bead{width:9px;height:9px;border-radius:50%;background:var(--ink-faint)}
 .rec.on{color:var(--rec)}
@@ -120,35 +120,35 @@ body{
 /* ---------------- caller card ---------------- */
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
            padding:15px 18px;border-bottom:1px solid var(--line-soft)}
-.card-head .label{font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim)}
+.card-head .label{font-size:13px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim)}
 .badge{
-  font-size:11px;letter-spacing:.18em;text-transform:uppercase;padding:6px 12px;border-radius:999px;
+  font-size:12px;letter-spacing:.18em;text-transform:uppercase;padding:6px 12px;border-radius:999px;
   border:1px solid rgba(212,169,74,.4);color:var(--gold-bright);background:rgba(212,169,74,.08);
   white-space:nowrap;
 }
 .who{display:flex;align-items:center;gap:14px;padding:16px 18px}
 .avatar{
   width:52px;height:52px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;
-  border:1px solid rgba(212,169,74,.35);color:var(--gold-bright);font-size:18px;
+  border:1px solid rgba(212,169,74,.35);color:var(--gold-bright);font-size:19px;
   background:radial-gradient(circle at 35% 30%,rgba(212,169,74,.16),rgba(255,255,255,.02));
 }
-.who .name{font-family:var(--serif);font-size:24px;line-height:1.25}
-.who .sub{font-size:14px;color:var(--ink-dim);margin-top:4px;overflow-wrap:anywhere}
+.who .name{font-family:var(--serif);font-size:25px;line-height:1.25}
+.who .sub{font-size:15px;color:var(--ink-dim);margin-top:4px;overflow-wrap:anywhere}
 .facts{padding:2px 18px 14px;display:flex;flex-direction:column}
 .fact{display:flex;align-items:center;gap:13px;padding:9px 0;border-top:1px solid var(--line-soft)}
 .fact .ico{
   width:34px;height:34px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
-  border:1px solid var(--line);background:rgba(255,255,255,.02);color:var(--gold);font-size:14px;
+  border:1px solid var(--line);background:rgba(255,255,255,.02);color:var(--gold);font-size:15px;
 }
-.fact .k{font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);flex:1}
-.fact .v{font-size:16px;font-weight:600;color:var(--ink);text-align:right;overflow-wrap:anywhere;max-width:58%}
+.fact .k{font-size:12.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);flex:1}
+.fact .v{font-size:17px;font-weight:600;color:var(--ink);text-align:right;overflow-wrap:anywhere;max-width:58%}
 
 /* ---------------- voice ---------------- */
 .voice{padding:16px 18px 12px;display:flex;flex-direction:column;align-items:center}
 .orb-wrap{width:112px;height:112px;display:grid;place-items:center;flex:0 0 auto}
 canvas#orb{width:100%;height:100%;display:block}
-.voice .state{font-family:var(--serif);font-size:23px;margin-top:12px;text-align:center}
-.voice .meta{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);
+.voice .state{font-family:var(--serif);font-size:24px;margin-top:12px;text-align:center}
+.voice .meta{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);
              margin-top:6px;text-align:center;line-height:1.6}
 .controls{display:flex;flex-direction:column;gap:10px;padding:0 18px 12px;flex:0 0 auto}
 button{font-family:inherit;cursor:pointer;border:none;
@@ -156,27 +156,27 @@ button{font-family:inherit;cursor:pointer;border:none;
 button:active{transform:translateY(1px)}
 button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
 #listenBtn{
-  padding:16px;border-radius:11px;font-size:14px;font-weight:700;letter-spacing:.18em;
+  padding:16px;border-radius:11px;font-size:15px;font-weight:700;letter-spacing:.18em;
   text-transform:uppercase;color:#1a1305;
   background:linear-gradient(135deg,var(--gold),var(--gold-bright));
   box-shadow:0 8px 24px rgba(212,169,74,.2);
 }
 #listenBtn.stop{background:linear-gradient(135deg,#4a4438,#37322a);color:var(--ink);box-shadow:none}
 #interruptBtn{
-  padding:15px;border-radius:11px;font-size:13.5px;font-weight:700;letter-spacing:.18em;
+  padding:15px;border-radius:11px;font-size:14.5px;font-weight:700;letter-spacing:.18em;
   text-transform:uppercase;color:#f0a49c;background:transparent;
   border:1px solid rgba(226,69,60,.45);
 }
 #interruptBtn.armed{color:#fff;border-color:transparent;
   background:linear-gradient(135deg,var(--rec),#ef7b4e);box-shadow:0 8px 24px rgba(226,69,60,.28)}
-.hint{font-size:11.5px;color:var(--ink-dim);text-align:center;line-height:1.75;padding:0 18px 16px;margin:0}
-kbd{font-family:var(--mono);font-size:11px;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 6px}
+.hint{font-size:12.5px;color:var(--ink-dim);text-align:center;line-height:1.75;padding:0 18px 16px;margin:0}
+kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 6px}
 
 /* ---------------- conversation ---------------- */
 .conv-head{display:flex;align-items:center;gap:14px;padding:18px 22px;
            border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
-.conv-head h2{margin:0;font-family:var(--serif);font-size:28px;font-weight:500}
-.conv-head .right{margin-left:auto;font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim)}
+.conv-head h2{margin:0;font-family:var(--serif);font-size:29px;font-weight:500}
+.conv-head .right{margin-left:auto;font-size:12.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim)}
 /* `min-height:52vh` is gone on purpose: it was what made this box refuse to shrink, and a box
    that will not shrink cannot scroll -- the page scrolled instead. */
 /* No `scroll-behavior:smooth` here on purpose: the transcript is re-rendered whole on every
@@ -198,21 +198,21 @@ kbd{font-family:var(--mono);font-size:11px;color:var(--ink);border:1px solid var
 .line{display:flex;flex-direction:column;margin-bottom:16px}
 .line.aether{align-items:flex-end}
 .line.guest{align-items:flex-start}
-.line .tag{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);
+.line .tag{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);
            margin-bottom:8px;display:flex;align-items:center;gap:9px}
 .line.aether .tag{flex-direction:row-reverse}
-.bubble{max-width:76%;padding:17px 22px;border-radius:14px;font-size:18px;line-height:1.6}
+.bubble{max-width:76%;padding:17px 22px;border-radius:14px;font-size:19px;line-height:1.6}
 .line.aether .bubble{background:var(--aether);color:var(--aether-ink);
   border:1px solid rgba(212,169,74,.24);border-right:2px solid var(--gold)}
 .line.guest .bubble{background:var(--guest);color:var(--guest-ink);border:1px solid var(--line-soft)}
 .line.interrupted .bubble{background:rgba(226,69,60,.08);border:1px dashed rgba(226,69,60,.34);
   color:var(--ink-dim);font-style:italic}
-.line .note{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#ff8b82;margin-top:8px}
+.line .note{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#ff8b82;margin-top:8px}
 .avatar-sm{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;
-  border:1px solid var(--line);font-size:11px;color:var(--gold);background:rgba(255,255,255,.02)}
-.empty{color:var(--ink-dim);font-size:16px;text-align:center;margin:auto;line-height:1.9;padding:30px}
+  border:1px solid var(--line);font-size:12px;color:var(--gold);background:rgba(255,255,255,.02)}
+.empty{color:var(--ink-dim);font-size:17px;text-align:center;margin:auto;line-height:1.9;padding:30px}
 .speaking{display:flex;align-items:center;gap:11px;padding:14px 22px;border-top:1px solid var(--line-soft);
-  font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);min-height:46px}
+  font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);min-height:46px}
 .speaking.on{color:var(--gold-bright)}
 .bars{display:inline-flex;align-items:flex-end;gap:2.5px;height:13px}
 .bars i{width:3px;background:currentColor;border-radius:1px;height:4px;opacity:.35}
@@ -222,9 +222,8 @@ kbd{font-family:var(--mono);font-size:11px;color:var(--ink);border:1px solid var
 .speaking.on .bars i:nth-child(4){animation-delay:.45s}
 @keyframes eq{0%,100%{height:4px}50%{height:13px}}
 #recording{padding:11px 22px;border-top:1px solid var(--line-soft);font-family:var(--mono);
-  font-size:12.5px;color:var(--ink-dim);overflow-wrap:anywhere}
+  font-size:13.5px;color:var(--ink-dim);overflow-wrap:anywhere}
 #recording.live{color:#9fd8b4}
-footer{font-size:11.5px;color:var(--ink-dim);text-align:center;letter-spacing:.06em;line-height:1.7;padding-top:10px;flex:0 0 auto}
 </style>
 </head>
 <body>
@@ -327,10 +326,6 @@ footer{font-size:11.5px;color:var(--ink-dim);text-align:center;letter-spacing:.0
     </aside>
   </div>
 
-  <footer>
-    Backend is authoritative — this page renders engine state and sends only Interrupt and the
-    listening toggle. Every value shown is measured by the run in progress; none are projected.
-  </footer>
 </div>
 
 <script>

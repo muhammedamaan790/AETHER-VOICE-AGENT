@@ -367,7 +367,9 @@ def detach_console() -> None:
 # It still ends with the question, because `tests/test_telephony.py` pins that and the rule is
 # right: a greeting that trails off after the question mark invites the caller to talk over the
 # part they most need to hear.
+from ..lang import LINE_CHECK as _LINE_CHECK
 from ..lang import SELECT_PROMPT as _SELECT_PROMPT
+from ..trace import now_ms as _now_ms
 
 # THE FIRST THING A CALLER HEARS IS A QUESTION, not a greeting.
 #
@@ -408,6 +410,83 @@ def speak_greeting(spike: Day1Spike, text: str = GREETING) -> bool:
         return False
     finally:
         spike.barge.end_turn()
+
+
+# --- the start of a call -------------------------------------------------------------------------
+
+# How long to wait for the caller's phone to subscribe to AETHER's audio before greeting anyway, and
+# how long to let the audio path settle once it has. 1.5 s, not less: LiveKit reports the SIP leg as
+# subscribed before the far end is necessarily listening -- and when the call is taken through
+# Windows Phone Link, the phone hands its audio to the laptop over Bluetooth, which takes about a
+# second after the call connects. A greeting that starts inside that handover is heard as silence.
+SUBSCRIBE_TIMEOUT_S = 4.0
+SETTLE_S = 1.5
+
+# How long after the greeting AETHER waits for the caller before asking once more.
+SILENCE_REPROMPT_MS = 8000.0
+
+# Someone mid-sentence is not silent: a speech onset this recent means wait, not reprompt.
+_MID_UTTERANCE_MS = 3000.0
+
+
+async def wait_until_heard(publication, timeout_s: float = SUBSCRIBE_TIMEOUT_S,
+                           settle_s: float = SETTLE_S) -> bool:
+    """Wait until the caller is actually receiving AETHER's audio, then a moment more.
+
+    THE GREETING WAS BEING SPOKEN INTO NOTHING. It started one millisecond after the track was
+    published -- before the phone had subscribed to it -- and a caller on 2026-09-10 heard none of
+    it, although the log said "greeting spoken" and 12.5 s of audio left the pipeline. LiveKit's
+    `wait_for_subscription` resolves when the SIP participant is really receiving; the settle covers
+    the carrier's media path coming up behind that.
+
+    Bounded, and never raises: a subscription that never arrives must not leave a caller in silence,
+    so after the timeout AETHER greets anyway and the log says it could not confirm.
+    """
+    try:
+        await asyncio.wait_for(publication.wait_for_subscription(), timeout=timeout_s)
+        heard = True
+    except Exception:          # a timeout, or an SDK that cannot say
+        heard = False
+    await asyncio.sleep(settle_s)
+    return heard
+
+
+def caller_has_been_silent(trace: Trace, since_t: float, now_t: float,
+                           window_ms: float = SILENCE_REPROMPT_MS) -> bool:
+    """Whether the caller has said nothing AETHER could transcribe since `since_t`.
+
+    A noise blip still fires a speech onset -- one did on the failed call, at 14 RMS -- so onsets
+    alone cannot mean "the caller spoke". A transcript can. A very recent onset does count, though:
+    it means someone may be mid-sentence, and talking over them would be worse than the silence.
+    """
+    from ..events import EventType
+
+    if now_t - since_t < window_ms:
+        return False
+    if any(e.t >= since_t for e in trace.all(EventType.TRANSCRIPT_FINAL)):
+        return False
+    return not any(now_t - e.t < _MID_UTTERANCE_MS for e in trace.all(EventType.SPEECH_ONSET))
+
+
+async def reprompt_if_silent(spike: Day1Spike, trace: Trace, since_t: float, closing=None,
+                             window_ms: float = SILENCE_REPROMPT_MS) -> bool:
+    """Once, after the greeting: if the caller has said nothing, ask again -- and say why in the log.
+
+    Two failures sound identical from the caller's end, and this handles both. If the greeting was
+    lost on the way to the phone, the caller hears the question now. If the caller's audio is not
+    reaching AETHER -- a call on 2026-09-10 delivered 33 seconds of digital silence -- the operator
+    sees a warning naming the problem instead of a call that just goes quiet.
+    """
+    await asyncio.sleep(window_ms / 1000.0)
+    if closing is not None and getattr(closing, "is_set", lambda: False)():
+        return False
+    if not caller_has_been_silent(trace, since_t, _now_ms(), window_ms):
+        return False
+    logger.warning("[!] no caller speech %.0f s after the greeting -- asking once more. If the "
+                   "caller IS talking, their audio is not reaching AETHER: check the phone "
+                   "(speaker, Bluetooth, mute) or hang up and redial.", window_ms / 1000.0)
+    await asyncio.to_thread(speak_greeting, spike, _LINE_CHECK)
+    return True
 
 
 def build_pipeline(trace: Trace) -> Day1Spike:
@@ -496,11 +575,15 @@ async def hotel_call(ctx: JobContext) -> None:
                 attach(publication.track, "already-subscribed")
 
     track = rtc.LocalAudioTrack.create_audio_track("aether", bridge.source)
-    await ctx.room.local_participant.publish_track(
+    publication = await ctx.room.local_participant.publish_track(
         track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
     bridge.start_outbound()
     logger.info("[5/7] outbound track published, pump running")
+    # Greet only once the caller can hear it -- see `wait_until_heard`.
+    heard = await wait_until_heard(publication)
+    logger.info("[5/7] caller %s", "is receiving AETHER's audio" if heard
+                else "has NOT confirmed receiving AETHER's audio -- greeting anyway")
 
     # The turn loop is the same threaded loop the local path runs; it is not asyncio-driven.
     turns = threading.Thread(target=spike.run_turns, name="aether-turns", daemon=True)
@@ -513,6 +596,9 @@ async def hotel_call(ctx: JobContext) -> None:
     # selection rather than as an ordinary hotel question.
     spike.begin_language_selection()
     spoken = await asyncio.to_thread(speak_greeting, spike)
+    # One line check if the caller says nothing AETHER can transcribe -- see `reprompt_if_silent`.
+    # Held in a local so the task is not garbage-collected while it waits.
+    line_check = asyncio.create_task(reprompt_if_silent(spike, trace, _now_ms(), closing))
     logger.info("[6/7] greeting %s", "spoken" if spoken else "produced no audio")
 
     try:

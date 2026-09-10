@@ -32,7 +32,7 @@ answer in the evidence.
 ## D3 — Why duck immediately but stop late
 
 At `SpeechOnset` the system knows nothing about meaning. Stopping fully on any sound makes the agent
-unusable in a noisy warehouse and destroys turns on "mhm". Continuing at full volume makes the user
+unusable on a noisy line and destroys turns on "mhm". Continuing at full volume makes the user
 talk over themselves.
 
 Ducking is the cheap, reversible action available before understanding exists. Full stop is the
@@ -90,18 +90,23 @@ speaking work from a task the user has moved on from.
 Tier 1 fences mechanically: it is simple, it is safe, and it is honest. Suspend/resume stays an
 optional Day-5 stretch, single-slot only, and is not claimed unless implemented and tested.
 
-## D9 — Why a warehouse
+## D9 — Why a hotel, and why the warehouse is still here
 
-Voice must be *necessary*, not decorative. Hands on a pallet and eyes on a scanner make a screen
-unusable, so the demo does not have to argue for voice.
+Voice must be *necessary*, not decorative. AETHER began as a warehouse picker's assistant -- hands
+on a pallet, eyes on a scanner -- and became a hotel's telephone line, because a phone is the purer
+case: there is no screen to fall back to at all, not merely one the user's hands are too busy for.
+Every product decision since is written against that caller.
 
-The dataset is deliberately tiny and deterministic: enough records for "8 priority orders, actually
-only aisle 9" to be meaningful, few enough that every test is reproducible and nobody is tempted to
-build a warehouse management system. The engine is domain-agnostic; the warehouse is a fixture.
+The warehouse remains, deliberately small, as a **second domain** under test (`aether/warehouse/`,
+`tests/test_warehouse_tools.py`). It is what shows the engine -- generations, fencing, the Output
+Gate, `ToolRunner` -- is not hotel-specific. Until 2026-09-10 it was also the only *mutable* store,
+and so the only place "a fenced mutation never lands" could be tested. Hotel bookings now exercise
+that path in the product itself (`tests/test_bookings.py`), so the warehouse's remaining job is the
+first one. Nobody is tempted to grow it into a warehouse management system; RULES.md says so.
 
 ## D10 — Why general Q&A stays in
 
-It proves the engine is not warehouse-specific, and it supplies the cleanest zero-salvage refinement
+It proves the engine is not domain-specific, and it supplies the cleanest zero-salvage refinement
 case (D7). It is a capability and a test surface — not the pitch. The architecture must not drift
 toward a generic assistant platform to accommodate it.
 
@@ -123,3 +128,15 @@ does not trust us.
 
 Hence the trace-sufficiency requirement in [PRD.md](PRD.md) FR-9.3: if a question about a run cannot
 be answered from the trace alone, the event model is incomplete.
+
+## D13 — Why bookings sit behind an authorizer, on a working copy
+
+The hotel stayed read-only for as long as it could, and that was a feature: an agent that cannot
+write cannot ruin anyone's evening. Taking a booking gives that up, and the question was how little
+could be given up. The answer is one read-write connection behind a `sqlite3` authorizer permitting
+writes to `reservations`, `table_bookings`, `guests` and the single column `rooms.status`, and
+refusing everything else at the driver -- so a price, an allergen or a room number still cannot be
+changed by any code path, a buggy one included. It is `mode=ro` narrowed, not abandoned.
+
+And the running system writes to a working copy (`aether_hotel.live.db`), never the committed file,
+so rehearsals cannot drift the hotel away from what the documents and the demo sheet say it is.

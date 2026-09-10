@@ -24,7 +24,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ["README.md", "DEMO.md", "MEMORY.md", "PHASES.md", "RIME_EVIDENCE.md", "JUDGING.md",
-        "PRD.md", "DEMO_SCRIPT.md", "evidence/README.md"]
+        "PRD.md", "DEMO_SCRIPT.md", "evidence/README.md", "SETUP.md"]
 
 
 def _text(name: str) -> str:
@@ -125,7 +125,8 @@ def test_no_document_references_a_tool_that_no_longer_exists():
 def test_every_relative_link_in_the_reader_facing_docs_resolves():
     """A broken link in a document a judge is invited to follow is a small thing that reads badly."""
     broken: list[str] = []
-    for name in ["README.md", "JUDGING.md", "DEMO.md", "DEMO_SCRIPT.md", "evidence/README.md"]:
+    for name in ["README.md", "JUDGING.md", "DEMO.md", "DEMO_SCRIPT.md", "evidence/README.md",
+                 "SETUP.md"]:
         base = (ROOT / name).parent
         for label, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", _text(name)):
             if target.startswith(("http://", "https://", "#", "mailto:")):

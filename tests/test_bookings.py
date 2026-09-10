@@ -293,6 +293,76 @@ def test_hindi_counts_survive_the_router() -> None:
     assert decision is not None and decision.params.get("nights") == 2
 
 
+# --- two callers at once -------------------------------------------------------------------------
+
+def test_two_callers_cannot_both_book_the_same_room(hotel) -> None:
+    """The SEQUENTIAL case, and labelled as such: this is the baseline, not the race fix.
+
+    One connection books room 101 and commits; a second then asks for it and is refused. That passes
+    with or without `BEGIN IMMEDIATE` -- the status check already refuses a room that is reserved and
+    committed -- and it was confirmed to pass under a mutation that removed the fix. It stays because
+    two connections on one file is the shape every real pair of calls has. The test that proves the
+    race fix is the next one.
+    """
+    other = Bookings(hotel.path)
+    try:
+        hotel.bookings.reserve_room(room="101")
+        with pytest.raises(BookingRefused) as refused:
+            other.reserve_room(room="101")
+        assert refused.value.code == "room_not_free"
+    finally:
+        other.close()
+    assert _count(hotel, "reservations") == 4
+
+
+def test_a_rush_on_one_room_type_books_each_room_exactly_once(hotel) -> None:
+    """A thread per caller, all released at once, all asking for the same room type. Exactly as many
+    succeed as there were rooms free, each on a different room; the rest are told none is free.
+
+    THIS IS THE ONE THAT PROVES THE RACE FIX. Mutation-tested: with `BEGIN IMMEDIATE` removed and the
+    claim made unconditional, it failed on every run with "13 bookings for 10 free rooms" -- three
+    callers told they had a Deluxe King that someone else had also been given.
+    """
+    import threading
+
+    free = [r for r in hotel.available_rooms() if r.room_type == "Deluxe King"]
+    assert free, "the fixture hotel has no free Deluxe King to fight over"
+    callers = len(free) + 3
+    barrier = threading.Barrier(callers)
+    booked: list[str] = []
+    refused: list[str] = []
+    failures: list[BaseException] = []
+    guard = threading.Lock()
+
+    def caller() -> None:
+        mine = Bookings(hotel.path)
+        try:
+            barrier.wait()
+            booking = mine.reserve_room(room_type="Deluxe King")
+            with guard:
+                booked.append(booking.room_number)
+        except BookingRefused as no:
+            with guard:
+                refused.append(no.code)
+        except BaseException as exc:          # a lock timeout would surface here
+            with guard:
+                failures.append(exc)
+        finally:
+            mine.close()
+
+    threads = [threading.Thread(target=caller) for _ in range(callers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not failures, f"a concurrent booking crashed: {failures!r}"
+    assert len(booked) == len(free), f"{len(booked)} bookings for {len(free)} free rooms"
+    assert len(set(booked)) == len(booked), f"a room was booked twice: {sorted(booked)}"
+    assert len(refused) == 3 and set(refused) == {"none_of_that_type_free"}
+    assert _count(hotel, "reservations") == 3 + len(free)
+
+
 # --- helpers ----------------------------------------------------------------------------------------
 
 def _count(store, table: str) -> int:

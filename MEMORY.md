@@ -105,7 +105,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1475 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1525 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -449,6 +449,60 @@ Still `<from_run>` and must not be quoted:
   endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
 
 ### Fixed 2026-09-10
+
+- **Two live calls on 2026-09-10 failed at the start, and the recordings say why.** Both had audio
+  capture on. Call A: the greeting was sent (12.5 s of outbound audio) but not heard, because it
+  started 1 ms after the outbound track was published -- before the phone had subscribed to it.
+  `wait_until_heard` now awaits LiveKit's `wait_for_subscription` (bounded at 4 s, then a 1.5 s
+  settle, long enough for a Windows Phone Link Bluetooth handover). Call B: the inbound capture was 33 seconds of digital silence, peak 10 -- the caller's
+  voice never reached AETHER, so nothing could have understood it. `reprompt_if_silent` now speaks
+  a one-time line check if nothing is transcribed 8 s after the greeting, and logs a warning naming
+  the likely cause. A noise onset does not count as the caller speaking (call A's first onset was a
+  14-RMS blip); a very recent onset does, so a caller mid-sentence is never talked over.
+- **In call A only one word of the caller's reached the recogniser: "menu".** The replayed capture
+  contained "English ... menu" and digital silence between -- the recogniser was right about what
+  arrived. But AETHER answered it with "could you say it again?": the repeat heuristic added earlier
+  that day only knew the hotel's proper names. A regression of mine. Hotel words now count as
+  content, and a bare "menu" or "rooms" is answered directly. Honest correction recorded too: a
+  quiet sound at 4.8 s was first read as dropped speech; gain-boosted, it transcribes as nothing.
+- **DEMO_SCRIPT.md is now one continuous screenplay** -- every line in order, AETHER's replies
+  inline, stage directions in brackets -- because the scene-plus-tables version made the presenter
+  jump around the page. Every **AETHER:** line is checked against what the system says, and every
+  scripted question must appear in the same order the conversation test replays.
+
+- **The demo's Hindi switch would have failed on a real phone line.** The vocabulary hint that fixed
+  the opening "English, Hindi, or Spanish?" only applied to the opening. Mid-call, "Hindi" met the
+  same unhinted `base.en` that heard "in the" three times. When the caller asks "can we switch
+  language?", AETHER now offers the list and treats the answer as a closed question: same hint,
+  same phone-line mishearing table, one chance, no loop. Pending until the offer has been heard,
+  like every other piece of conversational state, so an offer the caller talked over cannot be
+  answered by their next words. The demo script uses exactly that path. Replayed through the real
+  pipeline with the line's own "in the": it switches to Hindi on the `nadi` voice.
+- **DEMO_SCRIPT.md is now a scene-by-scene recording script.** It has nine scenes, a "before you
+  record" checklist, a "what to do if something goes wrong on camera" table, and Latin-script
+  pronunciation for the Hindi questions. Its three tables and the four language sentences quoted in
+  the scenes are replayed by the test suite, so the script cannot drift from what AETHER says.
+
+- **A real call failed at "English, Hindi, or Spanish?"** -- the caller said "Hindi" three times,
+  `base.en` heard "And it's...", "in the", "Indeed.", AETHER asked again each time, and the caller
+  hung up. The captured audio replayed: no hint -> "in the, in the, in the"; the question as
+  `initial_prompt` -> "Hindi, Hindi, Hindi." Fixed three ways: the recogniser is given the question
+  during selection only; the phone-line mishearings are accepted during selection only and only for
+  answers of three words or fewer ("in the" is too common to trust in a sentence); and two misses
+  end the loop in English instead of asking forever.
+- **The console's empty space was a CSS grid bug**, older than any change today: auto-placement put
+  the caller panel on a second row. Both columns are pinned to row 1; the voice card sits under the
+  conversation. Checked with headless screenshots at desktop and phone widths.
+- **Repository sweep.** The warehouse (the earlier problem statement) is kept as a second domain,
+  but its stated reason -- "the only mutable store" -- expired when bookings landed, and five
+  documents said so; all corrected. `data/hotel_db/*.sql` was a stale second definition of the
+  database (no policies, no table bookings) that `data/README.md` falsely called "the files the
+  database was built from"; both are now generated, with a drift test. Bookings wrote into the
+  committed database, so rehearsals would have drifted the demo; the runtime now uses a gitignored
+  working copy. And two simultaneous callers could both book the last room -- `BEGIN IMMEDIATE`
+  plus a conditional claim, tested with a thread per caller. Mutation-tested: with the fix
+  removed the thread test booked **13 rooms for 10 free**. The sequential two-connection test
+  passes either way and is labelled in its docstring as the baseline, not as the proof.
 
 - **AETHER can take a booking, and the read-only guarantee survived it.** Room bookings, restaurant
   table bookings, table availability and cancellation -- 23 tools now, 3 of which write. The facts

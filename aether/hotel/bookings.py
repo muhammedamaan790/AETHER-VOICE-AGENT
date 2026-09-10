@@ -140,20 +140,36 @@ class Bookings:
         start = today or datetime.now(timezone.utc).date()
 
         with self._lock:
-            row = self._pick_room(room=room, room_type=room_type)
-            check_in = start.isoformat()
-            check_out = (start + timedelta(days=nights)).isoformat()
-            guest_id = self._new_guest()
-            cur = self._con.execute(
-                "INSERT INTO reservations (guest_id, room_id, check_in, check_out, adults,"
-                " children, status, special_requests, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
-                (guest_id, row["room_id"], check_in, check_out, 1, 0, "confirmed", None,
-                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
-            )
-            self._con.execute("UPDATE rooms SET status = 'reserved' WHERE room_id = ?",
-                              (row["room_id"],))
-            self._con.commit()
+            # ONE TRANSACTION, TAKEN WITH THE WRITE LOCK. `self._lock` serialises this connection
+            # only -- and every call builds its own store, so two callers are two connections. Both
+            # used to read the last Deluxe King as free and both be told it was theirs.
+            # `BEGIN IMMEDIATE` takes SQLite's database-wide write lock BEFORE the room is chosen,
+            # so simultaneous bookings are served one after the other.
+            self._con.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._pick_room(room=room, room_type=room_type)
+                # And the claim is conditional, belt and braces: it only succeeds if the room is
+                # still free at the instant of writing, whatever was read a moment earlier.
+                claimed = self._con.execute(
+                    "UPDATE rooms SET status = 'reserved'"
+                    " WHERE room_id = ? AND status = 'available'",
+                    (row["room_id"],)).rowcount
+                if claimed != 1:
+                    raise BookingRefused("room_not_free", room=str(row["room_number"]))
+                check_in = start.isoformat()
+                check_out = (start + timedelta(days=nights)).isoformat()
+                guest_id = self._new_guest()
+                cur = self._con.execute(
+                    "INSERT INTO reservations (guest_id, room_id, check_in, check_out, adults,"
+                    " children, status, special_requests, created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (guest_id, row["room_id"], check_in, check_out, 1, 0, "confirmed", None,
+                     datetime.now(timezone.utc).isoformat(timespec="seconds")),
+                )
+                self._con.commit()
+            except BaseException:
+                self._con.rollback()
+                raise
             return RoomBooking(
                 reference=str(cur.lastrowid),
                 room_number=str(row["room_number"]),

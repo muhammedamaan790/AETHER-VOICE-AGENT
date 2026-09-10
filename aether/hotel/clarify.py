@@ -240,8 +240,26 @@ def sounds_like_a_recognition_failure(text: str) -> bool:
     return len(content) < _TOO_SHORT_TO_BE_A_QUESTION and not _has_content(content)
 
 
+# Words that are about the hotel even though they name no particular thing in it. A caller who says
+# just "menu" is asking for the menu -- a real call on 2026-09-10 got "Sorry, I did not catch that"
+# for exactly that word, because this check only knew the hotel's proper names ("Chicken Kebab",
+# "Deluxe King") and "menu" is not one of them. Asking someone to repeat the clearest word they said
+# is the worst version of this feature.
+_HOTEL_WORDS = frozenset({
+    "menu", "menus", "food", "dish", "dishes", "meal", "meals", "eat", "drink", "drinks",
+    "breakfast", "lunch", "dinner", "starter", "starters", "main", "mains", "dessert", "desserts",
+    "room", "rooms", "suite", "suites", "stay", "night", "nights", "table", "tables",
+    "price", "prices", "rate", "rates", "cost", "bill", "book", "booking", "bookings",
+    "reserve", "reservation", "reservations", "cancel", "order", "service", "services",
+    "check", "checkin", "checkout", "hotel", "pool", "gym", "spa", "parking", "wifi", "taxi",
+    "reception", "housekeeping", "laundry", "language", "english", "hindi", "spanish",
+})
+
+
 def _has_content(words: list[str]) -> bool:
-    """Whether any word is a thing this hotel knows about."""
+    """Whether any word is a thing this hotel knows about -- by name, or by what it is."""
+    if any(word in _HOTEL_WORDS for word in words):
+        return True
     joined = " ".join(words)
     for name, _tool, _params in _all_candidates():
         if name.lower() in joined:

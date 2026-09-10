@@ -180,6 +180,12 @@ def heard_as_language(text: str):
     return None
 
 
+# Spoken ONCE, if nothing the caller says has been transcribed a few seconds after the greeting. It
+# covers two failures that sound the same to the caller: a greeting lost on the way to their phone,
+# and their own audio not reaching AETHER. It repeats the question, so it is useful in both cases.
+LINE_CHECK = ("Hello, are you there? This is AETHER, the hotel's manager. "
+              "Which language would you prefer: English, Hindi, or Spanish?")
+
 # Asked again only while the caller has not yet chosen -- never once they have. Repeating the
 # question every turn would be its own failure mode.
 SELECT_RETRY = ("Sorry, I did not catch that. "
