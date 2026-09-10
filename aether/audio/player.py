@@ -133,6 +133,17 @@ class AudioGate:
         self._active_gen: str | None = None
         # Chunks the callback refused, drained by the watcher into ResultDiscarded events.
         self._drops: deque[tuple[str | None, int]] = deque()
+        # WHEN AUDIO ACTUALLY LEFT, as opposed to when Rime's first chunk arrived.
+        #
+        # `turn_latency_ms` used to end at "the TTS client accepted a chunk", which is upstream of
+        # this queue and of the device buffer -- so it measured time-to-first-chunk-received and was
+        # described as time-to-first-sound. This is the last point the application can observe: the
+        # moment the callback hands real samples to PortAudio.
+        #
+        # It is NOT the moment the caller hears them. The device buffer still sits after it, and its
+        # size is reported separately as `device_latency_ms` rather than folded in, because adding
+        # an unobserved constant to a measured number makes it look measured.
+        self._first_out: tuple[str | None, float] | None = None
 
         # control flags read by the audio callback
         self._ducked = False
@@ -193,6 +204,31 @@ class AudioGate:
     def is_playing(self) -> bool:
         return bool(self._queue)
 
+    def first_output_ms(self, gen: str | None) -> float | None:
+        """When the callback first handed real samples for `gen` to the device, or None.
+
+        The closest point the application can observe to "the caller started hearing this". None
+        when the generation never reached the speaker at all -- which is the correct answer for a
+        fenced turn, and is why this returns None rather than 0.
+        """
+        if self._first_out is None or self._first_out[0] != gen:
+            return None
+        return self._first_out[1]
+
+    @property
+    def device_latency_ms(self) -> float | None:
+        """The output device's own buffer, in ms, as PortAudio reports it.
+
+        Reported ALONGSIDE the measured latency, never added to it: it is the tail this process
+        cannot observe, and folding an unobserved constant into a measured number would make the
+        result look more precise than it is.
+        """
+        stream = self._stream
+        latency = getattr(stream, "latency", None) if stream is not None else None
+        if isinstance(latency, (int, float)):
+            return round(float(latency) * 1000.0, 1)
+        return None
+
     @property
     def is_ducked(self) -> bool:
         return self._ducked
@@ -248,6 +284,12 @@ class AudioGate:
             if self._cursor >= len(chunk):
                 self._queue.popleft()
                 self._cursor = 0
+
+        # `pos > 0` means real samples were copied this block, not silence padding. Stamped once per
+        # generation, on the realtime thread, with the same plain-assignment discipline the duck and
+        # stop marks already use -- no lock, no allocation.
+        if pos > 0 and (self._first_out is None or self._first_out[0] != self._active_gen):
+            self._first_out = (self._active_gen, now_ms())
 
         if gain != 1.0:
             out = (out.astype(np.float32) * gain).astype(np.int16)

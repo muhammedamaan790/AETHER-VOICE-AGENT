@@ -32,7 +32,9 @@ class TurnTiming:
     transcript: float | None = None     # STT produced the final transcript
     llm_start: float | None = None      # request handed to the provider
     llm_end: float | None = None        # provider's answer in hand
-    first_audio: float | None = None    # first audio chunk accepted by the AudioGate
+    first_audio: float | None = None    # first chunk ACCEPTED from Rime -- upstream of the queue
+    first_output: float | None = None   # callback handed real samples to the device (observable end)
+    device_latency_ms: float | None = None   # the device buffer after that; reported, never added
     spoken: float | None = None         # ResponseSpoken emitted
 
     @staticmethod
@@ -75,6 +77,20 @@ class TurnTiming:
         """PRD.md section 6: `ResponseSpoken.t - TranscriptFinal.t`, verbatim."""
         return self.delta(self.spoken, self.transcript)
 
+    @property
+    def output_latency_ms(self) -> float | None:
+        """Speech ended -> the audio gate actually handed samples to the device.
+
+        The honest end-to-end figure, and it is deliberately NOT the same as `turn_latency_ms`.
+        That one ends when the TTS client accepts Rime's first chunk, which is upstream of the
+        output queue and of the device buffer; this one ends at the last point this process can
+        observe. The difference between them is the buffering the application adds.
+
+        Still not "when the caller heard it": the device's own buffer sits after this, reported
+        separately as `device_latency_ms` and never added in.
+        """
+        return self.delta(self.first_output, self.speech_ended)
+
     # --- trace payload ----------------------------------------------------------------
 
     def fields(self) -> dict[str, float | None]:
@@ -91,6 +107,8 @@ class TurnTiming:
             "tts_ms": self.tts_ms,
             "turn_latency_ms": self.turn_latency_ms,
             "response_latency_ms": self.response_latency_ms,
+            "output_latency_ms": self.output_latency_ms,
+            "device_latency_ms": self.device_latency_ms,
         }
 
     def summary(self) -> str:

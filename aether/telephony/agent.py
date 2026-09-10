@@ -359,11 +359,26 @@ def detach_console() -> None:
 #
 # It also makes the switch easy to hear correctly: it tells the caller to say the single word
 # "Hindi", which is the form `base.en` has the least trouble with.
-# The offer comes BEFORE the question, so the greeting still ends by handing the turn back --
-# `tests/test_telephony.py` pins that, and it is right: a greeting that trails off after the
-# question mark invites the caller to talk over the part they most need to hear.
-GREETING = ("You've reached AETHER, the hotel's manager. For Hindi, just say Hindi. "
-            "How may I help you?")
+# The greeting asks which language and NAMES the ones on offer, in one breath. A caller has no way
+# to guess that a second or third language exists, and a judge should not need the presenter to say
+# so. Built from the language registry rather than written out, so adding a language updates this
+# sentence instead of leaving it quietly wrong.
+#
+# It still ends with the question, because `tests/test_telephony.py` pins that and the rule is
+# right: a greeting that trails off after the question mark invites the caller to talk over the
+# part they most need to hear.
+from ..lang import SELECT_PROMPT as _SELECT_PROMPT
+
+# THE FIRST THING A CALLER HEARS IS A QUESTION, not a greeting.
+#
+# The hotel greeting has to be spoken in some language, so greeting first would already have chosen
+# for the caller -- and a Hindi speaker would sit through an English greeting before being offered
+# Hindi. So the call opens by asking, and `Day1Spike.begin_language_selection()` holds the turn loop
+# in selection until they answer; the real hotel greeting follows, in the language they picked.
+#
+# `SELECT_PROMPT` lives in `aether.lang` beside the languages it names, so adding a language updates
+# this question instead of leaving it quietly wrong.
+GREETING = _SELECT_PROMPT
 
 
 def speak_greeting(spike: Day1Spike, text: str = GREETING) -> bool:
@@ -457,6 +472,10 @@ async def hotel_call(ctx: JobContext) -> None:
     logger.info("[2/7] connected to room=%s", ctx.room.name)
 
     trace = Trace.new_run("traces", echo=False)
+    # Declared at the trace's birth so it lands on the first event of the run: this is what lets a
+    # trace answer, by itself, the question the demo evidence could not -- whether the audio came
+    # over a telephone line or from a laptop microphone.
+    trace.input_path = "telephony"
     # OFF THE EVENT LOOP. Loading Whisper, negotiating PortAudio and opening both device streams
     # measured 9051 ms; running that inline stalled LiveKit's heartbeats and event dispatch for
     # the whole of call setup.
@@ -490,6 +509,9 @@ async def hotel_call(ctx: JobContext) -> None:
     # Greet on a worker thread: synthesis blocks, and the loop must stay free to carry the audio
     # the greeting is producing.
     logger.info("[6/7] greeting starting")
+    # Owe a language choice BEFORE the prompt is spoken, so the caller's reply to it is read as a
+    # selection rather than as an ordinary hotel question.
+    spike.begin_language_selection()
     spoken = await asyncio.to_thread(speak_greeting, spike)
     logger.info("[6/7] greeting %s", "spoken" if spoken else "produced no audio")
 

@@ -44,6 +44,11 @@ def main() -> None:
 
     cfg = RuntimeConfig.from_env()
     trace = Trace.new_run(cfg.trace_dir, echo=True)
+    # NOT "browser". The web console is a viewer and a control surface over the SAME local
+    # microphone session the CLI runs -- `Day1Spike` opens the sound device itself, and no audio
+    # ever travels from the browser. Recording "browser" here would name the screen the operator was
+    # looking at, not the path the caller's voice took, which is the only thing this field is for.
+    trace.input_path = "local_microphone"
 
     spike = Day1Spike(
         trace,
