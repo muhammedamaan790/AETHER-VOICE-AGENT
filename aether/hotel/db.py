@@ -276,6 +276,19 @@ class HotelDB:
     def rooms(self) -> list[Room]:
         return [self._room_row(r) for r in self._all(self._ROOM_SQL + " ORDER BY r.room_number")]
 
+    def room_number_bounds(self) -> tuple[str, str]:
+        """The lowest and highest room number, DERIVED from the rooms like `floors()`.
+
+        So AETHER can say "our rooms run from one zero one to five one zero" without a hardcoded
+        pair that goes wrong the moment a floor is added. Ordered as text, which is correct while
+        every room number has the same number of digits -- and `rooms` is `NOT NULL` on a
+        three-digit convention, so a room "99" would be the schema changing rather than data drift.
+        """
+        row = self._one("SELECT MIN(room_number) AS lo, MAX(room_number) AS hi FROM rooms")
+        if row is None or row["lo"] is None:
+            raise UnknownRecord("the hotel has no rooms")
+        return str(row["lo"]), str(row["hi"])
+
     def room(self, number: str) -> Room:
         """One room by number. Raises rather than guessing at a near match."""
         wanted = "".join(ch for ch in str(number) if ch.isdigit())
@@ -360,6 +373,7 @@ class HotelStore:
         self.state_version: int = 0
         self._menu: list[MenuItem] | None = None
         self._rooms: list[Room] | None = None
+        self._room_bounds: tuple[str, str] | None = None
         self._types: list[RoomType] | None = None
         self._services: list[Service] | None = None
         self._hotel: HotelInfo | None = None
@@ -434,6 +448,11 @@ class HotelStore:
 
     def room(self, number: str):
         return self.db.room(number)
+
+    def room_number_bounds(self) -> tuple[str, str]:
+        if self._room_bounds is None:
+            self._room_bounds = self.db.room_number_bounds()
+        return self._room_bounds
 
     def room_types(self) -> list[RoomType]:
         if self._types is None:

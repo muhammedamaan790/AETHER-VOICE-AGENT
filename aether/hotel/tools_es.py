@@ -235,6 +235,11 @@ def _speak_describe_item(result) -> str:
 
 
 def _speak_room_status(result) -> str:
+    if not result.summary.get("exists", True):
+        return (f"No tenemos la habitación {say_room_number(result.summary['number'])}. "
+                f"Nuestras habitaciones van de la {say_room_number(result.summary['lowest'])} "
+                f"a la {say_room_number(result.summary['highest'])}.")
+
     room = result.records[0]
     number = say_room_number(room["number"])
     spoken = {

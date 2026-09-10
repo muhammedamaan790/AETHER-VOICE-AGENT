@@ -271,12 +271,26 @@ def test_each_room_status_is_spoken_distinctly(runner, store, status):
 
 def test_an_unknown_room_is_admitted_not_answered_around(runner, store):
     """"Is room four one two free" -- a number this hotel does not have. It must not be answered
-    with general availability, which is what the router did before the tool was allowed to see it."""
+    with general availability, which is what the router did before the tool was allowed to see it.
+
+    It used to answer with the generic not-found line, and that was the weaker half of the fix:
+    "I could not find that, could you say it again?" describes a MISHEARING. A caller who spoke
+    clearly hears the agent apparently fail to hear them, and repeats the same impossible number
+    louder. Since 2026-09-10 the room is named as absent, with the range that does exist, so the
+    caller can correct themselves.
+    """
     known = {r.number for r in store.rooms()}
     missing = next(str(n) for n in range(100, 999) if str(n) not in known)
+    lowest, highest = store.room_number_bounds()
+
     tool, said = ask(runner, f"Is room {missing} free?")
     assert tool == "room_status"
-    assert said == NOT_FOUND
+    assert said != NOT_FOUND, "an absent room is an answer, not a failure to hear"
+    assert say_room_number(missing) in said, f"the room asked about is not named: {said!r}"
+    assert say_room_number(lowest) in said and say_room_number(highest) in said, (
+        f"the range that does exist is not offered: {said!r}"
+    )
+    assert "again" not in said.lower(), "it must not sound like a request to repeat"
 
 
 def test_room_availability_counts_only_available_rooms(runner, store):

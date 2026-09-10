@@ -79,6 +79,22 @@ Two deliberate omissions, stated rather than papered over:
 
 Suspend/resume is **not** implemented and is not claimed.
 
+## What "it" refers to
+
+The router is a pure function of one sentence, which is what makes it fast and hard to be wrong in
+interesting ways. It is also why *"how much is the chicken kebab?"* followed by *"is it available
+tonight?"* used to answer **"we have forty-one rooms free."**
+
+`aether/hotel/context.py` holds **one** subject -- the last concrete thing the caller was told about
+-- and puts it back where a referring word sits. It is deliberately the smallest thing that works:
+naming a subject always beats the remembered one, a sentence with no referring word is left alone,
+and anything uncertain falls through to the model.
+
+The part that matters: **the subject is committed at the spoken boundary**, beside
+`history.commit_turn`, and cleared at the start of every turn. A fenced answer leaves no subject
+behind, so "it" can only ever mean something the caller actually heard. That is the golden invariant
+applied to reference instead of to output.
+
 ## The two controls
 
 They are different mechanisms, and confusing them is a bug this codebase has already had once.
@@ -380,7 +396,7 @@ Nothing tunes itself.
 
 ## Status
 
-**1260 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**1277 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
