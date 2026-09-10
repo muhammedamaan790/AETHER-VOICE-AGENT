@@ -94,6 +94,10 @@ def test_fields_are_flat_and_complete():
     assert keys == {
         "t_speech_ended", "t_transcript", "t_llm_start", "t_llm_end", "t_first_audio", "t_spoken",
         "stt_ms", "llm_ms", "tts_ms", "turn_latency_ms", "response_latency_ms",
+        # Added when the latency claim was made honest: `turn_latency_ms` ends at the first chunk
+        # RECEIVED from Rime, which is upstream of the output queue and the device. These two carry
+        # the observable end of the path, and the unobservable tail after it, separately.
+        "output_latency_ms", "device_latency_ms",
     }
     assert all(not isinstance(v, dict) for v in TurnTiming().fields().values()), "flat, greppable"
 
@@ -251,3 +255,80 @@ def test_instrumentation_does_not_change_what_is_spoken(session):
 def test_no_new_event_type_was_introduced():
     """The breakdown rides on ResponseSpoken; the canonical vocabulary is unchanged."""
     assert len(list(EventType)) == 18
+
+
+# --- what "first audio" actually means -------------------------------------------------------
+#
+# `turn_latency_ms` ends when the TTS client ACCEPTS Rime's first chunk. That is upstream of the
+# output queue and of the device buffer, so describing it as time-to-first-sound overclaimed. These
+# pin the honest definitions and the boundary between them.
+
+
+def test_the_two_first_audio_marks_are_different_things():
+    """`first_audio` is a chunk arriving; `first_output` is samples leaving. Conflating them is the
+    overclaim this instrumentation exists to remove."""
+    from aether.timing import TurnTiming
+
+    t = TurnTiming()
+    t.speech_ended = 1000.0
+    t.first_audio = 1200.0        # Rime's first chunk accepted
+    t.first_output = 1230.0       # the gate handed samples to the device
+
+    assert t.turn_latency_ms == 200.0, "time to first chunk RECEIVED"
+    assert t.output_latency_ms == 230.0, "time to first sample EMITTED"
+    assert t.output_latency_ms > t.turn_latency_ms, "output cannot precede receipt"
+
+
+def test_output_latency_is_none_when_audio_never_reached_the_device():
+    """A fenced turn produces no sound, so it has no output time. Recording 0 would be a
+    measurement of something that did not happen."""
+    from aether.timing import TurnTiming
+
+    t = TurnTiming()
+    t.speech_ended = 1000.0
+    t.first_audio = 1200.0
+    assert t.output_latency_ms is None
+    assert t.fields()["output_latency_ms"] is None
+
+
+def test_the_device_tail_is_reported_separately_and_never_added_in():
+    """The device buffer is real and unobservable from here. Folding it into a measured number
+    would make an estimate look measured, so it rides alongside as its own field."""
+    from aether.timing import TurnTiming
+
+    t = TurnTiming()
+    t.speech_ended = 1000.0
+    t.first_output = 1030.0
+    t.device_latency_ms = 22.0
+    fields = t.fields()
+    assert fields["output_latency_ms"] == 30.0, "the device tail must not be added to the measurement"
+    assert fields["device_latency_ms"] == 22.0, "...but it must still be reported"
+
+
+@pytest.mark.audio
+def test_the_gate_records_when_it_actually_emitted_audio():
+    """Against a real device: the mark exists, and belongs to the generation that played."""
+    import time
+
+    import numpy as np
+
+    from aether.audio.player import AudioGate
+    from aether.trace import Trace
+
+    gate = AudioGate(Trace())
+    gate.open()
+    try:
+        tone = np.zeros(int(gate.samplerate * 0.3), dtype=np.int16)
+        tone[::2] = 1200                       # non-silent, so `pos > 0` in the callback
+        gate.set_active_generation("G1")
+        gate.enqueue(tone, gen="G1")
+
+        deadline = 3.0
+        while deadline > 0 and gate.first_output_ms("G1") is None:
+            time.sleep(0.01)
+            deadline -= 0.01
+
+        assert gate.first_output_ms("G1") is not None, "the gate never recorded emitting audio"
+        assert gate.first_output_ms("G2") is None, "a generation that never played has no mark"
+    finally:
+        gate.close()

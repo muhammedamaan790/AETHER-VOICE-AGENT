@@ -96,6 +96,18 @@ class Trace:
         self._subscribers: list[Callable[[Event], None]] = []
         self.path: Path | None = None
         self._fh = None
+        # WHERE THE AUDIO CAME FROM. Set once by whichever entry point owns the session.
+        #
+        # A trace records latency, fencing and transcripts but never said whether its audio arrived
+        # from a telephone or a laptop microphone -- and the event vocabulary is identical on both,
+        # so it could not be inferred afterwards either. Establishing that a committed run was a
+        # real phone call needed a second artifact (the worker log) and a turn-by-turn latency
+        # match. Recorded here so future evidence answers the question by itself.
+        #
+        # Historical traces are NOT rewritten: they simply carry no value, which is the truthful
+        # state for a run whose input path was never observed.
+        self.input_path: str | None = None
+        self._input_path_stamped: str | None = None
         if path is not None:
             self.path = Path(path)
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +153,17 @@ class Trace:
         emits the event with that timestamp. `seq` still reflects emission order, so `t` can be
         very slightly out of order relative to `seq`. Metrics use `t`.
         """
+        # Stamped ONCE, on the next event after the path is declared, rather than on every event:
+        # it is a property of the session, not of each event, and repeating it 160 times would
+        # bloat the file it is meant to make readable. Stamping on "the next event" rather than on
+        # "the first event" is deliberate -- an entry point may learn its own path after setup has
+        # already emitted, and a rule that only fires on event 1 would silently record nothing.
         with self._lock:
+            # Inside the lock: two threads emitting at once must not both decide they are first
+            # and stamp the path twice.
+            if self.input_path is not None and self.input_path != self._input_path_stamped:
+                fields = {"input_path": self.input_path, **fields}
+                self._input_path_stamped = self.input_path
             self._seq += 1
             ev = Event(
                 seq=self._seq,
