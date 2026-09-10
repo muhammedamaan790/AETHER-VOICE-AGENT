@@ -61,7 +61,28 @@ from .frames import to_chunk, to_frame_args
 
 logger = logging.getLogger("aether.telephony")
 
-server = AgentServer()
+def warm_job_executor(proc=None) -> None:
+    """Pay the pipeline's start-up cost in the job executor, before a call is assigned to it.
+
+    Warming the WORKER process (in `main`) is not enough. An executor is created cold when a call
+    arrives -- `num_idle_processes` defaults to 0 in dev -- so the caller waits through the import
+    of faster-whisper and the load of its weights on top of the build itself. Two calls on
+    2026-09-10 measured 13.0 s and 17.3 s between answering and the greeting, against a warm build
+    of about 2 s here. That is dead air on an answered phone line, and callers hang up in it.
+
+    Best-effort, exactly like `prewarm`: a warm-up that fails must never stop the call.
+    """
+    try:
+        prewarm()
+    except Exception as exc:                    # noqa: BLE001 - a slow call beats no call
+        logger.info("job executor warm-up skipped: %s", type(exc).__name__)
+
+
+# One executor kept warm and ready, so the caller is not waiting on Whisper. `initialize_process_timeout`
+# has to cover the warm-up: it defaults to 10 s and a cold `prewarm()` measured 3.9 s, which is too
+# little headroom on a machine that is also encoding a screen recording.
+server = AgentServer(setup_fnc=warm_job_executor, num_idle_processes=1,
+                     initialize_process_timeout=60.0)
 
 
 class CallBridge:
@@ -558,9 +579,13 @@ async def hotel_call(ctx: JobContext) -> None:
     # OFF THE EVENT LOOP. Loading Whisper, negotiating PortAudio and opening both device streams
     # measured 9051 ms; running that inline stalled LiveKit's heartbeats and event dispatch for
     # the whole of call setup.
+    _build_started = _now_ms()
     spike = await asyncio.to_thread(build_pipeline, trace)
     bridge = CallBridge(spike, spike.gate, closing)
-    logger.info("[2/7] pipeline ready: llm=%s rime=%s", spike.llm.name, spike.rime.configured)
+    # Timed and logged because this is the caller's dead air, and two real calls spent 13 s and
+    # 17 s here. If it grows again, the next log says so without needing a second call to notice.
+    logger.info("[2/7] pipeline ready in %.0f ms: llm=%s rime=%s",
+                _now_ms() - _build_started, spike.llm.name, spike.rime.configured)
     attach_console(spike, trace)
 
     # Anything that arrived during those 9 s, plus anything already subscribed before we attached
