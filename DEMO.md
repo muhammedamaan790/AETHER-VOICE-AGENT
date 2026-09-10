@@ -105,7 +105,7 @@ got, and prints a diagnosis when the call ends.
 | 2 | AETHER greets: *"You've reached AETHER, the hotel's manager. How may I help you?"* | Orb amber, transcript line appears |
 | 3 | *"What starters do you have?"* | Answered **without the LLM**. Evidence strip: no `llm_ms` |
 | 4 | *"How much is the chicken kebab?"* | *"The Chicken Kebab is four hundred and twenty rupees."* Exact, read from `data/aether_hotel.db` |
-| 5 | *"Is room three oh five free?"* | *"Room three oh five is occupied at the moment."* A different table, same deterministic path — and the number is spoken as a door, not a quantity |
+| 5 | *"Is room three zero five free?"* | *"Room three zero five is occupied at the moment."* A different table, same deterministic path — and the number is spoken as a door, not a quantity |
 | 6 | *"I have a nut allergy, what can I eat?"* | Suggestions plus a count of what to avoid. **Never** from the model |
 | 6b | *"What time is check in?"* | *"Check-in is from two in the afternoon, and check-out is by twelve noon."* |
 | 7 | **Talk over AETHER mid-answer** | Speech stops. Transcript marks the abandoned turn *"Answer discarded — never spoken"*. New question answered |

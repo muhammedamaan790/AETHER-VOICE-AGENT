@@ -110,15 +110,20 @@ def say_list(items: list[str]) -> str:
 
 
 def say_room_number(number: str | int) -> str:
-    """`305` -> `tres cero cinco`. A room number names a door, not a quantity.
+    """`305` -> `trescientos cinco`. Said as a CARDINAL, which is how Spanish says a room number.
 
-    Said digit by digit for the same reason as in English and Hindi: `say_number(305)` gives
-    "trescientos cinco", which counts rooms rather than naming one.
+    Same correction as Hindi, and for the same reason: this was digit by digit because English is,
+    and Spanish is not -- "la habitación ciento uno", not "uno cero uno". The digit-by-digit form
+    is how a Spanish speaker reads a phone number, not a door.
+
+    UNLIKE the Hindi change, this one was NOT made on a native speaker's correction. It follows the
+    standard convention and the parallel with Hindi; it is listed in RIME_EVIDENCE among the things
+    a Spanish speaker still needs to hear.
     """
     digits = str(number).strip()
     if not digits.isdigit():
         return str(number)
-    return " ".join(_UNITS[int(d)] for d in digits)
+    return say_number(int(digits))
 
 
 def say_time(clock: str) -> str:

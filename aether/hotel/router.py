@@ -351,6 +351,40 @@ def _find_allergen(spoken: str) -> str | None:
     return None
 
 
+def _build_cardinal_room_numbers() -> tuple[tuple[str, str], ...]:
+    """Every three-digit number as Hindi and Spanish actually say it, longest form first.
+
+    GENERATED FROM THE RENDERERS, not written out. `say_number` is what AETHER uses to SPEAK a
+    room number in each language, so deriving the input forms from the same function means the
+    router recognises exactly what the agent says back -- a caller can repeat what they just heard
+    and be understood. A hand-written table would be free to drift from it.
+
+    100-999 rather than only the fifty rooms that exist: `_find_room_number` deliberately lets an
+    unknown number through so the tool can say "I could not find that room". Recognising only real
+    rooms would send "क्या कमरा चार सौ बारह खाली है" to the general availability rule, which would
+    answer "forty-one rooms are free" -- confidently, about a room this hotel does not have.
+
+    English is not included. English says a room number digit by digit, and the trio scan above
+    already covers it; adding "one hundred and one" here would make "we have one hundred and one
+    rooms" look like a room number.
+    """
+    from .speech_es import say_number as say_es
+    from .speech_hi import say_number as say_hi
+
+    forms: list[tuple[str, str]] = []
+    for value in range(100, 1000):
+        digits = str(value)
+        for say in (say_hi, say_es):
+            try:
+                forms.append((say(value), digits))
+            except (ValueError, KeyError, IndexError):
+                continue          # a language that cannot say this number simply contributes none
+    return tuple(sorted(set(forms), key=lambda pair: -len(pair[0])))
+
+
+_CARDINAL_ROOM_NUMBERS = _build_cardinal_room_numbers()
+
+
 def _find_room_number(spoken: str) -> str | None:
     """Any room number the caller said, spoken or spelled. Existence is NOT checked here.
 
@@ -362,7 +396,7 @@ def _find_room_number(spoken: str) -> str | None:
     """
     for token in re.findall(r"\b\d{3}\b", spoken):
         return token
-    # "three oh five", "three zero five" -- how a number is actually said on a phone.
+    # "three oh five", "three zero five" -- how a number is actually said on an English phone line.
     digits = {"zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2", "three": "3", "four": "4",
               "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}
     words = spoken.split()
@@ -370,6 +404,11 @@ def _find_room_number(spoken: str) -> str | None:
         trio = [digits.get(w) for w in words[i:i + 3]]
         if all(trio):
             return "".join(trio)
+    # And as a CARDINAL, which is how Hindi and Spanish say a room number: "एक सौ एक",
+    # "ciento uno". Longest first, so "ciento uno" is not matched as "ciento" inside a longer form.
+    for spoken_form, value in _CARDINAL_ROOM_NUMBERS:
+        if spoken_form in spoken:
+            return value
     return None
 
 

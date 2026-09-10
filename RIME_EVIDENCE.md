@@ -57,7 +57,13 @@ python scripts/measure_audio_kill.py                       # interrupt -> silenc
 - **STT word accuracy on narrowband telephony audio is not measured.**
 - Hindi and Spanish have **never been exercised over the telephone** — only through the full local
   pipeline. Browser-quality results do not prove telephone performance.
-- The Hindi and Spanish wording has **not been reviewed by a native speaker**.
+- The Hindi and Spanish wording has **not been fully reviewed by a native speaker**. One review has
+  happened and it found a real defect: room numbers were being said digit by digit in all three
+  languages, because the English convention was copied into the other two. Hindi says a room number
+  as a cardinal -- "एक सौ एक", not "एक शून्य एक", which reads as a phone number. Fixed 2026-09-10.
+  **The Spanish equivalent was changed by analogy, NOT on a native speaker's correction**, and a
+  Spanish speaker still needs to hear it. Everything else in both languages remains unreviewed, and
+  this correction is evidence that the gap is worth closing rather than evidence that it is small.
 - **The shipped Hindi voice has not been listened to.** Hindi was chosen on `arcana`/`anaya`, and
   Rime then deleted the whole `arcana` model (Part 1c). The replacement, `coda`/`nadi`, is
   catalogued and measured but the migration was made on catalogue and latency evidence, not on a

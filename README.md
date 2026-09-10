@@ -135,7 +135,7 @@ and non-vegetarian options." Reading every dish name down a telephone is not an 
 is one hotel and one menu, so AETHER never asks which restaurant the caller means.**
 
 Numbers are rendered for speech, and a room number is not a quantity: `say_price(420)` gives "four
-hundred and twenty rupees", `say_room_number("305")` gives "three oh five", `say_time("14:00")`
+hundred and twenty rupees", `say_room_number("305")` gives "three zero five" in English and "तीन सौ पाँच" in Hindi, `say_time("14:00")`
 gives "two in the afternoon". Rime is never handed a digit or a colon. A reservation lookup
 deliberately never speaks the guest's name.
 

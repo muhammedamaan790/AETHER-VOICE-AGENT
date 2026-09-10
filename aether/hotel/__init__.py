@@ -172,17 +172,25 @@ _ORDINALS = {1: "first", 2: "second", 3: "third", 5: "fifth", 8: "eighth", 9: "n
 
 
 def say_room_number(number: str | int) -> str:
-    """`305` -> `three oh five`. How a room number is said, not how a quantity is.
+    """`305` -> `three zero five`. How a room number is said in English, not how a quantity is.
 
     `say_number` would give "three hundred and five", which is a count of rooms rather than the
     name of one. A guest asked to go to "three hundred and five" has been given a number, not a
     door.
+
+    "zero", not "oh". Both are ordinary English and this used to say "oh", but "one oh one" is the
+    same short vowel three times and it recognised badly on a real line -- the demo sheet had a
+    whole paragraph warning against saying it. "Zero" is also the unambiguous reading for a caller
+    whose English is a second language, which on a hotel line in Chennai is most of them.
+
+    THIS CONVENTION IS ENGLISH AND DOES NOT TRAVEL. Hindi and Spanish say a room number as a
+    cardinal -- "एक सौ एक", "ciento uno" -- and their renderers do that instead. Copying the
+    English digit-by-digit habit into them was a mistake corrected on 2026-09-10.
     """
     digits = str(number).strip()
     if not digits.isdigit():
         return str(number)
-    spoken = {"0": "oh"}
-    return " ".join(spoken.get(d, say_number(int(d))) for d in digits)
+    return " ".join(say_number(int(d)) for d in digits)
 
 
 def say_time(clock: str) -> str:

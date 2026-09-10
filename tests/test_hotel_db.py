@@ -488,9 +488,14 @@ def test_the_prompt_is_generated_from_the_database_not_transcribed():
 # ============================ spoken helpers ============================
 
 def test_a_room_number_is_said_as_a_room_number_not_a_quantity():
-    """A guest sent to "three hundred and five" has been given a number, not a door."""
-    assert say_room_number("305") == "three oh five"
-    assert say_room_number("101") == "one oh one"
+    """A guest sent to "three hundred and five" has been given a number, not a door.
+
+    "zero", not "oh". Both are ordinary English; this said "oh" until 2026-09-10, and "one oh one"
+    is the same short vowel three times, which recognised badly on a real line.
+    """
+    assert say_room_number("305") == "three zero five"
+    assert say_room_number("101") == "one zero one"
+    assert say_room_number("305") != say_number(305)
 
 
 def test_times_are_words_not_a_colon():

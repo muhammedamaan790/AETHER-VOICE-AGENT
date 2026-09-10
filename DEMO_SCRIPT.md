@@ -155,13 +155,13 @@ These are verified answers. Anything here is safe to ask on camera.
 | Do you have any rooms available? | We have forty one rooms free, starting at six thousand five hundred rupees a night. |
 | How much is a family suite? | The Family Suite is fifteen thousand rupees a night, and sleeps up to four. |
 | What comes with a standard king? | The Standard King has king bed, wi-fi, air conditioning, tv and work desk. |
-| Is room one oh two free? | Room one oh two is occupied at the moment. |
-| Is room one oh four free? | Room one oh four is with housekeeping just now. |
-| Is room two oh two free? | Room two oh two is already reserved. |
-| Is room two oh four free? | Room two oh four is out for maintenance. |
-| Is room two oh two reserved? | Room two oh two is held on a confirmed booking. It is a Deluxe King, booked from the fifteenth of September to the eighteenth of September. |
+| Is room one zero two free? | Room one zero two is occupied at the moment. |
+| Is room one zero four free? | Room one zero four is with housekeeping just now. |
+| Is room two zero two free? | Room two zero two is already reserved. |
+| Is room two zero four free? | Room two zero four is out for maintenance. |
+| Is room two zero two reserved? | Room two zero two is held on a confirmed booking. It is a Deluxe King, booked from the fifteenth of September to the eighteenth of September. |
 | What services do you have? | We offer front desk, housekeeping, luggage assistance, maintenance, room service and wake-up call. |
-| What time is housekeeping available? | Housekeeping is available from eight in the morning until ten at night. You can reach it on extension one oh two. |
+| What time is housekeeping available? | Housekeeping is available from eight in the morning until ten at night. You can reach it on extension one zero two. |
 | What time is check out? | Check-in is from two in the afternoon, and check-out is by twelve noon. |
 
 <!-- BANK:END -->
@@ -185,15 +185,15 @@ the tool is built for.
 **Reset the browser zoom to 100%** (Ctrl+0) before recording. The console is laid out for a full
 window.
 
-**Say room numbers digit by digit** — "three oh five", not "three hundred and five". That is how
+**Say room numbers digit by digit** — "three zero five", not "three hundred and five". That is how
 AETHER says them back, and how the recogniser hears them best.
 
 **A spoken room number is the least reliable thing you can say on this call**, which is why the
-script does not contain one. An earlier sheet asked *"is room one oh one free?"* and it did not
-recognise well on a real line: "one oh one" is the same short vowel three times, and the recogniser
+script does not contain one. An earlier sheet asked *"is room one zero one free?"* and it did not
+recognise well on a real line: "one zero one" is the same short vowel three times, and the recogniser
 has no menu of room numbers to bias towards the way it effectively does for dish and room-type
-names. *"Is room three oh five free?"* is more distinct, and if you want a per-room lookup on camera
-that is the one to use — but it is optional, and the answer is a flat *"Room three oh five is
+names. *"Is room three zero five free?"* is more distinct, and if you want a per-room lookup on camera
+that is the one to use — but it is optional, and the answer is a flat *"Room three zero five is
 occupied at the moment."* It is in the bank above either way.
 
 **"Deluxe king" was cut for the same reason**: "deluxe" is the rarest word in the whole vocabulary
