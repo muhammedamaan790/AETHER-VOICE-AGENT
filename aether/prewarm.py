@@ -103,8 +103,35 @@ def prewarm(*, stt_model: str = "base.en", warm_weights: bool = True) -> dict[st
     _timed("import_llm", _import_llm, results)
     if warm_weights:
         _timed("whisper_weights", lambda: _warm_weights(stt_model), results)
+        # And every OTHER recogniser a call could reach, because the greeting offers Hindi and
+        # Spanish and the multilingual model is a DIFFERENT set of weights -- `base.en` cannot
+        # transcribe either.
+        #
+        # This is not a latency nicety. Measured on this machine: the first use of the multilingual
+        # model took 331 seconds, because it was not on disk and faster-whisper downloaded it. That
+        # would have happened on the first Hindi turn, mid-call, with the caller waiting. Warming it
+        # here moves the download to worker start-up, where it costs nobody a conversation -- and if
+        # the network is down it fails at start-up, loudly, instead of during a demo.
+        for extra in _other_recognisers(stt_model):
+            _timed(f"whisper_weights_{extra}", lambda size=extra: _warm_weights(size), results)
     results["total_ms"] = round(sum(results.values()), 1)
     return results
+
+
+def _other_recognisers(primary: str) -> list[str]:
+    """Every Whisper model some language could need, except the one already warmed.
+
+    Read from the language registry rather than listed here, so adding a language cannot leave its
+    recogniser un-warmed and waiting to surprise a caller.
+    """
+    from .lang import LANGUAGES
+
+    seen, extras = {primary}, []
+    for language in LANGUAGES.values():
+        if language.whisper_model not in seen:
+            seen.add(language.whisper_model)
+            extras.append(language.whisper_model)
+    return extras
 
 
 def main() -> None:

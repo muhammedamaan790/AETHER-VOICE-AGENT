@@ -128,7 +128,9 @@ def _say_names(names: list[str]) -> str:
     if len(names) <= _SPOKEN_LIST_MAX:
         return say_list(names)
     rest = len(names) - _SPOKEN_LIST_MAX
-    more = "एक और" if rest == 1 else f"{say_number(rest)} और"
+    # `say_list` already ends "... और X", so a tail of "और N और" stutters. अन्य is the natural word
+    # for "other" here and does not repeat the joiner.
+    more = "एक अन्य" if rest == 1 else f"{say_number(rest)} अन्य"
     return f"{say_list(names[:_SPOKEN_LIST_MAX])}, और {more}"
 
 
@@ -151,7 +153,9 @@ def _speak_list_category(result) -> str:
         return f"माफ़ कीजिए, इस समय {category} में कुछ भी उपलब्ध नहीं है।"
     names = _say_names([r["name"] for r in rows])
     cheapest = min(rows, key=lambda r: r["price"])
-    lead = f"{category} में हमारे पास {names} हैं।"
+    # Hindi marks number on the verb: one dish takes है, several take हैं. "Butter Chicken हैं" is
+    # the mistake a template with a fixed verb makes, and `mains` currently holds exactly one dish.
+    lead = f"{category} में हमारे पास {names} {'है' if len(rows) == 1 else 'हैं'}।"
     price = (f" इसकी कीमत {say_price(rows[0]['price'])} है।" if len(rows) == 1
              else f" कीमत {say_price(cheapest['price'])} से शुरू है।")
     if sold_out:
@@ -272,7 +276,7 @@ def _speak_room_availability(result) -> str:
     cheapest = min(result.records, key=lambda r: r["rate"])
     what = f"{room_type} कमरे" if room_type else "कमरे"
     return (f"हमारे पास {say_number(count)} {what} खाली हैं, कीमत "
-            f"{say_price(cheapest['rate'])} प्रति रात से शुरू।")
+            f"{say_price(cheapest['rate'])} प्रति रात से शुरू होती है।")
 
 
 def _speak_list_room_types(result) -> str:
@@ -281,7 +285,7 @@ def _speak_list_room_types(result) -> str:
         return "माफ़ कीजिए, कमरों की सूची इस समय मेरे पास नहीं है।"
     cheapest = min(rows, key=lambda r: r["rate"])
     return (f"हमारे पास {_say_names([r['name'] for r in rows])} हैं, कीमत "
-            f"{say_price(cheapest['rate'])} प्रति रात से शुरू।")
+            f"{say_price(cheapest['rate'])} प्रति रात से शुरू होती है।")
 
 
 def _speak_room_price(result) -> str:
@@ -342,6 +346,88 @@ def _speak_reservation_for_room(result) -> str:
             f"{say_date(s['check_in'])} से {say_date(s['check_out'])} तक बुक है।")
 
 
+_POLICY_NAMES = {
+    "parking": "पार्किंग", "wifi": "Wi-Fi", "breakfast": "नाश्ता", "pets": "पालतू जानवर",
+    "smoking": "धूम्रपान", "children": "बच्चे", "airport_transfer": "एयरपोर्ट ट्रांसफ़र",
+    "early_check_in": "जल्दी चेक-इन", "late_check_out": "देर से चेक-आउट",
+    "luggage_storage": "सामान रखने की सुविधा", "accessibility": "बिना सीढ़ी के रास्ता",
+    "cancellation": "मुफ़्त रद्दीकरण", "payment": "भुगतान",
+    "currency_exchange": "मुद्रा विनिमय", "laundry": "लॉन्ड्री सेवा",
+    "swimming_pool": "स्विमिंग पूल", "gym": "जिम", "spa": "स्पा",
+    "extra_bed": "अतिरिक्त बिस्तर", "doctor_on_call": "डॉक्टर की सुविधा",
+    "taxi_booking": "टैक्सी बुकिंग", "conference_room": "कॉन्फ़्रेंस रूम",
+    "power_backup": "बिजली का बैकअप", "restaurant": "रेस्टोरेंट", "bar": "बार",
+    "deposit": "जमा राशि", "id_proof": "पहचान पत्र",
+}
+
+_PAYMENT_NAMES = {"card": "कार्ड", "cash": "नकद", "upi": "UPI"}
+
+_ID_NAMES = {"passport": "पासपोर्ट", "aadhaar": "आधार कार्ड",
+             "driving_licence": "ड्राइविंग लाइसेंस"}
+
+# Timings, not offers -- see the English renderer for why these need their own branch.
+_OPENING_HOURS = {"restaurant": "रेस्टोरेंट", "bar": "बार"}
+
+
+def _speak_hotel_policy(result) -> str:
+    row = result.records[0]
+    topic = row["topic"]
+    name = _POLICY_NAMES.get(topic, topic.replace("_", " "))
+
+    if not row["available"]:
+        if topic == "pets":
+            return "माफ़ कीजिए, होटल में पालतू जानवरों की अनुमति नहीं है।"
+        if topic == "smoking":
+            return "माफ़ कीजिए, पूरा होटल धूम्रपान-मुक्त है।"
+        return f"माफ़ कीजिए, हम {name} की सुविधा नहीं देते।"
+
+    if topic == "payment" and row["options"]:
+        return f"हम {say_list([_PAYMENT_NAMES.get(o, o) for o in row['options']])} स्वीकार करते हैं।"
+    if topic == "cancellation" and row["limit_hours"]:
+        return (f"आप आने से {say_number(row['limit_hours'])} घंटे पहले तक "
+                f"बिना किसी शुल्क के रद्द कर सकते हैं।")
+    if topic == "children":
+        return "जी हाँ, बच्चों का स्वागत है, और उनके लिए कोई अतिरिक्त शुल्क नहीं है।"
+    if topic == "accessibility":
+        return "जी हाँ, होटल में बिना सीढ़ी के आने-जाने की सुविधा है।"
+    if topic in _OPENING_HOURS and row["hours"]:
+        opens, _, closes = str(row["hours"]).partition("-")
+        return (f"{_OPENING_HOURS[topic]} {say_time(opens)} से {say_time(closes)} तक "
+                f"खुला रहता है।")
+    if topic == "deposit" and row["fee"]:
+        return (f"चेक-इन के समय {say_price(row['fee'])} जमा राशि ली जाती है, "
+                f"जो जाते समय वापस कर दी जाती है।")
+    if topic == "id_proof" and row["options"]:
+        # या, not और: any one of these is enough.
+        names = [_ID_NAMES.get(o, o.replace("_", " ")) for o in row["options"]]
+        documents = ", ".join(names[:-1]) + f" या {names[-1]}" if len(names) > 1 else names[0]
+        return f"चेक-इन के समय हर मेहमान को पहचान पत्र दिखाना होता है: {documents}।"
+
+    # Short separate sentences rather than one comma-spliced clause. Hindi puts nouns into the
+    # oblique case before की/के ("नाश्ता" -> "नाश्ते की सुविधा"), which would need a second form of
+    # every policy name; following the name with "उपलब्ध है" needs no inflection and reads better
+    # aloud than three clauses strung together with commas.
+    parts = [f"जी हाँ, {name} उपलब्ध है।"]
+    if row["fee"]:
+        parts.append(f"इसका शुल्क {say_price(row['fee'])} है।")
+    else:
+        parts.append("यह मुफ़्त है।")
+    if row["hours"]:
+        hours = str(row["hours"])
+        if "24" in hours:
+            parts.append("यह चौबीसों घंटे उपलब्ध है।")
+        else:
+            opens, _, closes = hours.partition("-")
+            parts.append(f"समय {say_time(opens)} से {say_time(closes)} तक है।")
+    return " ".join(parts)
+
+
+def _speak_hotel_info(result) -> str:
+    row = result.records[0]
+    return (f"{row['name']} {row['address']} में है। यहाँ {say_number(row['floors'])} मंज़िलें "
+            f"और {say_number(row['rooms'])} कमरे हैं।")
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "menu_overview": _speak_menu_overview,
     "list_category": _speak_list_category,
@@ -360,4 +446,6 @@ SPEAK: dict[str, Callable[..., str]] = {
     "service_hours": _speak_service_hours,
     "check_in_out": _speak_check_in_out,
     "reservation_for_room": _speak_reservation_for_room,
+    "hotel_policy": _speak_hotel_policy,
+    "hotel_info": _speak_hotel_info,
 }

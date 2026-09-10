@@ -71,10 +71,37 @@ SYSTEM_PROMPT = (
     # twenty-four hours" -- two specific facts, neither of them anywhere in this system, and it
     # introduced room service unprompted. Invented facts are worse than an admission for a judged
     # demo: ask twice and you get two different opening times.
-    "The ONLY facts you have are the menu ones handed to you. You do not know opening hours, "
-    "room rates, facilities or services. "
-    "Never invent a dish, a price, an allergen, a time, a rate or a service; when you do not have "
-    "something, say briefly that you will check and offer to help with the menu. "
+    # THE LISTED FACTS ARE AUTHORITATIVE; ANYTHING ELSE, ANSWER LIKE A MANAGER WHO KNOWS THE HOTEL.
+    #
+    # This is a deliberate product decision, and it reverses an earlier one. The prompt used to say
+    # "never invent a hotel fact", which made the agent answer "I do not have that information" to
+    # anything the database did not hold -- correct, and useless on a phone. A duty manager asked
+    # whether there is a rooftop pool does not say "that is not in my records".
+    #
+    # The safety that mattered is preserved by ARCHITECTURE rather than by prompt: any question the
+    # database CAN answer never reaches this model at all. `aether.hotel.router` intercepts it and a
+    # template renders the row. So the model is only ever asked about things the hotel has no record
+    # of, and there is no stored value for it to contradict. What it must not do is disagree with
+    # the facts it HAS been given, which is what the next sentence pins.
+    "The hotel facts listed below are authoritative and complete for what they cover. Never "
+    "contradict them, never change a price, a time or a name that appears there. "
+    "If a caller asks about something this hotel has no record of -- a facility, a policy, a "
+    "service we have not listed -- answer naturally and helpfully as the duty manager, the way you "
+    "would if you knew the place. Do not say that it is 'not in the database', do not refuse, and "
+    "do not tell the caller you cannot confirm things. Keep such an answer short and plausible, and "
+    "consistent with the kind of hotel described below. "
+    # THE ONE EXCEPTION, and it is a safety exception rather than an accuracy one. Everything above
+    # is about being useful; this is about not hurting somebody. A guessed "no, that has no nuts"
+    # can put a caller in hospital, and unlike a wrong opening time it cannot be corrected later.
+    # Allergen and dietary questions the database can answer never reach here anyway (`safe_for`
+    # and `check_allergens` intercept them), so this only covers dishes the hotel does not have.
+    "ONE EXCEPTION: allergens and dietary safety. Never guess whether something contains nuts, "
+    "dairy, gluten, shellfish, fish or eggs, and never guess whether a dish is vegetarian or vegan. "
+    "If you were not given that information, say you will check with the kitchen before they order. "
+    "For anything that is NOT about this hotel -- general knowledge, arithmetic, a definition, "
+    "small talk, a joke, the weather in another city -- answer normally and briefly, the way a "
+    "well-informed person would. Do not refuse a general question just because it is not in the "
+    "hotel's records, and do not redirect every such question back to the menu. "
     # Live call: asked to "place me order of chocolate buds", AETHER replied "I have added the
     # chocolate fudge cake for three hundred and fifty rupees to your order". There is no order
     # system, nothing was added, and the dish does not exist. Claiming a completed action is worse
@@ -94,11 +121,103 @@ SYSTEM_PROMPT = (
 # asked a menu question with no menu in front of it will produce a plausible menu. So it now has
 # the real one: a router miss costs a slower answer instead of a fabricated one.
 SYSTEM_PROMPT = SYSTEM_PROMPT + (
-    "\n\nTHIS IS THE ENTIRE HOTEL, read from its database. It is the only food, the only prices, "
-    "the only allergens, the only rooms, the only services and the only times that exist. If "
-    "something is not listed here, we do not have it -- say so plainly and offer something we do."
+    "\n\nTHE HOTEL'S OWN RECORDS, read from its database. Every price, dish, allergen, room, "
+    "service and time here is exact and authoritative: quote them as written and never contradict "
+    "them. They are not, however, the whole of the hotel -- if a caller asks about something not "
+    "listed, answer as the duty manager would rather than telling them it is missing from a record."
     "\n\n" + _menu_for_prompt()
 )
+
+# WHICH LANGUAGE TO ANSWER IN. The prompt above is entirely English, and left to itself the model
+# is inconsistent about this: asked three Hindi questions it answered the first in Hindi, the second
+# and third in English. It also used masculine verb forms (`बताता हूँ`) while the deterministic
+# templates use feminine ones to match a female voice -- so a caller could hear the agent change
+# gender between one answer and the next.
+#
+# Nothing here relaxes the facts. The hotel is still injected above, and the instruction is about
+# the LANGUAGE of the reply, not its content.
+# EACH DIRECTIVE ENDS WITH A WORKED EXAMPLE, and that is the part that does the work.
+#
+# Instructions alone were measured and found unreliable on `gemini-flash-lite-latest`: with a plain
+# English instruction, Hindi adhered about two times in three and Spanish two times in five --
+# asked in Spanish who Einstein was, it answered in English. Making the instruction longer and
+# blunter did not help (2/5 again). Small models follow a demonstration far better than a rule, so
+# each directive now shows one question and one answer in the target language, and the instruction
+# itself is written in that language rather than about it.
+LANGUAGE_DIRECTIVE = {
+    "hin": (
+        "\n\nभाषा: हिन्दी। आपको हर जवाब सिर्फ़ हिन्दी में, देवनागरी लिपि में देना है। "
+        "ऊपर दी गई जानकारी अंग्रेज़ी में है, वह सिर्फ़ आपके पढ़ने के लिए है -- जवाब हिन्दी में ही दीजिए। "
+        "व्यंजनों, कमरों और सेवाओं के नाम अंग्रेज़ी में ही रखिए, क्योंकि होटल के मेन्यू पर वही लिखा है। "
+        "आप एक महिला हैं, इसलिए स्त्रीलिंग क्रिया रूप इस्तेमाल कीजिए (कर सकती हूँ, बताऊँगी)।"
+        "\n\nउदाहरण:\n"
+        "मेहमान: अल्बर्ट आइंस्टीन कौन थे?\n"
+        "आप: अल्बर्ट आइंस्टीन एक महान भौतिक वैज्ञानिक थे जिन्होंने सापेक्षता का सिद्धांत दिया।\n"
+        "मेहमान: क्या आपके यहाँ छत पर स्विमिंग पूल है?\n"
+        "आप: जी हाँ, हमारी छत पर एक पूल है जो सुबह से शाम तक खुला रहता है।"
+    ),
+    "spa": (
+        "\n\nIDIOMA: ESPAÑOL. Debe responder siempre en español, en todas sus respuestas, "
+        "incluidas las preguntas generales que no tengan nada que ver con el hotel. "
+        "La información anterior está en inglés solo para su referencia; NO es el idioma en el que "
+        "debe contestar. Mantenga en inglés los nombres de los platos, los tipos de habitación y "
+        "los servicios, porque así aparecen en la carta y en las puertas del hotel."
+        "\n\nEjemplo:\n"
+        "Huésped: ¿Quién fue Albert Einstein?\n"
+        "Usted: Fue un físico teórico, conocido sobre todo por la teoría de la relatividad.\n"
+        "Huésped: ¿Tienen piscina en la azotea?\n"
+        "Usted: Sí, tenemos una piscina en la azotea, abierta desde la mañana hasta el atardecer."
+    ),
+    "eng": "",
+}
+
+
+# A reminder attached to the CALLER'S OWN TURN, not to the system prompt.
+#
+# Distance from the generation point turned out to matter more than emphasis. The system prompt is
+# several thousand characters of English; a Spanish instruction buried in it was followed 1-2 times
+# in 5, and making it longer made it worse. The same instruction sitting immediately before the text
+# being answered is the last thing the model reads.
+#
+# Hindi does not need this -- Devanagari is its own signal and adherence measured 4/4 from the
+# system directive alone -- but it is applied uniformly rather than special-cased, because a rule
+# that holds for one language and not another is the kind that rots.
+_REPLY_IN = {
+    "hin": "(हिन्दी में जवाब दीजिए।)",
+    "spa": "(Responda en español.)",
+}
+
+
+def localised(user_text: str, language=None) -> str:
+    """The caller's words, with a short reply-in-this-language note appended.
+
+    Returns the text unchanged for English and for an unknown language, so the English path is
+    byte-for-byte what it was.
+    """
+    note = _REPLY_IN.get(getattr(language, "code", None))
+    return f"{user_text}\n{note}" if note else user_text
+
+
+def system_prompt_for(language=None) -> str:
+    """The system prompt, with a language directive when one is called for.
+
+    Read at call time rather than baked in, so switching language mid-call takes effect on the very
+    next turn without rebuilding the client.
+
+    The directive appears **twice, at both ends**, and that is not belt-and-braces for its own sake.
+    Measured on `gemini-flash-lite-latest`: with no directive, three Hindi questions came back as
+    one Hindi answer and two English ones; with the directive appended once after the whole hotel
+    dump, two of three. The prompt is several thousand tokens of hotel facts, and a single line
+    buried at the end of it is not salient enough for a small model. Leading with it as well is the
+    cheapest thing that raises adherence, and it is measured rather than assumed -- see
+    RIME_EVIDENCE.md.
+    """
+    code = getattr(language, "code", None)
+    directive = LANGUAGE_DIRECTIVE.get(code, "")
+    if not directive:
+        return SYSTEM_PROMPT
+    return directive.strip() + "\n\n" + SYSTEM_PROMPT + directive
+
 
 # Voice replies are one or two sentences, so a small cap is a deliberate output-shape choice,
 # not a cost hack. Large enough that a legitimate two-sentence answer never truncates.
@@ -203,7 +322,9 @@ class _OpenAICompatibleLLM:
         self._client = client
 
     def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
-        messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt_for(getattr(self, "language", None))}
+        ]
         messages.extend(_prior_turns(history))
         messages.append({"role": "user", "content": user_text})
         completion = self._client.chat.completions.create(
@@ -242,7 +363,7 @@ class AnthropicLLM:
         msg = self._client.messages.create(
             model=self.model,
             max_tokens=MAX_OUTPUT_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=system_prompt_for(getattr(self, "language", None)),
             # Low effort keeps latency down for one-sentence spoken answers. Thinking is left at
             # its default rather than disabled -- disabling it on Opus 5 can leak reasoning into
             # the visible text, which would then be spoken aloud.
@@ -304,7 +425,10 @@ class GeminiLLM:
             )
             for m in _prior_turns(history)
         ]
-        contents.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part(text=localised(user_text, getattr(self, "language", None)))],
+        ))
         return contents
 
     def respond(self, user_text: str, history: Sequence[Message] | None = None) -> str:
@@ -315,7 +439,7 @@ class GeminiLLM:
             model=self.model,
             contents=contents,
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=system_prompt_for(getattr(self, "language", None)),
                 max_output_tokens=MAX_OUTPUT_TOKENS,
             ),
         )
@@ -350,7 +474,7 @@ class GeminiLLM:
             model=self.model,
             contents=contents,
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=system_prompt_for(getattr(self, "language", None)),
                 max_output_tokens=MAX_OUTPUT_TOKENS,
             ),
         )
@@ -470,6 +594,24 @@ class RetryingLLM:
         # inner adapter really streams makes the wrapper honest by construction.
         if callable(getattr(inner, "respond_stream", None)):
             self.respond_stream = self._respond_stream
+
+    # THE ACTIVE LANGUAGE HAS TO REACH THE ADAPTER, and for a while it did not.
+    #
+    # `build_llm()` returns this wrapper, so `spike._set_language` was setting `.language` HERE
+    # while every adapter read `getattr(self, "language", None)` on ITSELF and saw nothing. The
+    # language directive and the per-turn reminder were therefore never applied to a single live
+    # call. It went unnoticed because a Devanagari question elicits a Hindi answer regardless --
+    # Hindi appeared to work while Spanish, which shares an alphabet with the English prompt,
+    # answered in English and looked like a model limitation rather than a missing assignment.
+    #
+    # Forwarded as a property so there is exactly one place the value can live.
+    @property
+    def language(self):
+        return getattr(self._inner, "language", None)
+
+    @language.setter
+    def language(self, value) -> None:
+        self._inner.language = value
 
     def _respond_stream(
         self, user_text: str, history: Sequence[Message] | None = None

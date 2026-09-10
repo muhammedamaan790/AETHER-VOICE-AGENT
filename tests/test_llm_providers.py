@@ -186,11 +186,34 @@ def test_the_prompt_gives_a_concrete_identity_to_fall_back_on():
     assert "hotel" in p and "manager" in p
 
 
-def test_the_prompt_forbids_inventing_menu_facts():
-    """Prices and allergens are looked up. An invented allergen could genuinely hurt someone."""
+def test_the_prompt_still_forbids_guessing_about_allergens():
+    """The ONE thing the model may not improvise, and it is a safety rule rather than an accuracy one.
+
+    The product deliberately allows the model to answer plausibly about hotel details the database
+    does not hold -- a rooftop pool, a gym -- because a duty manager who says "that is not in my
+    records" is useless on a phone. Allergens are the exception: a guessed "no, that has no nuts"
+    can put somebody in hospital, and unlike a wrong opening time it cannot be corrected afterwards.
+    """
     p = SYSTEM_PROMPT.lower()
-    assert "never invent" in p
-    assert "allergen" in p
+    assert "never guess whether something contains nuts" in p
+    assert "check with the kitchen" in p, "a refusal without a next step leaves the caller stuck"
+    for allergen in ("nuts", "dairy", "gluten", "shellfish", "fish", "eggs"):
+        assert allergen in p
+
+
+def test_the_prompt_does_not_forbid_answering_about_unlisted_hotel_details():
+    """A deliberate reversal, pinned so it is not undone by accident.
+
+    An earlier prompt said "never invent a hotel fact", and the agent answered "I do not have that
+    information" to anything absent from the database. That is not the product: unsupported
+    questions are meant to reach the model and be answered naturally. This test fails if the old
+    blanket prohibition comes back.
+    """
+    p = SYSTEM_PROMPT.lower()
+    assert "never invent a hotel fact" not in p, "the blanket prohibition was deliberately removed"
+    assert "answer naturally and helpfully as the duty manager" in p
+    assert "do not refuse" in p
+    assert "not in the database" in p, "the prompt should name the phrasing it is banning"
 
 
 def test_brevity_is_instructed_not_truncated():
@@ -274,9 +297,20 @@ def test_the_prompt_forbids_inventing_hours_rates_and_services():
     invented fact is worse than an admission: ask twice, get two different opening times.
     """
     p = SYSTEM_PROMPT.lower()
-    assert "you do not know opening hours" in p
-    for invented in ("a time", "a rate", "a service"):
-        assert invented in p, f"the prompt must forbid inventing {invented!r}"
-    assert "say briefly that you will check" in p, (
-        "forbidding invention without supplying the fallback leaves the model to improvise"
-    )
+    # What replaced the blanket prohibition: the facts the model IS given are authoritative and may
+    # never be contradicted. That is the property that actually matters, because a question the
+    # database can answer never reaches the model at all -- the router intercepts it -- so the only
+    # way the model could contradict a stored price is by disagreeing with the injected copy.
+    assert "authoritative" in p
+    assert "never contradict them" in p
+    assert "never change a price, a time or a name" in p
+
+
+def test_the_prompt_still_allows_ordinary_general_knowledge():
+    """The other half, and it was a real defect: scoping the restriction too widely made a duty
+    manager who could not answer "what is the capital of France?" -- careful about nothing, and
+    useless about everything else."""
+    p = SYSTEM_PROMPT.lower()
+    assert "not about this hotel" in p
+    assert "answer normally" in p
+    assert "do not refuse a general question" in p
