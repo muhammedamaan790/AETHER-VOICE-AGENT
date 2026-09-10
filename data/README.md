@@ -8,8 +8,8 @@ warehouse-assistant path and is a hand-written constant.
 
 # The hotel database — `aether_hotel.db`
 
-**The source of truth for every hotel fact AETHER states.** SQLite, 11 tables and 3 views, opened
-read-only. If it is not in this file, AETHER does not say it.
+**The source of truth for every hotel fact AETHER states.** SQLite, 12 tables and 3 views,
+opened read-only. If it is not in this file, AETHER does not say it.
 
 | Table | Rows |
 |---|---|
@@ -20,7 +20,18 @@ read-only. If it is not in this file, AETHER does not say it.
 | `hotel_services` | 6 |
 | `hotel` | 1 — check-in 14:00, check-out 12:00, INR |
 | `guests` / `reservations` | 4 / 3 |
+| `hotel_policies` | **27** — parking, wi-fi, breakfast, pets, smoking, children, airport transfer, early check-in, late check-out, luggage storage, accessibility, cancellation, payment, currency exchange, laundry, **swimming pool, gym, spa, extra bed, doctor on call, taxi booking, conference room, power backup, restaurant hours, bar hours, deposit, ID at check-in** |
 | `service_requests` / `restaurant_orders` / `restaurant_order_items` | 0 / 2 / 4 |
+
+`hotel_policies` was added after an audit found that the commonest questions a hotel line receives
+had no fact behind them at all. It stores **structured** values -- `available`, `fee_inr`, `hours`,
+`limit_hours`, `options` -- and never a sentence. Storing "Yes, parking is free" would put English
+inside the fact store and leave Hindi and Spanish with nothing to render; storing `available=1,
+fee=NULL` lets three languages each build their own sentence from one fact. `available=0` is an
+answer, not a gap: "we do not take pets" is exactly what a caller needs.
+
+Floors and room counts are deliberately **not** stored. They are derived from `rooms`, because a
+stored copy is a second source of truth that can contradict the first.
 
 Views `available_menu`, `available_rooms` and `current_reservations` exist in the file; the code
 reads the base tables and filters in Python, so availability logic is testable without a database
