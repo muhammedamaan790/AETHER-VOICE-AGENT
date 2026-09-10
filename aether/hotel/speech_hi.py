@@ -79,15 +79,21 @@ def say_list(items: list[str]) -> str:
 
 
 def say_room_number(number: str | int) -> str:
-    """`305` -> `तीन शून्य पाँच`. A room number is a door, not a quantity.
+    """`305` -> `तीन सौ पाँच`. Said as a CARDINAL, which is how Hindi says a room number.
 
-    Said digit by digit for the same reason as in English: `say_number(305)` would give "three
-    hundred and five", which counts rooms rather than naming one.
+    This used to say `तीन शून्य पाँच`, digit by digit, and the docstring justified it as "the same
+    reason as in English". That reasoning was the mistake: English says a room number digit by
+    digit, Hindi does not. A Hindi speaker asks for room 101 as "एक सौ एक", never "एक शून्य एक",
+    and the digit-by-digit form reads as a phone number or a PIN. Corrected 2026-09-10 on a native
+    speaker's correction -- exactly the class of error RIME_EVIDENCE lists as needing one.
+
+    So Hindi delegates to `say_number`, and the English convention stays in the English renderer
+    where it belongs.
     """
     digits = str(number).strip()
     if not digits.isdigit():
         return str(number)
-    return " ".join(_UNITS[int(d)] for d in digits)
+    return say_number(int(digits))
 
 
 def say_time(clock: str) -> str:

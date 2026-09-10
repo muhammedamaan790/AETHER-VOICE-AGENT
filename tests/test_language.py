@@ -166,9 +166,27 @@ def test_a_number_beyond_the_hotel_is_refused_not_guessed():
         hi.say_number(100000)
 
 
-def test_a_room_number_is_said_as_a_door_not_a_quantity():
-    assert hi.say_room_number("305") == "तीन शून्य पाँच"
-    assert hi.say_room_number("305") != hi.say_number(305)
+def test_a_room_number_is_said_the_way_each_language_says_one():
+    """The convention is NOT the same in all three, and assuming it was is a corrected mistake.
+
+    English says a room number digit by digit -- "three zero five". Hindi and Spanish say it as a
+    cardinal -- "तीन सौ पाँच", "trescientos cinco". This file used to assert the Hindi form was
+    digit by digit "for the same reason as in English", which is the reasoning error rather than a
+    typo: a Hindi speaker asks for room 101 as "एक सौ एक", and the digit-by-digit form reads as a
+    phone number. Corrected on a native speaker's correction, 2026-09-10.
+    """
+    import aether.hotel.speech_es as es
+    from aether.hotel import say_number as say_en
+    from aether.hotel import say_room_number as room_en
+
+    assert room_en("305") == "three zero five"
+    assert room_en("305") != say_en(305), "English must not say a room number as a quantity"
+
+    assert hi.say_room_number("305") == hi.say_number(305) == "तीन सौ पाँच"
+    assert hi.say_room_number("101") == "एक सौ एक"
+
+    assert es.say_room_number("305") == es.say_number(305) == "trescientos cinco"
+    assert es.say_room_number("101") == "ciento uno"
 
 
 def test_hindi_time_puts_the_part_of_day_first():

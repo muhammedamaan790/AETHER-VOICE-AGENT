@@ -449,6 +449,23 @@ Still `<from_run>` and must not be quoted:
 
 ### Fixed 2026-09-10
 
+- **Room numbers were said digit by digit in all three languages**, because the English convention
+  was copied into the other two -- the Hindi docstring literally said "for the same reason as in
+  English", which is the reasoning error rather than a typo. A Hindi speaker asks for room 101 as
+  "एक सौ एक"; "एक शून्य एक" reads as a phone number or a PIN. Hindi and Spanish now delegate to
+  `say_number`; English keeps digit-by-digit, which is genuinely the English convention.
+  English also changed "oh" to "zero": both are ordinary English, but "one oh one" is the same short
+  vowel three times and recognised badly on a real line -- the demo sheet carried a paragraph
+  warning against saying it.
+  The input side had to follow, or a caller could not repeat what they just heard: the router now
+  recognises cardinal room numbers, **generated from the same `say_number` functions** rather than
+  written out, for 100-999 rather than only the fifty rooms that exist -- so an unknown room still
+  reaches the tool that says "I could not find that" instead of the availability rule answering
+  "forty-one rooms are free" about a room the hotel does not have.
+  **Found by the user, a Hindi speaker, reading the output.** No test could have caught it: every
+  test asserted the digit-by-digit form, because the tests were written from the same wrong
+  assumption as the code. The Spanish change follows by analogy and is NOT native-verified.
+
 - **AETHER answered in three languages but only understood one.** `route()` matches English
   keywords, so a caller actually speaking Hindi or Spanish matched nothing and fell through to
   Gemini. The reply came back in the right language -- which is exactly why nobody noticed -- but
