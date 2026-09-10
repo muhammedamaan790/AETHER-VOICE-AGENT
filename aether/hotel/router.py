@@ -20,8 +20,10 @@ can never bypass fencing.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
+from ._foreign import to_router_language
 from .db import HotelStore
 
 # The store the router reads its vocabulary from. Dish names, categories and room types all come
@@ -290,9 +292,25 @@ class Route:
     reason: str          # which rule matched, recorded in the trace for auditability
 
 
+def _is_kept(ch: str) -> bool:
+    r"""Whether `normalise` keeps this character.
+
+    COMBINING MARKS ARE KEPT, and that is the whole reason this is a function rather than the
+    one-line `[^\w\s-]` it used to be. Python's `\w` is `str.isalnum()` plus underscore, and a
+    Devanagari vowel sign is category Mn/Mc, for which `isalnum()` is False. So the old expression
+    deleted every matra and virama: "मेन्यू में क्या है" normalised to "म न य म क य ह", and no
+    Hindi keyword could ever match. Hindi routing was impossible, not merely unimplemented.
+
+    Tested by category rather than by codepoint range so the next script -- Tamil, Arabic, Thai --
+    works without another edit here.
+    """
+    return (ch.isalnum() or ch.isspace() or ch in "-_"
+            or unicodedata.category(ch).startswith("M"))
+
+
 def normalise(text: str) -> str:
     """Lowercase, strip punctuation, collapse whitespace. STT output is not tidy."""
-    return " ".join(re.sub(r"[^\w\s-]", " ", text.lower()).split())
+    return " ".join("".join(ch if _is_kept(ch) else " " for ch in text.lower()).split())
 
 
 def _find_dish(spoken: str) -> str | None:
@@ -361,7 +379,11 @@ def route(text: str) -> Route | None:
     Order is by specificity, not by frequency: a sentence naming a dish AND asking about allergens
     must go to the allergen tool, not to the price tool, so the narrower rules are tested first.
     """
-    spoken = _repair_asr(normalise(text))
+    # The caller's own words first, then the ASR repairs, then one tested set of English rules.
+    # A Hindi or Spanish caller used to match nothing here and fall through to the model -- which
+    # answered in the right language, which is why it went unnoticed, and which meant hotel facts
+    # reached a language model for every non-English caller. See `_foreign.py`.
+    spoken = _repair_asr(to_router_language(normalise(text)))
     if not spoken:
         return None
 
