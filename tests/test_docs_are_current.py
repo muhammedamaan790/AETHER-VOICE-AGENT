@@ -95,9 +95,13 @@ def test_no_document_still_says_the_phone_path_is_unverified():
 def test_no_document_describes_the_menu_as_a_python_fixture():
     """`data/aether_hotel.db` replaced the fixture. Docs that still say "fixture" send a reader
     looking for a file that no longer exists, and understate the read-only guarantee."""
-    stale = ["hotel menu fixture", "menu fixture,", "29 dishes", "8 read-only tools",
-             "9 read-only tools"]
-    found = [f"{name}: {s!r}" for name in DOCS for s in stale if s in _text(name).lower()]
+    # Word-boundaried. A bare substring match reported the correct "19 read-only tools" as the
+    # stale "9 read-only tools" -- the guard crying wolf about a document that was right.
+    stale = [r"hotel menu fixture", r"menu fixture,", r"29 dishes",
+             r"\b8 read-only tools", r"\b9 read-only tools"]
+    found = [f"{name}: {pattern!r}"
+             for name in DOCS for pattern in stale
+             if re.search(pattern, _text(name).lower())]
     assert not found, "the menu is a SQLite database now:\n  " + "\n  ".join(found)
 
 
@@ -130,3 +134,58 @@ def test_every_relative_link_in_the_reader_facing_docs_resolves():
             if not path.exists():
                 broken.append(f"{name}: [{label}]({target})")
     assert not broken, "broken links:\n  " + "\n  ".join(broken)
+
+
+# --- the committed evidence must corroborate itself ------------------------------------------
+
+def test_the_committed_trace_and_worker_log_describe_the_same_call():
+    """This correspondence is the ONLY thing establishing that the committed run came over a phone.
+
+    A trace records latency and fencing but not its input path, and the event vocabulary is
+    identical for a telephone and a laptop microphone. The worker log is telephony-specific. If the
+    two files ever stop matching turn for turn, the claim "this is a real phone call" loses its
+    basis and must be withdrawn -- so it is asserted rather than remembered.
+    """
+    import json
+
+    trace = ROOT / "evidence" / "demo-run.jsonl"
+    log = ROOT / "evidence" / "demo-call-worker.log"
+    assert trace.exists() and log.exists()
+
+    spoken = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines() if line.strip()]
+    from_trace = [
+        (round(e["stt_ms"]), round(e["llm_ms"]), round(e["tts_ms"]), round(e["turn_latency_ms"]))
+        for e in spoken if e.get("type") == "ResponseSpoken"
+    ]
+    from_log = [
+        tuple(int(g) for g in m.groups())
+        for m in re.finditer(r"latency: stt=(\d+) llm=(\d+) tts=(\d+) -> turn=(\d+) ms",
+                             log.read_text(encoding="utf-8"))
+    ]
+    assert from_log, "the worker log has no latency lines"
+    assert from_trace == from_log, "the trace and the worker log are not the same call"
+
+
+def test_the_committed_worker_log_carries_no_caller_number_or_secret():
+    """It is a real call log. The caller's number is personal data and is redacted; a secret would
+    be worse. Checked here rather than trusted, because this file IS published."""
+    log = (ROOT / "evidence" / "demo-call-worker.log").read_text(encoding="utf-8")
+    assert not re.search(r"\+\d{10,15}", log), "an unredacted phone number is in the evidence"
+    assert "<redacted-caller-number>" in log, "the redaction marker should show what was removed"
+    env = ROOT / ".env"
+    if env.exists():
+        for line in env.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line.strip())
+            if m and re.search(r"KEY|SECRET|TOKEN|PASSWORD", m.group(1), re.I):
+                value = m.group(2).strip().strip('"').strip("'")
+                if len(value) >= 8:
+                    assert value not in log, f"{m.group(1)} leaked into committed evidence"
+
+
+def test_the_worker_log_evidences_the_telephony_fixes_it_is_cited_for():
+    """RIME_EVIDENCE Part 6 cites this file for four specific claims. If the lines are not in it,
+    the citation is decoration."""
+    log = (ROOT / "evidence" / "demo-call-worker.log").read_text(encoding="utf-8")
+    for needle in ("aether-hotel", "inbound pump starting", "pumps=1", "frames_failed=0",
+                   "observed_rate=", "inbound audio captured"):
+        assert needle in log, f"the log does not actually show {needle!r}"

@@ -15,9 +15,22 @@ covers setup, the console and the failure paths; that one covers what to say.
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 945 passed, 2 skipped
+python -m pytest -q                 # expect 1206 passed, 2 skipped
 python -m aether.prewarm            # warms the process; prints what it cost
 ```
+
+**One command that shows the whole product working**, if you want a single thing to run rather than
+a suite to read:
+
+```bash
+python scripts/demo_full_call.py                    # no keys, no network, no cost
+python scripts/demo_full_call.py --mode live        # real Gemini, real Rime; costs API calls
+```
+
+One call, 27 turns, a real interruption mid-lookup and three language switches, ending in a printed
+latency table and a PASS/FAIL verdict. It exits non-zero if a stale result is ever spoken, so it can
+be run as a check and not only read. Measured output is in
+[RIME_EVIDENCE.md](RIME_EVIDENCE.md) under *One full call, measured end to end*.
 
 Check `.env` has `RIME_API_KEY`, one LLM key, and the three `LIVEKIT_*` values. Nothing prints them,
 and nothing should.
@@ -46,13 +59,33 @@ Whisper model and its own microphone, competing for CPU with the call and racing
 The worker's own console is the one to use.
 
 ```bash
+python scripts/run_call.py
+```
+
+That is `python -m aether.telephony.agent dev` with its output written to a **new log every time** --
+`logs/worker-<UTC timestamp>.log`, printed as it starts. Nothing to number, nothing to rename, and
+no run can overwrite another. It still prints to your screen exactly as before.
+
+The log ends with a footer naming every trace that worker session produced, so the two halves of the
+evidence are paired **in the file** rather than argued afterwards by matching latencies -- which is
+how `evidence/demo-call-worker.log` had to be tied to its trace. Each of those traces also carries
+`input_path=telephony` on its first event, so it states for itself that the audio came over a phone
+line rather than a laptop microphone.
+
+Any LiveKit CLI argument is forwarded: `python scripts/run_call.py start` for a production run.
+`--log-dir` (or `AETHER_LOG_DIR`) moves the logs; `logs/` is gitignored, so a log you want to keep
+as evidence is copied into `evidence/` deliberately, after a secrets audit.
+
+The plain form still works if you want it, and so does hand-teeing:
+
+```bash
 python -m aether.telephony.agent dev
 ```
 
-If a previous call went wrong, capture the next one so the failure names itself:
+If a previous call went wrong, capture the audio too so the failure names itself:
 
 ```bash
-AETHER_CALL_CAPTURE=call1.wav python -m aether.telephony.agent dev 2>&1 | tee call1.log
+AETHER_CALL_CAPTURE=call1.wav python scripts/run_call.py
 ```
 
 Open `http://127.0.0.1:8760/index.html?ws=8761` **first** — the orb sits at "waiting for a call".
@@ -66,6 +99,8 @@ got, and prints a diagnosis when the call ends.
 | # | Do this | What to point at |
 |---|---|---|
 | 0 | Page open, before dialling | Orb calm grey, **"waiting for a call"**, `not recording` |
+| 0b | Dial. AETHER asks the language FIRST: *"Welcome to AETHER, your hotel manager. Which language would you prefer: English, Hindi, or Spanish?"* | No hotel greeting yet — the greeting has to be in *some* language, so choosing comes first |
+| 0c | Say **"English"** | *"You've reached AETHER, the hotel's manager. How may I help you?"* The rest of the call is English. Say "Hindi" or "Spanish" instead and the voice, recogniser and every answer switch with it |
 | 1 | Dial the number | Orb wakes; the recording strip turns green with the trace path and a live event count |
 | 2 | AETHER greets: *"You've reached AETHER, the hotel's manager. How may I help you?"* | Orb amber, transcript line appears |
 | 3 | *"What starters do you have?"* | Answered **without the LLM**. Evidence strip: no `llm_ms` |
@@ -83,6 +118,8 @@ got, and prints a diagnosis when the call ends.
 | 14 | Point at the event log | Canonical events scrolling as they are written — the log being produced live |
 | 15 | Hang up | Orb returns to "waiting for a call". The page stays connected; nothing reloads |
 | 16 | **Scroll the conversation back up** | The panel scrolls on its own, with a visible bar. The orb and both controls stay put — the console is a fixed frame and only the conversation moves |
+| 16b | Say **"can we switch language"** | It offers the list *in the language being spoken* rather than guessing. Then name one and everything switches |
+| 16c | Ask something the hotel has no record of — *"do you have a rooftop pool?"* | Gemini answers naturally as the duty manager. Point out `llm_ms` is non-zero here and zero on every database answer |
 | 17 | Open the trace file named in the recording strip | The whole conversation, on disk |
 
 If the screen looks small, reset the browser zoom to 100% (Ctrl+0) before recording — the console

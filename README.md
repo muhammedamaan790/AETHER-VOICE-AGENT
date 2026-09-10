@@ -119,7 +119,7 @@ with the `mode=ro` URI, so a write is rejected by the driver, not by a code path
 edited around. There is no tool that creates, cancels or changes anything, and a test asserts that
 every result is stamped `mutates: false`.
 
-Seventeen read-only tools run through the **existing** `ToolRunner`, so fencing, injectable delay
+Nineteen read-only tools run through the **existing** `ToolRunner`, so fencing, injectable delay
 and result identity are not reimplemented:
 
 | | |
@@ -146,16 +146,39 @@ LLM stage measured ~1.8 s that a lookup does not, and a model asked to read back
 can still say a number the hotel does not charge — or an allergen that could put somebody in
 hospital.
 
-That fallback is itself defended. On a real call `base.en` transcribed "dessert" as "Desert", no
-rule matched, and Gemini answered from nothing — inventing three dishes and three prices. The
-system prompt now carries the entire hotel, generated from the database, so a router miss costs a
-slower answer rather than a fabricated one.
+**Two paths, and which one runs is decided by whether the hotel has the fact.**
 
-## Two languages
+| | |
+|---|---|
+| The database holds it | router → tool → template. `llm_ms` is 0, the answer is the row, and the model is never consulted |
+| The database does not | Gemini answers naturally as the duty manager, in the caller's language |
 
-AETHER answers a hotel in India, so it speaks Hindi. The greeting offers it — *"For Hindi, just say
-Hindi"* — the caller asks mid-call, and the voice, the recogniser and the templates all change
-together. *"English"* switches back.
+The second path is deliberate. An earlier version refused anything absent from the database —
+accurate, and useless on a phone, because a duty manager asked about a rooftop pool does not say
+"that is not in my records". So Gemini is now free to answer plausibly about details the hotel has
+no record of.
+
+What protects the facts is the *architecture*, not an instruction: a question the database can
+answer never reaches the model, so there is no stored price for it to contradict. The whole hotel is
+also injected into its prompt, and it is told those values are authoritative — which is what stopped
+the failure that prompted all this, when `base.en` heard "dessert" as "Desert", no rule matched, and
+the model invented three dishes and three prices.
+
+**One exception, and it is a safety exception rather than an accuracy one:** allergens and dietary
+status are never guessed. A wrong opening time is corrected on the next call; a wrong "no, that has
+no nuts" is not.
+
+## Three languages
+
+AETHER answers a hotel in India, so it speaks **English, Hindi and Spanish**.
+
+**The call opens by asking which language**, before any hotel greeting — *"Welcome to AETHER, your
+hotel manager. Which language would you prefer: English, Hindi, or Spanish?"* The greeting itself
+has to be spoken in some language, so greeting first would already have chosen for the caller, and a
+Hindi speaker would sit through an English greeting to be offered Hindi. Once they answer, the
+hotel greeting follows in that language and the call stays there until they ask to switch. Asking to
+switch *without* naming a language offers the list rather than guessing — in whichever language is
+currently being spoken.
 
 **The Hindi answers are still templates over the same database rows.** `llm_ms` stays 0. Handing a
 price to a model to phrase in Hindi would hand it the chance to say the wrong one, in a language
@@ -164,7 +187,7 @@ fewer people in the room can check — which is the exact failure the English pa
 Nothing was assumed. Rime's public catalogue says `mistv3` speaks eng/fra/ger/spa and that `astra`
 speaks no Hindi on any model, so Hindi is a **different model and a different voice** — and since
 `speaker`, `modelId` and `lang` are baked into the `/ws3` connect URL, a second language is a second
-socket, opened only if it is used. `arcana`/`anaya` was chosen by measuring all four Hindi voices;
+socket, opened only if it is used. `coda`/`nadi` is the Hindi voice (Rime deleted the `arcana` model on 2026-09-09, taking `anaya` with it);
 Devanagari over romanised was chosen by listening to both. Both are in
 [RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 1c.
 
@@ -187,12 +210,15 @@ measured, it is written down, and it is why the switch is opt-in.
    speech floor was re-derived from them (35 → 2500). Still **not** separately measured: STT word
    accuracy on narrowband audio.
 
-One thing a trace cannot tell you, and it is worth knowing before quoting any number: **the input
-path is not recorded.** A trace does not say whether its audio came from the telephone or the local
-microphone, and it cannot be inferred afterwards — the event vocabulary is identical on both, and
-`AETHER_SPEECH_FLOOR=2500` is set in `.env` so the telephony-derived floor applies to the laptop
-too. Numbers from `evidence/demo-run.jsonl` are therefore quoted as properties of the pipeline, not
-of the telephone.
+`evidence/demo-run.jsonl` **is a real inbound phone call** — 16 turns, 11 of them answered with no
+model in the path. That it came over the telephone is established by a second committed artifact
+rather than asserted: `evidence/demo-call-worker.log` is the LiveKit/SIP worker's log for the same
+run, and every turn carries identical latencies in both files.
+
+Traces recorded from now on answer that question by themselves: each one carries `input_path`
+(`telephony` or `local_microphone`), stamped once by whichever entry point owns the session. The
+demo evidence above predates the field and was **not** back-filled — a true value written into an
+old file would still be claiming the run observed something it never observed.
 
 **No measurement here is real until it carries a `<from_run>` value.** See
 [RIME_EVIDENCE.md](RIME_EVIDENCE.md).
@@ -202,18 +228,28 @@ of the telephone.
 Rime is the primary and sole TTS in the judged path — there is no fallback TTS by design (RULES.md
 R9.4). Configuration, verified against Rime's live catalog:
 
+**The exact shipped configuration**, in the form the submission checklist asks for:
+
 | | |
 |---|---|
-| Model | `mistv3` |
-| Speaker | `astra` |
-| Language | `eng` |
-| Transport | WebSocket `/ws3`, one persistent socket reused across turns |
-| Format | raw PCM at the AudioGate's own sample rate |
+| Endpoint | `wss://users-ws.rime.ai/ws3` |
+| Region | global (default host; no regional endpoint is selected — see below) |
+| Framework | `websocket-client` over the raw `/ws3` protocol, driven by `aether/audio/rime_ws.py` |
+| Transport | WebSocket `/ws3`, one persistent socket reused across turns, `{"operation":"clear"}` to stop mid-utterance |
+| Audio format | `audioFormat=pcm`, `samplingRate=48000`, mono 16-bit — the AudioGate's own rate, so no decode and no resample |
+| Model / speaker / language | **English** `mistv3` / `astra` / `eng` · **Hindi** `coda` / `nadi` / `hin` · **Spanish** `mistv3` / `isa` / `spa` |
+| HTTP fallback (disclosed) | `RIME_TRANSPORT=http` → `https://users.rime.ai/v1/rime-tts`, MP3. Still Rime. Never silent: `provider` and `transport` ride on every `ResponseSpoken` |
 
-`mistv3` + `astra` + `eng` is confirmed present in Rime's catalog
-(`https://users.rime.ai/data/voices/voice_details.json`: 863 entries, 83 under `mistv3`, with
-`astra` listed under `mistv3`, `mistv2` and `arcana`). Which of `mistv2`/`mistv3` *sounds* better
-has not been judged and is not claimed; `RIME_MODEL` switches between them in one line.
+All three combinations were re-verified against Rime's **live** catalog on 2026-09-10 (594 entries)
+and each was synthesised over the shipped `/ws3` path on the same day — not copied from a stale
+speaker list. That check matters: Rime deleted the entire `arcana` model between 2026-09-08 and
+2026-09-09, taking the Hindi voice this project originally used with it (RIME_EVIDENCE Part 1c).
+
+**Region is not pinned.** The default global host is used; no regional endpoint is configured, and
+no regional latency comparison has been run. Stated rather than implied.
+
+Which of `mistv2`/`mistv3` *sounds* better has not been judged and is not claimed; `RIME_MODEL`
+switches between them in one line.
 
 ## Running it
 
@@ -252,8 +288,10 @@ python -m aether.web
 before registering, and serves the same console for the duration of each call.
 
 ```bash
-python -m aether.telephony.agent dev        # register and wait for calls
-python -m aether.telephony.agent start      # production run
+python scripts/run_call.py                  # register and wait for calls, logging to logs/
+python scripts/run_call.py start            # production run
+
+python -m aether.telephony.agent dev        # the same thing without the managed log
 ```
 
 **Everything else.**
@@ -273,6 +311,27 @@ the handset and the carrier do their own AEC, so this is expected not to apply �
 verified.
 
 Without Rime credentials the agent runs but cannot speak, and says so.
+
+## Third-party services
+
+Everything AETHER depends on, what it is used for, and whether it needs a credential. Nothing else
+leaves the machine.
+
+| Service | Used for | Credential | Runs where |
+|---|---|---|---|
+| **Rime** | All speech output. Primary and sole TTS in the judged path (RULES.md R9.4) | `RIME_API_KEY` | Their API, `wss://users-ws.rime.ai/ws3` |
+| **LiveKit Cloud** | SIP telephony and the room transport that carries call audio | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Their cloud + a local worker |
+| **Google Gemini** | The reasoning fallback, for questions the database cannot answer. `gemini-flash-lite-latest` | `GEMINI_API_KEY` | Their API |
+| Groq / Anthropic / OpenAI | Alternative LLM providers, selected by `LLM_PROVIDER`. Only the selected SDK is imported | that provider's key | Their API |
+
+**Local, no service and no credential:** `faster-whisper` (speech-to-text, CPU), `webrtcvad`
+(voice activity detection), `sounddevice`/PortAudio (microphone and speaker), SQLite
+(`data/aether_hotel.db`, opened `mode=ro`).
+
+**No telemetry and no analytics.** Traces are written to `traces/` on disk and nowhere else.
+The hotel database never leaves the process. The only data that reaches a third party is the text
+sent to Rime to be spoken, and — on the turns the database cannot answer — the caller's transcript
+sent to the LLM.
 
 ## Failure behaviour
 
@@ -299,7 +358,9 @@ Nothing tunes itself.
 
 ## Known limitations
 
-- **The real phone path is unvalidated.** See the evidence model above.
+- **The real phone path is validated but not fully measured.** A real inbound call is committed as
+  `evidence/demo-run.jsonl` with its SIP worker log. What is still NOT measured on it: STT word
+  accuracy on narrowband audio, and live-microphone interrupt-to-silence latency.
 - Every VAD threshold is calibrated on a laptop microphone. Telephony audio is narrowband and
   codec-compressed; `AETHER_SPEECH_FLOOR` is expected to need re-deriving and has not been.
 - `base.en` on narrowband phone audio may be materially worse than on clean 16 kHz. Unmeasured.
@@ -312,12 +373,12 @@ Nothing tunes itself.
 
 ## Status
 
-**945 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**1206 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
 |---|---|
-| Hotel SQLite database, 17 read-only tools, deterministic routing | Salvage / partial-result reuse |
+| Hotel SQLite database, 19 read-only tools, 3 languages, deterministic routing | Salvage / partial-result reuse |
 | Six-class deterministic classifier, wired into the turn path | Suspend/resume |
 | Generation registry, barge-in coordinator, four-layer fence | Evaluator (offline trace scoring) |
 | AudioGate with per-chunk generation tagging | Unsafe-mode control path |
