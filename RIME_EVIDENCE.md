@@ -6,6 +6,71 @@ expectation — see [RULES.md](RULES.md) R10.
 
 ---
 
+## Summary — claim, test, procedure, result, limitations
+
+*The five things the submission checklist asks this file to contain. Everything below this section
+is the detail behind them.*
+
+**THE HARD VOICE CLAIM.** *A stale result never becomes spoken output.* When a caller interrupts,
+AETHER stops queued Rime audio, fences the obsolete generation, and discards any model or tool
+result belonging to it — so the abandoned answer is never spoken, never remembered, and cannot
+re-enter the conversation. The application keeps accepting the caller's audio throughout, including
+while Rime is speaking and while a tool is running.
+
+**ACCEPTANCE TEST**, defined before the demo. The brief's own full-duplex example: inject a fixed
+delay into a tool call, interrupt mid-lookup, change one part of the request, and verify five
+things — queued audio stops, the updated instruction lands, stale results are not spoken, background
+work is cancelled, and the final spoken answer is the answer to the *revised* question. Plus the
+eight pre-registered scenarios A–H in Part 3, and a normal uninterrupted control.
+
+**PROCEDURE** — repeatable, no phone required:
+
+```bash
+python scripts/demo_full_call.py                           # ONE command: the whole claim, end to end
+python -m pytest tests/test_full_duplex_acceptance.py -q   # the brief's example, 9 checks
+python -m pytest tests/test_acceptance.py -q               # scenarios A-H, pre-registered
+python -m pytest -q                                        # everything
+python scripts/verify_rime_hindi.py                        # live Rime, all languages
+python scripts/render_delivery_variants.py                 # delivery A/B clips (Part 1d)
+python scripts/measure_audio_kill.py                       # interrupt -> silence latency
+```
+
+**RESULT.**
+
+| | |
+|---|---|
+| Full-duplex acceptance (the brief's example) | **9/9 pass** |
+| Whole suite | **1206 passed, 2 skipped** (both skips are unbuilt features, not failures) |
+| `ResultLeaked` across **84** trace files | **0** |
+| Committed real phone call | 16 turns; **11 answered with `llm_ms = 0`**; 2 generations fenced; 0 leaks |
+| Turn latency, that call | median **1262 ms** |
+| Rime first audio, that call | median **280 ms** |
+| One track → one pump, second refused | `pumps=1`, `frames_failed=0` (`evidence/demo-call-worker.log`) |
+
+**LIMITATIONS.** Stated because they are the part that is easy to leave out:
+
+- The measured path ends at the first chunk **received from Rime**. Gate queue and device playback
+  are outside it — now measured separately (see *Playback latency*): **warm median 9.2 ms** from
+  enqueue to the device callback, plus a **22 ms** device buffer that is reported and never added.
+  So the 1262 ms above is time-to-first-chunk, not time-to-first-sound, and AETHER claims no
+  ear-to-ear figure anywhere.
+- **STT word accuracy on narrowband telephony audio is not measured.**
+- Hindi and Spanish have **never been exercised over the telephone** — only through the full local
+  pipeline. Browser-quality results do not prove telephone performance.
+- The Hindi and Spanish wording has **not been reviewed by a native speaker**.
+- **The shipped Hindi voice has not been listened to.** Hindi was chosen on `arcana`/`anaya`, and
+  Rime then deleted the whole `arcana` model (Part 1c). The replacement, `coda`/`nadi`, is
+  catalogued and measured but the migration was made on catalogue and latency evidence, not on a
+  listening judgement. Same for Spanish (`mistv3`/`isa`).
+- The delivery A/B clips in Part 1d have been **rendered and measured but not yet listened to**, so
+  the spoken-form rules remain a reasoned choice with evidence available, not a listening result.
+- Rime latency varies by day: English warm first-audio measured 382–508 ms on 2026-09-08 and a
+  1928 ms median on 2026-09-09. Numbers are dated wherever they are quoted.
+- No regional endpoint is pinned, and no regional comparison has been run.
+- Concurrency (two simultaneous callers) is untested.
+
+---
+
 ## Part 1 — Rime configuration
 
 Configured via environment variables, never hardcoded. See [.env.example](.env.example).
@@ -111,7 +176,22 @@ These require a human. Do not mark them complete on the basis of anything an age
 - [x] Confirm the voice ID exists and is available to this account — `astra`
 - [x] Confirm the language code is supported for that model and voice — `eng`
 - [ ] Confirm the account tier and any rate limits that affect a live demo
-- [ ] Record the date of verification and re-check before the demo
+- [x] Record the date of verification and re-check before the demo — **re-checked 2026-09-10**
+
+**Final pre-submission re-check (2026-09-10).** All three shipped combinations were queried against
+the live catalogue again, immediately before finalising. 594 entries — the same count as after Rime
+deleted `arcana`, so nothing moved between 09-09 and 09-10:
+
+| Shipped as | `modelId` / voice | Catalogue says | Present |
+|---|---|---|---|
+| English | `mistv3` / `astra` | `eng` | yes |
+| Hindi | `coda` / `nadi` | `hin` | yes |
+| Spanish | `mistv3` / `isa` | `spa` | yes |
+
+Each voice's catalogued language matches the `lang` AETHER sends for it. This check is cheap and
+must be repeated before any live demo: the `arcana` deletion showed the catalogue can change
+overnight, and a delisted voice keeps answering for a while, so "it still works" is not evidence
+that it is still supported.
 
 **How `mistv3` was verified (2026-09-08).** Queried Rime's live voice catalog at
 `https://users.rime.ai/data/voices/voice_details.json` — 863 entries. Model IDs present and their
@@ -173,6 +253,37 @@ than falling back to spelling it out. Every Hindi template is therefore Devanaga
 R9.5 says Rime settings come from a human verifying the live service, never from an assumption. A
 script is a setting, and this is that verification.
 
+**Scope of that verification.** It was performed on `arcana`/`anaya`, the voice Rime has since
+deleted. It settles the SCRIPT question — Devanagari, not romanised — and the duration measurement
+behind it is reproducible with `scripts/verify_rime_hindi.py`. It does **not** carry over as a
+listening judgement of the voice AETHER now ships (`coda`/`nadi`), which has not been listened to.
+Both facts are listed in the caveats above rather than left for a judge to infer.
+
+### Part 1d — Delivery claims, two text variants (2026-09-10)
+
+The brief asks that a delivery claim be evidenced by holding the model and voice constant, rendering
+**at least two text variants**, saving the clips, and explaining which wording changed the result.
+`render_rime_compare.py` does the opposite experiment — it varies the MODEL against one fixed
+sentence — so `scripts/render_delivery_variants.py` was added for this.
+
+Held constant: `mistv3` / `astra` / `eng`, `/ws3`, PCM @ 48 kHz. Varied: the text only. All runs
+warm (a warm-up render precedes the first pair), so none of these mix a cold socket with a warm one.
+
+| # | Claim in the code | A (shipped) | B (variant) | A audio | B audio |
+|---|---|---|---|---|---|
+| 1 | `say_price` — never hand Rime a digit | "four hundred and twenty rupees" | "420 rupees" | 3050 ms | 2970 ms |
+| 2 | `say_room_number` — a door, not a count | "Room three oh five" | "Room three hundred and five" | 2610 ms | 2830 ms |
+| 3 | `say_time` — never gamble on a colon | "two in the afternoon … twelve noon" | "14:00 … 12:00" | 4330 ms | 3910 ms |
+| 4 | extension read like a phone number | "extension one oh one" | "extension one hundred and one" | 2330 ms | 2850 ms |
+
+Clips: `delivery_1_a.wav` … `delivery_4_b.wav` (gitignored; regenerate with the script).
+
+**What is measured and what is not.** The durations above are measured. Which variant *sounds*
+right is a listening judgement and has NOT been made — length is not quality, and the differences
+these pairs exist to expose are audible rather than numeric. Until somebody listens and records the
+outcome here, the spoken-form rules remain a reasoned design choice with A/B material available,
+not a claim backed by a listening result.
+
 ### Listening comparison — `mistv2` vs `mistv3`
 - [ ] Play both renders of the identical sentence and choose one
 
@@ -225,9 +336,15 @@ Naturalness remains the human judgement above.
 - [ ] Confirm every judged turn used Rime, from the trace, after the demo run
 
 ### Differentiation review
-- [ ] **TODO (human):** Review the current Rime Voice AI project catalog and confirm AETHER is not
-      a close reproduction of an existing project. This review has **not** been performed. Record
-      the date, what was reviewed, and the conclusion here when it is.
+- [x] **Review the Rime Voice AI project catalog** and confirm AETHER is not a close reproduction.
+      **DONE 2026-09-10** against `github.com/rimelabs/rime-dev-projects` — 16 projects, read from
+      the repository's own `data/projects.json`, plus each project's README. 14 readable;
+      `Continuum` and `NOVA` return 404 and were assessed from their catalog summary only.
+      Conclusion and the full comparison are in [JUDGING.md](JUDGING.md); the short version is that
+      interruption is the most common theme in this catalog (8 of 14), **FieldMate implements
+      generation fencing against stale async work independently**, and AETHER's remaining
+      contribution is narrower than previously claimed. A prior review of the AssemblyAI showcase
+      was of the wrong list and has been withdrawn.
 
 ### Secrets hygiene
 - [ ] `.env` is git-ignored and has never been committed (`git log --all -- .env` is empty)
@@ -446,6 +563,81 @@ Superseded configuration — STT is now `base.en` with `beam_size=5`, which has 
 
 ---
 
+### One full call, measured end to end (2026-09-10)
+
+`python scripts/demo_full_call.py --mode live --repeats 3` — three complete calls, **81 answered
+turns**, real Gemini and real Rime over `/ws3`. Text is injected where the recogniser would put it,
+so **STT is not in these numbers**; everything downstream of the transcript is real.
+
+`heard` is what the caller actually waits: transcript in until the first audio of the answer. It is
+`llm_ms + tts_ms`, both stamped by the pipeline. Routing and the SQLite lookup sit between them and
+measure under a millisecond, so they round away — the offline run of the same script shows them at
+0.4–5.7 ms with no network at all.
+
+| | n | avg | median | min | max |
+|---|---|---|---|---|---|
+| **Heard — answered from the database** | 75 | 344.7 | **337.2** | 320.3 | 448.5 |
+| **Heard — answered by the model** | 6 | 1368.8 | **1344.9** | 1282.6 | 1551.7 |
+| Heard — every turn | 81 | 420.5 | 337.6 | 320.3 | 1551.7 |
+| Rime alone, to first audio | 81 | 343.8 | 336.9 | 320.0 | 448.5 |
+| Model alone, when it was used | 6 | 1036.1 | 1016.3 | 944.9 | 1231.7 |
+| Whole turn, including streaming the complete reply | 81 | 1383.6 | 1208.1 | 363.6 | 4057.4 |
+
+**75 of 81 turns were answered with no model call at all.** On those, Rime *is* essentially the
+entire wait — the database costs under a millisecond, so the number a judge should hold AETHER to is
+Rime's own time to first audio.
+
+The last row is deliberately included and deliberately not the headline: `speak()` blocks until the
+whole reply has streamed, which is longer than the caller waits. Two earlier drafts of this script
+reported that figure as the answer latency, which credited the wrong stage by about 320 ms a turn.
+
+Per-language first audio in the same run: English 320–339 ms, Spanish 353–360 ms, Hindi 372–449 ms.
+Hindi is a different model (`coda`) and remains the slowest, consistent with Part 1c.
+
+The same run also carries the interruption and the language switches — see *What one call proves*
+below.
+
+### What one call proves
+
+The script is one call, so these are properties of the same run that produced the table above:
+
+- the caller asked for starters, interrupted mid-lookup and asked for desserts instead;
+- generation `G1` was fenced, **the abandoned turn spoke nothing**, the discard was recorded, and
+  `ResultLeaked` stayed at **0**;
+- the final answer was the desserts answer, from the database;
+- the language changed three times mid-call, and the Rime voice changed with it every time:
+  `nadi`/`coda` for Hindi, `isa`/`mistv3` for Spanish, `astra`/`mistv3` back in English.
+
+---
+
+### Playback latency — the gap between "accepted" and "audible"
+
+Measured with `python scripts/measure_playback_latency.py --repeats 8` on 2026-09-10, Windows 11 /
+Python 3.13.2, WASAPI output device 8 @ 48 kHz, blocksize 480. No model, no network, no Rime: this
+isolates the buffering the application itself adds.
+
+| Enqueue → device callback | Value |
+|---|---|
+| **Cold** (first enqueue after `open()`, includes output-stream spin-up) | 221.4 ms |
+| **Warm** (n=8) | min 5.9 / median 9.2 / max 12.6 ms |
+| Device buffer after that (`stream_output_latency_ms`) | 22.0 ms — reported, never added |
+
+**Why this number exists.** Every other latency figure in this document ends at `first_audio`: the
+moment the TTS client accepts Rime's first chunk. That is upstream of the output queue and of the
+device buffer, so it is *not* "when the caller heard it". `TurnTiming.output_latency_ms` ends at
+`first_output` instead — stamped inside the PortAudio callback the moment it hands real samples for
+that generation to the device — and the table above is the difference between the two.
+
+**What is still excluded, and stays excluded.** The device's own 22 ms buffer sits after the last
+point this process can observe, and the telephone network sits after that. Neither is folded in:
+adding an unobserved constant to a measured number makes the result look more precise than it is.
+So AETHER does not claim an ear-to-ear figure anywhere — it claims what it can stamp.
+
+Cold and warm are reported separately and never averaged. A caller pays the spin-up once per
+session; averaging it across turns would present a one-off setup cost as a per-turn cost.
+
+---
+
 ### Prewarm — call setup cost removed before the caller waits
 
 Measured with `python -m aether.prewarm` on 2026-09-08, Windows 11 / Python 3.13.2, warm disk:
@@ -495,13 +687,23 @@ Full pipeline construction, for context (`Day1Spike`, warm, no PortAudio streams
 measured from real calls. What is still *not* separately measured is STT word accuracy on
 narrowband audio, and the interruption table at the end of this part still carries placeholders.
 
-Scope note, because it is easy to overclaim here: the committed run in
-[`evidence/demo-run.jsonl`](evidence/) is 16 turns of real speech through the real pipeline, but
-**the trace does not record whether its audio came from the telephone or the local microphone**, and
-it cannot be inferred afterwards — the event vocabulary is identical on both paths, and
-`AETHER_SPEECH_FLOOR=2500` is set in `.env` so it applies to both. Its latency numbers are therefore
-quoted as pipeline properties, not as telephony properties. The RMS measurements in this part *are*
-telephony, from calls identified as such at the time.
+**The committed run is a phone call, and that is now provable.** Earlier revisions of this part
+said its input path could not be established, because a trace records latency and fencing but not
+whether audio arrived from a handset. The worker log for the same run was found afterwards and is
+committed as [`evidence/demo-call-worker.log`](evidence/): all sixteen turns carry identical
+`stt`/`llm`/`tts`/`turn` latencies in both files, and the log is unambiguously the LiveKit/SIP
+worker (`agent name : aether-hotel`, `[4/7] inbound pump starting`, `pumps=1`,
+`inbound audio captured`). The caller's number is redacted; no secret appears in it.
+
+What the log establishes directly, on a real call rather than in a test:
+
+| Claim | Line in the log |
+|---|---|
+| One track produces one pump, and a second subscription is refused | `track already has a pump (already-subscribed); not starting a second`, then `pumps=1` |
+| The inbound pump survives the call without dropping frames | `frames_failed=0` |
+| Diagnostics report the rate actually observed | `source_rate=48000  observed_rate=48000  vad_rate=16000` |
+| Optional call capture works, and is off unless asked for | `inbound audio captured: call3.wav` |
+| Deterministic answers really are free of the model, over the phone | 11 of 16 turns logged `llm=0` |
 
 The first attempt reached the worker and AETHER never replied; four defects were found and fixed
 (entrypoint deadlock on an Event only teardown could set; 9051 ms of blocking pipeline construction

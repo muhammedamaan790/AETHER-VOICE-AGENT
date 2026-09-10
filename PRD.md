@@ -46,6 +46,8 @@ engine is not hotel-specific, and `aether/warehouse/` remains as a second domain
 - G3. Preserve reusable work rather than restarting from zero.
 - G4. Produce a machine-checkable event trace that proves G1–G3 happened.
 - G5. Speak every judged turn through Rime, observably.
+- G6. Answer in the caller's own language -- English, Hindi or Spanish -- chosen by them before
+  the hotel greeting, with the same deterministic facts in each.
 
 ## 4. Non-goals
 
@@ -61,7 +63,18 @@ engine is not hotel-specific, and `aether/warehouse/` remains as a second domain
 ### FR-1 Conversation
 - FR-1.1 Answer general/conversational questions via the LLM knowledge path.
 - FR-1.2 Answer hotel questions via deterministic tools over `data/aether_hotel.db`, read-only,
-  with no model in the path. (`aether/warehouse/` keeps a second, mutable domain under test.)
+  with no model in the path, in every supported language. (`aether/warehouse/` keeps a second,
+  mutable domain under test -- the read-only hotel cannot exercise fenced *mutation*.)
+- FR-1.3 Answer general, non-hotel questions (definitions, arithmetic, small talk) normally via
+  the LLM. Refusing them is a defect, not caution.
+- FR-1.4 **A hotel detail the database does not hold is answered by the LLM, naturally**, as the
+  duty manager would. It must not refuse, say "not in the database", or redirect to the menu. This
+  is a deliberate reversal of an earlier requirement that it decline such questions.
+- FR-1.5 **The database wins whenever it can answer.** A question with a deterministic route never
+  reaches the LLM, so a stored price cannot be contradicted. Enforced by routing order, not prompt.
+- FR-1.6 **Allergens and dietary status are never guessed** — the one exception to FR-1.4. Where the
+  database holds the answer it is given deterministically; where it does not, the caller is told it
+  will be checked with the kitchen.
 
 ### FR-2 Full-duplex audio
 - FR-2.1 The user microphone stays active while the agent is speaking.
@@ -103,6 +116,19 @@ engine is not hotel-specific, and `aether/warehouse/` remains as a second domain
 - FR-8.1 All judged spoken turns use Rime.
 - FR-8.2 The active speech provider is observable at runtime and in the trace.
 - FR-8.3 If any fallback provider exists, its use is disclosed, never silent.
+
+### FR-8b Language
+- FR-8b.1 The call opens by asking which language, before any hotel greeting. The greeting must be
+  spoken in *some* language, so greeting first would choose for the caller.
+- FR-8b.2 Supported: English, Hindi, Spanish. The caller's choice persists for the call.
+- FR-8b.3 The caller is never asked to choose again once they have chosen.
+- FR-8b.4 A mid-call request to switch that NAMES a language switches. One that does not name one
+  offers the list, in the language currently being spoken, and switches only on a clear choice.
+- FR-8b.5 Switching moves the Rime voice **and** model, the Whisper model **and** language code, the
+  response templates, and the instruction given to the LLM. Leaving any one behind is a defect.
+- FR-8b.6 **One source of hotel facts for all languages** (`data/aether_hotel.db`). A language
+  supplies translations, number/time/date formatting and templates -- never its own copy of a price.
+- FR-8b.7 A new call starts from language selection. The previous call's language must not carry over.
 
 ### FR-9 Observability
 - FR-9.1 One canonical event vocabulary is used by the runtime, the trace, the tests, and the

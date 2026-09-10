@@ -17,7 +17,11 @@ raise it rather than quietly working around it.
 
 ## R2 — Fail safe under uncertainty
 
-- R2.1 Below the classifier confidence threshold, take the fencing branch.
+- R2.1 When the classifier does not recognise an utterance, take the fencing branch.
+  *(Amended 2026-09-08: there is no confidence threshold. The classifier is closed-set and
+  whole-utterance -- it either matches a table or falls through to `REPLACEMENT`, which fences.
+  The fail-safe is the default branch, not a comparison. `AETHER_CLASSIFIER_CONFIDENCE_THRESHOLD`
+  is marked dead in `.env.example`.)*
 - R2.2 When a result's generation cannot be determined, discard it.
 - R2.3 Silence is preferable to speaking something possibly stale.
 
@@ -67,6 +71,33 @@ raise it rather than quietly working around it.
 - R8.3 Never fabricate or inflate a salvage count to make the system look smarter.
 - R8.4 Salvage happens at supervisor transition time. It is never a fenced generation's result
   sneaking through the Output Gate.
+
+## R8b — Hotel facts, and where an answer may come from
+
+*Added 2026-09-10. This rule states the current product decision and deliberately replaces an
+earlier, stricter one.*
+
+- R8b.1 **`data/aether_hotel.db` is the single source of hotel facts.** There is exactly one facts
+  database. Per-language fact stores are forbidden; a language supplies translations, number, time
+  and date rendering, and templates — never its own copy of a price.
+- R8b.2 **If the database can answer, the database answers.** A question with a deterministic route
+  never reaches the LLM: `aether.hotel.router` intercepts it and a template renders the row. This is
+  the mechanism, not an instruction — it is what makes it impossible for the model to quote a price
+  the hotel does not charge.
+- R8b.3 **If the database cannot answer, the LLM may.** It is expected to reply naturally and
+  plausibly as the duty manager, in the caller's language. It must NOT say "that is not in the
+  database", refuse, or redirect to the menu. *This reverses the previous rule that the model may
+  never state an unlisted hotel fact: that rule was correct about accuracy and wrong about the
+  product — a duty manager who answers "not in my records" is useless on a telephone.*
+- R8b.4 **The facts it IS given are authoritative.** The model may not contradict, restate or alter
+  any price, time, name or allergen that appears in the hotel data injected into its prompt.
+- R8b.5 **One safety exception: allergens and dietary status are never guessed.** Not whether a dish
+  contains nuts, dairy, gluten, shellfish, fish or eggs, and not whether it is vegetarian or vegan.
+  A wrong opening time is corrected on the next call; a wrong allergen answer is not. Where the
+  database holds the answer it is given deterministically; where it does not, the caller is told it
+  will be checked with the kitchen.
+- R8b.6 Every deterministic capability exists in **all supported languages**. An English-only hotel
+  capability is a defect.
 
 ## R9 — Rime
 

@@ -17,6 +17,30 @@ only the conversation.
 
 ---
 
+## The six things the recorded demo must contain
+
+The brief lists them, and a demo that is enjoyable but misses one loses the mark. Each is tied to a
+moment below, with a time budget that fits the **4–5 minute** limit. Record against this checklist,
+not against the transcript.
+
+| # | The brief asks for | Where it happens | Budget |
+|---|---|---|---|
+| 1 | **Target user and problem** | Opening line to camera: *"This is a hotel's phone line. The caller has no screen — no menu to tap, no price list to scroll back to. Speech is the only surface."* | 0:00–0:25 |
+| 2 | **Normal end-to-end flow** | Turns 1–6: menu, price, availability, allergens, vegetarian | 0:25–2:00 |
+| 3 | **The selected hard voice problem** | Named out loud before turn 6: *"the hard part is what happens when the caller does not let the turn finish — a stale answer must never be spoken"* | 1:45–2:00 |
+| 4 | **One deliberate stress / failure case** | **Talk over turn 6.** The barge-in beat below. Speech stops mid-word; the transcript marks the answer *"discarded — never spoken"*; turn 7 is answered normally | 2:00–2:40 |
+| 5 | **The result or measurement** | Evidence strip on screen: `stale leaks: 0`, and no `llm_ms` on any of the twelve turns. Say the number: **337 ms median** to first audio on a database answer, **1345 ms** when the model is used | 2:40–3:30 |
+| 6 | **Which speech provider is active** | Point at the console's voice badge — it reads the live value, not a caption: `astra · mistv3`. Say *"Rime, model mistv3, voice astra, language eng, over the /ws3 WebSocket."* Switch to Hindi and it becomes `nadi · coda` on camera | 3:30–4:15 |
+
+**#4 and #6 are the two that get skipped**, because one needs nerve and the other looks like a
+detail. #4 *is* the submission — everything else is context for it. #6 is a stated requirement with
+an exact answer, and the console shows it live so it cannot be a claim over a still frame.
+
+If the recording runs long, cut turns 2, 9 and 10 first: they are the most repetitive and the least
+load-bearing. Never cut 6→7, which is the barge-in beat, or the evidence strip.
+
+---
+
 ## The call
 
 <!-- SCRIPT:BEGIN -->
@@ -38,8 +62,14 @@ only the conversation.
 
 <!-- SCRIPT:END -->
 
-Before turn 1, AETHER opens with the fixed greeting: *"You've reached AETHER, the hotel's manager.
-For Hindi, just say Hindi. How may I help you?"*
+Before turn 1, AETHER opens by asking which language:
+
+> *"Welcome to AETHER, your hotel manager. Which language would you prefer: English, Hindi, or
+> Spanish?"*
+
+Say **"English"** and it answers with the hotel greeting -- *"You've reached AETHER, the hotel's
+manager. How may I help you?"* -- and the call continues in English from there. Say "Hindi" or
+"Spanish" instead and the voice, the recogniser and every answer below switch with it.
 
 That middle clause is the whole discoverability of the second language, and it is worth letting the
 judges hear rather than explaining. **If you want the Hindi beat**, say *"Hindi"* at any point: the

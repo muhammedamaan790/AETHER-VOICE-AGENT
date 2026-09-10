@@ -283,9 +283,10 @@ asserting the result is discarded, `ResultLeaked` is absent, and nothing enters 
 
 Two task paths, one supervisor:
 
-- **Hotel tools** — deterministic, read-only lookups over `data/aether_hotel.db` via
+- **Hotel tools** — nineteen deterministic, read-only lookups over `data/aether_hotel.db` via
   `aether/hotel/` (menu with category, price, diet, allergens and availability; fifty rooms and
-  five room types; services; check-in and check-out times; reservations). The database is opened
+  five room types; services; check-in and check-out times; reservations; and fifteen hotel policies
+  covering parking, wi-fi, breakfast, pets, smoking, payment, cancellation, transfers and more). The database is opened
   `mode=ro`, so a write is refused by SQLite rather than by convention. Tools accept an injectable
   delay so delayed-result races are reproducible. The warehouse fixture (`aether/warehouse/`)
   remains as the second domain that proves the runner is domain-agnostic — and, because it is the
@@ -326,6 +327,60 @@ is merely *helpful* — cached context, a hint, a secondary source — it is rac
 and degrades to empty rather than delaying the turn. The primary tool call is never capped that
 way: a slow tool is the situation AETHER exists to handle, and the answer to it is interruption and
 continuity, not a timeout that hides the problem.
+
+## 9b. Languages
+
+AETHER answers in **English, Hindi or Spanish**, and the caller chooses which before hearing any
+hotel greeting. The greeting has to be spoken in some language, so greeting first would already have
+made the choice for them.
+
+**One set of facts, three sets of words.** `data/aether_hotel.db` is the only place a price, a room
+status or an allergen exists. A language is a *renderer* over that data, never a second copy of it:
+
+    data/aether_hotel.db          the only source of hotel facts
+      |
+      +-- aether/hotel/tools.py       English templates
+      +-- aether/hotel/tools_hi.py    Hindi templates      + speech_hi.py (numbers, times, dates)
+      +-- aether/hotel/tools_es.py    Spanish templates    + speech_es.py
+
+`aether/lang/` holds one frozen `Language` record per language -- Rime model and voice, Whisper
+model and code -- and nothing else in the codebase learns what a language *is*; it asks. Adding a
+fourth is a record plus a renderer, not a search for `if language ==`.
+
+Three things move together on a switch, and leaving any one behind is the bug to watch for:
+
+| | why it must change |
+|---|---|
+| Rime voice **and model** | `speaker`, `modelId` and `lang` are baked into the `/ws3` connect URL, so one socket is one voice. Hindi is `coda`; English and Spanish are `mistv3` |
+| Whisper model **and code** | `base.en` is monolingual and cannot transcribe Hindi or Spanish at all. The multilingual model is loaded lazily, so an English-only call never pays for it |
+| The renderer, and the model's own instructions | so a router miss is answered in the caller's language rather than whichever the model prefers |
+
+Deterministic answers stay deterministic in every language: `llm_ms` is 0 for a hotel fact in Hindi
+exactly as in English, because the same row is rendered by a different template rather than phrased
+by a model.
+
+### Where an answer comes from
+
+    caller's words
+        |
+        +-- router finds a deterministic route?
+        |     YES -> ToolRunner -> data/aether_hotel.db -> language renderer -> Rime
+        |            llm_ms = 0. The model is never consulted, so it cannot
+        |            contradict a stored price.
+        |
+        |     NO  -> Gemini, told the active language and given the whole hotel
+                     -> answers naturally as the duty manager -> Rime
+
+**The precedence is structural, not instructed.** "If the database can answer, the database
+answers" holds because the router runs first and returns before the model is reached — not because
+the prompt asks the model to defer. That is why a caller cannot be quoted a price the hotel does not
+charge, in any language.
+
+For anything the hotel has no record of, the model is *expected* to answer plausibly rather than
+refuse (RULES.md R8b.3). The one carve-out is allergens and dietary status, which are never guessed
+(R8b.5) — a wrong opening time is corrected next call; a wrong allergen answer is not.
+
+---
 
 ## 10. Stack and concurrency model
 

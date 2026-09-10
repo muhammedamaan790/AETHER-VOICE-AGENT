@@ -3,9 +3,11 @@
 Authoritative state of the project. Read this first after any context loss. If this file disagrees
 with anyone's recollection, this file wins until it is updated with evidence.
 
-**Last updated:** 2026-09-07 — Rime WS3 streaming, interruption subdomain, warehouse + tools,
-adverse-audio sweep, and two credential-disclosure fixes. The realtime voice path is built and
-tested; the continuity engine (classifier, supervisor, evaluator) is not started.
+**Last updated:** 2026-09-09 — hotel SQLite database as the single source of truth, 19 read-only
+tools, three languages (English, Hindi, Spanish) sharing that one database, caller-chosen language
+before the hotel greeting, and a `hotel_policies` table for the questions a hotel line is actually
+asked. The realtime voice path and the continuity engine are both built and tested; salvage and the
+unsafe-mode control path remain deliberately unbuilt.
 
 ---
 
@@ -27,9 +29,18 @@ Do not reopen these without evidence. Reopening one is a recorded decision, not 
 6. **Duck is not stop.** Duck is immediate on speech onset; full stop only on confirmed meaningful
    interruption.
 7. **Rime is the primary and sole TTS in the judged path**, and the active provider is observable.
+7b. **One hotel facts database, three language renderers.** `data/aether_hotel.db` is the only
+    place a price, room or policy lives; English, Hindi and Spanish render the same rows. The
+    caller chooses the language before the hotel greeting.
+7c. **Database wins when it can answer; otherwise the model answers naturally.** A question with
+    a deterministic route never reaches the LLM. One absent from the database does, and the
+    model is expected to answer plausibly rather than refuse — reversing an earlier rule
+    (RULES.md R8b). Allergens and dietary status are the one thing never guessed.
 8. **General Q&A stays supported** as a capability and a test surface, and must not turn the
    architecture into a generic assistant platform.
-9. **Warehouse is the demo fixture**, deliberately tiny and deterministic. Not a product, not a WMS.
+9. **The hotel is the product**, backed by `data/aether_hotel.db` (read-only). The warehouse
+   fixture survives only as the *mutable* store that keeps fenced-mutation under test -- the
+   read-only hotel structurally cannot exercise "the mutation never landed".
 10. **One canonical event vocabulary**, shared by runtime, trace, tests, and evaluator.
 11. **Tier-1 `NEW_TASK` fences the active task mechanically.** No suspend, and no claim of suspend.
 12. **Never invent numbers.** Unmeasured values are `<from_run>` placeholders.
@@ -93,7 +104,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-08: 945 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1206 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -118,7 +129,7 @@ each names itself.
 | `aether/spike.py` — the voice loop | Implemented and **run end to end headless** (`scripts/bench_turn.py`: WAV → STT → Gemini → Rime WS3 → AudioGate, 3/3 turns spoke), and since run with a live microphone. Now also carries the classifier hook and the listening controls. **Never run over a real phone call** |
 | `aether/classify/` — six-class classifier | **Implemented, tested, wired (2026-09-08).** Closed sets, whole-utterance matching, no model, no confidence score. Runs after STT and **before** `begin_turn`, because allocation is what fences. `BACKCHANNEL` and `STATUS_QUERY` withhold a turn entirely; `CANCEL` fences with no successor; the other three proceed and label `TaskReplaced`. Anything unrecognised falls to `REPLACEMENT`, which fences |
 | Supervisor transitions | **Implemented for all six classes** in `Day1Spike.handle_utterance` / `_resolve_without_a_turn`, emitting `InterruptionClassified`, `BackchannelDetected`, `TaskReplaced` and `CancellationResolved`. There is still no separate supervisor *module*: the transitions live at the turn boundary, and `GenerationRegistry` remains the authority. **Salvage is not implemented and is not faked** |
-| `aether/hotel/` — database, tools, router | **Implemented, tested, wired (2026-09-07/08; SQLite from 2026-09-08).** `data/aether_hotel.db` is the source of truth: 12 menu items across five categories, 50 rooms, 5 room types, 6 services, hotel timings and 3 reservations. Opened `mode=ro`, so writes are refused by the driver. 17 read-only tools through the existing `ToolRunner`; deterministic keyword/slot routing with spoken templates. Hotel facts never reach the LLM. Replaced a hand-written 29-dish fixture — prices moved, and the spice column does not exist, so `spice_of`/`find_by_spice` were removed rather than faked |
+| `aether/hotel/` — database, tools, router | **Implemented, tested, wired (2026-09-07/08; SQLite from 2026-09-08).** `data/aether_hotel.db` is the source of truth: 12 menu items across five categories, 50 rooms, 5 room types, 6 services, **27 policy topics**, hotel timings and 3 reservations. Opened `mode=ro`, so writes are refused by the driver. **19** read-only tools through the existing `ToolRunner` (the original 17 plus `hotel_policy` and `hotel_info`); deterministic keyword/slot routing with spoken templates in **three** languages. A hotel fact the database holds never reaches the LLM -- the router intercepts first. A question it does NOT hold does reach the LLM, which may answer plausibly (RULES.md R8b). Replaced a hand-written 29-dish fixture — prices moved, and the spice column does not exist, so `spice_of`/`find_by_spice` were removed rather than faked |
 | `aether/bridge/`, `aether/telephony/` — LiveKit transport | **Implemented, tested against synthetic audio only.** `InboundBridge`/`OutboundBridge` carry a transport into the unchanged pipeline; the worker uses `livekit.rtc` directly and never `AgentSession`. **Calls now connect, are answered, are understood and are transcribed** — telephony audio measured from 28 utterances across three calls, which is what moved the speech floor from 35 to 2500. STT word accuracy on narrowband audio is still not separately measured |
 | `aether/prewarm.py` — process warm-up | **Implemented, measured.** 3810 ms cold, 672 ms warm; run before the worker registers |
 | `aether/telephony/diagnostics.py` — failure-stage report | **Implemented, tested.** Names the first stage that produced nothing, from bridge counters and the trace |
@@ -251,6 +262,16 @@ faster than the voice path, but the sub-millisecond figure is the software path 
 - Device latency: WASAPI 22.0 ms vs MME 100.0 ms vs DirectSound 120.0 ms (48 kHz, blocksize 480).
 - WebRTC VAD hangover at aggressiveness 2: ~6 frames (~120 ms) of trailing silence still reported
   as speech. Utterance-end detection is therefore ~620 ms, not the nominal 500 ms.
+- **Playback latency** (`scripts/measure_playback_latency.py --repeats 8`, 2026-09-10, WASAPI
+  device 8 @ 48 kHz, blocksize 480): enqueue -> device callback, **cold 221.4 ms**, **warm n=8:
+  min 5.9 / median 9.2 / max 12.6 ms**; device buffer 22.0 ms reported separately and never added.
+  Cold includes the output stream spinning up, which a caller pays once per session -- averaging it
+  with the warm runs would present a setup cost as a per-turn cost, so the two are never combined.
+  This is the piece every other latency figure omits: `turn_latency_ms` ends at `first_audio` (the
+  TTS client accepting Rime's first chunk, upstream of the output queue), while
+  `TurnTiming.output_latency_ms` ends at `first_output`, stamped inside the PortAudio callback.
+  AETHER still claims no ear-to-ear number: the device buffer and the phone network sit after the
+  last point this process can observe.
 
 ---
 
@@ -426,6 +447,40 @@ Still `<from_run>` and must not be quoted:
   The noise-gate tests now pin `offset_frames` so they keep testing the gate rather than the
   endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
 
+### Fixed 2026-09-10
+
+- **Twelve hotel facts a caller asks for and the database could not answer.** Swimming pool, gym,
+  spa, extra bed, doctor on call, taxi booking, conference room, power backup, restaurant hours,
+  bar hours, deposit and ID at check-in. Each used to fall through to the model -- permitted by
+  R8b.3, but a fact the hotel definitely knows should not be improvised differently on two calls.
+  27 policy topics now, one authoritative row each, rendered in all three languages.
+  Three of them needed their own branch rather than the generic template: "Yes, we offer the bar
+  free of charge from five in the evening" is what the template produces for an opening time, and
+  the accepted ID documents are an "or", not the "and" that `say_list` builds -- a checklist would
+  tell a caller to bring all three. Router keywords for `restaurant` are all time-cued
+  (`restaurant open`, `restaurant timings`) because policy words are matched BEFORE menu routing,
+  and a bare "restaurant" would swallow "what is on the restaurant menu" -- the same defect
+  "do you have room for this?" produced on a real call. Pinned by
+  `tests/test_hotel_policies_expanded.py` (82 tests), which tests the theft case explicitly.
+  Two fixtures elsewhere named "swimming pool" and "gym" as examples of things the database has no
+  row for; both were moved to topics that are genuinely absent, and the absent-policy test now
+  DERIVES its topic from the store so it cannot silently become a test of something else.
+
+- **A trace could not say where its audio came from.** Latency and fencing were recorded; the input
+  path was not, so a trace on its own could not distinguish a real telephone call from a laptop
+  microphone -- the single most important thing a judge wants to know about a piece of evidence.
+  `Trace.input_path` now carries `telephony` or `local_microphone`, declared by whichever entry
+  point owns the session and stamped ONCE, on the next event after it is declared. "Next event"
+  rather than "first event" is deliberate: telephony learns its path after pipeline setup has
+  already emitted, and a first-event-only rule would have silently recorded nothing there -- which
+  is indistinguishable from a run that was never told, and so would have destroyed the field's
+  meaning. Never `browser`: the web console is a viewer over the same local-microphone session the
+  CLI runs, and no audio travels from the browser, so "browser" would name the screen an operator
+  was watching rather than the route the caller's voice took. `evidence/demo-run.jsonl` was NOT
+  back-filled -- writing a true value into an old file would still be claiming the run observed
+  something it never observed. Pinned by `tests/test_trace_input_path.py`, including an AST check
+  that each entry point really assigns it (a grep would be satisfied by a docstring).
+
 ### Standing limitations
 
 - **The real phone path is only partially validated.** Calls connect, are answered, are understood
@@ -578,11 +633,34 @@ Still `<from_run>` and must not be quoted:
 Not doable by an agent. Tracked in [RIME_EVIDENCE.md](RIME_EVIDENCE.md) Part 2.
 
 1. **Rime catalog verification** — endpoint, model, voice, language, account tier, rate limits.
-   **Not done.** Every Rime config value in this repo is a placeholder.
+   **Mostly done; two items remain human-only.** The endpoint, and all three shipped
+   model/voice/language combinations, were queried against Rime's live public catalogue and
+   re-checked on **2026-09-10** (594 entries): `mistv3`/`astra`/`eng`, `coda`/`nadi`/`hin`,
+   `mistv3`/`isa`/`spa` are all present, and each voice's catalogued language matches the `lang`
+   AETHER sends. **Still not done: account tier and rate limits**, which the public catalogue does
+   not expose, and **a listening judgement of the Hindi and Spanish voices by a speaker of each** —
+   neither can be established by an agent. The earlier note here ("every Rime config value is a
+   placeholder") described the state before the key existed and is no longer true.
 2. **Organizer / event preflight** — eligibility, registration, submission format, deadline, demo
    length, expected evidence. **Not done.**
-3. **Differentiation review** — review the current Rime Voice AI project catalog and confirm AETHER
-   is not a close reproduction of an existing project. **Not done.**
+3. **Differentiation review** — **REDONE 2026-09-10 against the real catalog**, written up in
+   JUDGING.md. The catalog is `github.com/rimelabs/rime-dev-projects` (the user supplied the link
+   the PDF hides): **16 projects**, read from its own `data/projects.json`. 14 have public source;
+   **Continuum** and **NOVA** are 404 and were assessed from their summaries only — Continuum is
+   the nearest by description and its code is unreadable, which is stated rather than glossed.
+   The earlier pass reviewed the AssemblyAI showcase as the closest reachable equivalent. **That
+   was the wrong list**, and its finding ("not one addresses interruption, telephony or
+   multilingual routing") was **false** against the real catalog and has been withdrawn.
+   What the real catalog contains: interruption/barge-in in **8 of 14**, multilingual in **6**,
+   a measured latency figure in **5**, a test suite in **4**, telephony in **2**.
+   **FieldMate implements turn/generation fencing against stale async work** -- the same idea as
+   AETHER's, arrived at independently -- and is faster (~600 ms warm end-to-end vs AETHER's
+   ~1.26 s). **Saathi** uses Rime Coda/`nadi` for Hindi over real Twilio calls, the same voice
+   AETHER uses. **RoutineCraft AI** claims barge-in halting playback in <60 ms.
+   AETHER's remaining, narrower contribution: the invariant is about **spoken output** rather than
+   state and reaches into the audio gate; interruption is split into **six classes** rather than
+   treated as one event; conversation state commits only at the spoken boundary; tool results are
+   fenced as well as model output; over a real PSTN call in three languages.
 4. **Fallback disclosure decision** — decide whether any TTS fallback exists and disclose it
    explicitly if so.
 5. **Credentials** — obtain and place API keys in a local `.env`. Never committed.

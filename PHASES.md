@@ -99,14 +99,21 @@ made silently:
 
 ### Beyond the original plan (2026-09-08)
 
-- [x] Hotel SQLite database, 17 read-only tools, deterministic routing — `aether/hotel/`
+- [x] Hotel SQLite database, 19 read-only tools, deterministic routing — `aether/hotel/`
+- [x] Three languages (English, Hindi, Spanish) over ONE facts database — `aether/lang/`,
+      `aether/hotel/tools_hi.py`, `aether/hotel/tools_es.py`
+- [x] Caller chooses the language before the hotel greeting — `Day1Spike.begin_language_selection`
+- [x] `hotel_policies` table: parking, wi-fi, breakfast, pets, payment, cancellation and more
 - [x] LiveKit↔AETHER audio bridges, synthetic-verified — `aether/bridge/`
 - [x] Telephony worker: lifecycle, greeting, teardown — `aether/telephony/`
 - [x] One listening toggle + separate INTERRUPT, through the real bridge
 - [x] Siri-style console: nine orb states, transcript, evidence strip, reconnect recovery
 - [x] Call failure-stage diagnostics — `aether/telephony/diagnostics.py`
 - [x] Process prewarm, measured — `aether/prewarm.py`
-- [ ] **One real phone call.** Nothing above is evidence about telephony (RIME_EVIDENCE Part 6)
+- [x] **Real phone calls.** Calls connect, are answered, are understood and are transcribed;
+      telephony audio measured over 28 utterances across three calls, which moved the speech
+      floor 35 -> 2500 (RIME_EVIDENCE Part 6). STT word accuracy on narrowband audio is still
+      not separately measured
 - [ ] *(optional)* Spoken-prefix recovery — only if the core is already solid
 - [ ] *(optional)* Single-slot suspend/resume — only if the core is already solid
 
@@ -138,7 +145,7 @@ The demo must show:
 3. Task continuity
 4. Refinement / replacement / status / cancel
 5. Stale-result protection
-6. The warehouse scenario
+6. The hotel scenario, in the caller's chosen language
 7. Rime visibly active
 
 Re-check before recording: Rime catalog and preflight, credentials, repository secrets, screenshots,
