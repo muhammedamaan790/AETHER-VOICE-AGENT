@@ -40,7 +40,7 @@ python scripts/measure_audio_kill.py                       # interrupt -> silenc
 | | |
 |---|---|
 | Full-duplex acceptance (the brief's example) | **9/9 pass** |
-| Whole suite | **1206 passed, 2 skipped** (both skips are unbuilt features, not failures) |
+| Whole suite | **1260 passed, 2 skipped** (both skips are unbuilt features, not failures) |
 | `ResultLeaked` across **84** trace files | **0** |
 | Committed real phone call | 16 turns; **11 answered with `llm_ms = 0`**; 2 generations fenced; 0 leaks |
 | Turn latency, that call | median **1262 ms** |

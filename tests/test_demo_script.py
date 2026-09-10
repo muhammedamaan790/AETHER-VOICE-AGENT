@@ -51,9 +51,33 @@ def _rows(marker: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _rows_with_language(marker: str) -> list[tuple[str, str, str]]:
+    """(language code, question, answer) from a table whose first column is the language."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = text.split(f"<!-- {marker}:BEGIN -->", 1)[1].split(f"<!-- {marker}:END -->", 1)[0]
+
+    rows: list[tuple[str, str, str]] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or set(line) <= set("|- "):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) != 3 or cells[0].lower() == "lang":
+            continue
+        rows.append((cells[0], cells[1], cells[2]))
+    return rows
+
+
 SCRIPT_TURNS = _rows("SCRIPT")
 BANK_TURNS = _rows("BANK")
 ALL_TURNS = SCRIPT_TURNS + BANK_TURNS
+
+# The Hindi beat, checked exactly as hard as the English. Its table carries a language column, so
+# the rows come back as (language code, question, answer) and are rendered by that language's
+# renderer. Without this the Hindi answers on the sheet would be the one hand-written thing on the
+# page -- and hand-written is precisely what this file exists to prevent, in the language fewest
+# people in the room can check.
+HINDI_TURNS = _rows_with_language("HINDI")
 
 
 def _spoken(said: str) -> str:
@@ -68,8 +92,42 @@ def _spoken(said: str) -> str:
 
 def test_the_script_was_found_and_is_not_empty():
     """A parser that silently matches nothing would make every test below vacuously pass."""
-    assert len(SCRIPT_TURNS) == 12, f"expected the twelve-turn call, parsed {len(SCRIPT_TURNS)}"
+    assert len(SCRIPT_TURNS) == 7, f"expected the seven-turn call, parsed {len(SCRIPT_TURNS)}"
     assert len(BANK_TURNS) >= 12, f"the fallback bank looks truncated: {len(BANK_TURNS)} rows"
+    assert len(HINDI_TURNS) >= 3, f"the Hindi beat looks truncated: {len(HINDI_TURNS)} rows"
+
+
+@pytest.mark.parametrize(("code", "said", "quoted"), HINDI_TURNS,
+                         ids=[said for _c, said, _q in HINDI_TURNS])
+def test_every_quoted_hindi_answer_is_what_aether_actually_says(code, said, quoted):
+    """Same standard as English: the quote is what gets spoken, so it must match exactly."""
+    from aether.lang import by_code
+
+    language = by_code(code)
+    assert language is not None, f"unknown language code on the sheet: {code!r}"
+
+    decision = route(said)
+    assert decision is not None, (
+        f"{said!r} no longer routes -- on camera it would reach the model, in the language "
+        f"fewest people in the room can check"
+    )
+    runner = ToolRunner(Trace(), STORE, tools=HOTEL_TOOLS)
+    result = runner.run(decision.tool, gen="demo", turn_id=1, is_valid=lambda: True,
+                        **decision.params)
+    assert render(result, language) == quoted
+
+
+@pytest.mark.parametrize(("code", "said", "_quoted"), HINDI_TURNS,
+                         ids=[said for _c, said, _q in HINDI_TURNS])
+def test_the_hindi_beat_asks_the_same_database_rows_as_the_english_call(code, said, _quoted):
+    """The line worth saying out loud during the demo -- not a translated script, the same lookup
+    through a different renderer -- has to actually be true."""
+    english_tools = {route(q).tool for q, _a in SCRIPT_TURNS if route(q)}
+    decision = route(said)
+    assert decision is not None
+    assert decision.tool in english_tools, (
+        f"{said!r} uses {decision.tool}, which the English call never demonstrates"
+    )
 
 
 @pytest.mark.parametrize(("said", "quoted"), ALL_TURNS, ids=[q for q, _ in ALL_TURNS])
@@ -117,11 +175,22 @@ def test_every_room_number_quoted_in_the_script_exists():
 
 
 def test_the_barge_in_answer_is_long_enough_to_talk_over():
-    """The rehearsed beat needs an answer still playing when the next question starts. Turn 6 is the
+    """The rehearsed beat needs an answer still playing when the next question starts. Turn 5 is the
     one the sheet tells you to interrupt, so it is the one that has to stay long."""
-    said, quoted = SCRIPT_TURNS[5]
-    assert "vegetarian" in said.lower(), f"turn 6 is no longer the vegetarian question: {said!r}"
-    assert len(quoted.split()) >= 20, f"turn 6 is now too short to barge in on: {quoted!r}"
+    said, quoted = SCRIPT_TURNS[4]
+    assert "vegetarian" in said.lower(), f"turn 5 is no longer the vegetarian question: {said!r}"
+    assert len(quoted.split()) >= 20, f"turn 5 is now too short to barge in on: {quoted!r}"
+
+
+def test_the_turn_after_the_barge_in_changes_the_subject():
+    """The brief's acceptance case is that the caller changes ONE PART OF THE REQUEST and gets an
+    answer to the revised question -- not that they repeat themselves. Turn 6 has to be a different
+    subject from turn 5, or the beat demonstrates a retry rather than a recovery."""
+    interrupted, _ = SCRIPT_TURNS[4]
+    revised, _ = SCRIPT_TURNS[5]
+    assert route(interrupted).tool != route(revised).tool, (
+        f"turn 6 ({revised!r}) asks the same kind of question as turn 5 ({interrupted!r})"
+    )
 
 
 def test_the_script_never_quotes_a_guest_name():

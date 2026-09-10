@@ -104,7 +104,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1206 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1260 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -448,6 +448,28 @@ Still `<from_run>` and must not be quoted:
   endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
 
 ### Fixed 2026-09-10
+
+- **AETHER answered in three languages but only understood one.** `route()` matches English
+  keywords, so a caller actually speaking Hindi or Spanish matched nothing and fell through to
+  Gemini. The reply came back in the right language -- which is exactly why nobody noticed -- but
+  it came from a model rather than from the database, so the project's central claim was false for
+  every non-English caller. `test_language.py` could not have caught it: all 179 of its cases feed
+  **English** questions and assert the **answer** is in the target language, which is a different
+  property.
+  Underneath it was a worse bug: `normalise()` used `[^\w\s-]`, and Python's `\w` is
+  `str.isalnum()` plus underscore -- a Devanagari matra is category Mn/Mc, for which `isalnum()` is
+  False. So "मेन्यू में क्या है" normalised to "म न य म क य ह" before any table was consulted.
+  Hindi routing was **impossible**, not merely unimplemented, and adding keywords alone would have
+  fixed nothing. `normalise` now keeps combining marks, tested by Unicode category rather than by
+  codepoint range so the next script works without another edit.
+  `aether/hotel/_foreign.py` maps Hindi (Devanagari and romanised) and Spanish keywords onto the
+  English the router already keys on -- a vocabulary table, not a second router, so all the tested
+  ordering rules stay tested exactly once. Dish and room names needed Devanagari entries even though
+  they are never *spoken* in Devanagari: the renderers keep them in Latin because they are the
+  hotel's proper nouns, but Whisper writes what the caller says. That asymmetry is why the input
+  table cannot be a mirror of the output table. Pinned by `tests/test_foreign_routing.py` (62
+  tests), including that English input passes through untouched -- a table that rewrote English
+  would invalidate every English routing test at once.
 
 - **Twelve hotel facts a caller asks for and the database could not answer.** Swimming pool, gym,
   spa, extra bed, doctor on call, taxi booking, conference room, power backup, restaurant hours,
