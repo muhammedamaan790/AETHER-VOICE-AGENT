@@ -155,7 +155,7 @@ def test_a_vague_allergy_question_still_goes_to_the_model():
 
 
 @pytest.mark.parametrize("said", [
-    "can i book a table for eight",
+    "can i hire a car for the day",
     "hello",
     "my name is daniel",
     "is the food good",
@@ -339,9 +339,12 @@ def test_an_unknown_menu_item_is_admitted_not_invented(monkeypatch):
 
 
 def test_conversational_fallback_reaches_the_model(monkeypatch):
-    spike, _t, rime, llm = build(monkeypatch, "can i book a table for eight")
+    # Was "can i book a table for eight" until 2026-09-10, when AETHER learned to take table
+    # bookings. The assertion is unchanged; the example moved to something still outside the
+    # database, the same way the swimming-pool examples moved when policies arrived.
+    spike, _t, rime, llm = build(monkeypatch, "can i hire a car for the day")
     spike.handle_utterance(AUDIO, 0.0)
-    assert llm.calls == ["can i book a table for eight"]
+    assert llm.calls == ["can i hire a car for the day"]
 
 
 # --- observability and fencing on the hotel path ---

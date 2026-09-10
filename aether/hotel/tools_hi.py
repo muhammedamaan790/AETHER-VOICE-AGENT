@@ -433,6 +433,61 @@ def _speak_hotel_info(result) -> str:
             f"और {say_number(row['rooms'])} कमरे हैं।")
 
 
+def _refusal(summary) -> str:
+    why = summary.get("why")
+    if why == "room_not_free":
+        return f"माफ़ कीजिए, कमरा {say_room_number(summary['room'])} अभी खाली नहीं है।"
+    if why == "none_of_that_type_free":
+        return f"माफ़ कीजिए, इस समय कोई {summary['room_type']} खाली नहीं है।"
+    if why == "hotel_full":
+        return "माफ़ कीजिए, आज सारे कमरे भरे हुए हैं।"
+    if why == "outside_hours":
+        return (f"रेस्टोरेंट {say_time(summary['opens'])} से {say_time(summary['closes'])} "
+                f"तक खुला रहता है, इसलिए उस समय टेबल नहीं मिल सकती।")
+    if why == "party_too_large":
+        return f"माफ़ कीजिए, हमारी सबसे बड़ी टेबल {say_number(summary['most'])} लोगों की है।"
+    if why == "party_too_small":
+        return "कितने लोगों के लिए टेबल बुक करूँ?"
+    if why == "min_one_night":
+        return "कम से कम एक रात की बुकिंग होती है। आप कितनी रातें रुकेंगे?"
+    return "माफ़ कीजिए, यह बुकिंग नहीं हो पाई।"
+
+
+def _speak_reserve_room(result) -> str:
+    s = result.summary
+    if not s.get("booked"):
+        return _refusal(s)
+    return (f"हो गया। मैंने {s['room_type']} बुक कर दिया है, कमरा "
+            f"{say_room_number(s['room'])}, {say_number(s['nights'])} रात के लिए, "
+            f"{say_price(s['rate'])} प्रति रात। आपका बुकिंग नंबर "
+            f"{say_room_number(s['reference'])} है।")
+
+
+def _speak_reserve_table(result) -> str:
+    s = result.summary
+    if not s.get("booked"):
+        return _refusal(s)
+    return (f"हो गया। {say_number(s['party_size'])} लोगों के लिए "
+            f"{say_time(s['sitting'])} पर टेबल बुक है। आपका बुकिंग नंबर "
+            f"{say_room_number(s['reference'])} है।")
+
+
+def _speak_table_availability(result) -> str:
+    s = result.summary
+    free = s["free"]
+    if not free:
+        return f"माफ़ कीजिए, {say_time(s['sitting'])} पर सारी टेबल बुक हैं।"
+    return f"जी हाँ, {say_time(s['sitting'])} पर {say_number(free)} टेबल खाली हैं।"
+
+
+def _speak_cancel_booking(result) -> str:
+    s = result.summary
+    if not s.get("cancelled"):
+        return (f"मुझे {say_room_number(s['reference'])} नंबर की कोई बुकिंग नहीं मिली। "
+                f"क्या आप एक बार जाँच लेंगे?")
+    return "आपकी बुकिंग रद्द कर दी गई है।"
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "menu_overview": _speak_menu_overview,
     "list_category": _speak_list_category,
@@ -452,5 +507,9 @@ SPEAK: dict[str, Callable[..., str]] = {
     "check_in_out": _speak_check_in_out,
     "reservation_for_room": _speak_reservation_for_room,
     "hotel_policy": _speak_hotel_policy,
+    "reserve_room": _speak_reserve_room,
+    "reserve_table": _speak_reserve_table,
+    "table_availability": _speak_table_availability,
+    "cancel_booking": _speak_cancel_booking,
     "hotel_info": _speak_hotel_info,
 }

@@ -157,6 +157,31 @@ _SERVICE_WORDS_GENERIC = ("service", "services", "facilities", "amenities")
 _CHECKIN_WORDS = ("check in", "check-in", "checkin", "check out", "check-out", "checkout",
                   "checking in", "checking out", "arrival time", "departure time")
 _RESERVATION_WORDS = ("reservation", "reserved", "booking", "booked", "reservations")
+
+# Asking AETHER to DO something rather than to tell you something. Deliberately separate from
+# `_RESERVATION_WORDS`, which is about looking an existing booking up: "is there a booking on room
+# two zero two" must stay a question, and "book me room two zero two" must not.
+#
+# EXACT VERB FORMS, not a stem, and this is the whole difficulty of the rule. `book*` matched
+# "booking", so "is there a booking on room two zero two" -- a question about an existing
+# reservation -- took a NEW booking on room 202. A lookup silently becoming a write is the worst
+# failure available to a mutating tool, and a stem is exactly how it happened.
+#
+# "booking" and "reservation" are nouns and live below: they can only mean "do it" when an explicit
+# intent phrase says so ("can I make a booking"), never on their own.
+_BOOK_VERBS = ("book", "books", "reserve", "reserves", "reserving",
+               "reservar", "reserva", "reservo", "बुक", "आरक्षित")
+_BOOK_NOUNS = ("booking", "reservation", "बुकिंग", "reserva")
+
+# The intent has to be about DOING it, not describing it. "What is your cancellation policy" and
+# "can I book a room" are different sentences, and only one of them should take a booking.
+_BOOK_INTENT = ("i want", "i would like", "i need", "can i", "could i", "please", "make",
+                "for me", "get me", "set up", "arrange", "मुझे", "चाहिए", "कर दीजिए", "कीजिए",
+                "quiero", "quisiera", "necesito", "puede", "me gustaria", "me gustaría")
+
+_TABLE_WORDS = ("table", "tables", "मेज", "टेबल", "mesa", "mesas")
+
+_CANCEL_WORDS = ("cancel*", "रद्द", "cancelar*", "anular*")
 _STATUS_WORDS = ("free", "available", "vacant", "occupied", "empty", "taken", "ready")
 _DESCRIBE_WORDS = ("tell me about", "what is the", "what is in", "describe",
                    "what comes with", "like")
@@ -434,6 +459,86 @@ def _build_cardinal_room_numbers() -> tuple[tuple[str, str], ...]:
 _CARDINAL_ROOM_NUMBERS = _build_cardinal_room_numbers()
 
 
+# Words for small numbers, so "a table for four" carries a party size. Only up to twelve, which is
+# the largest table the restaurant has -- a number beyond that is not a party size and should not
+# be read as one.
+_SMALL_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "ek": 1, "do": 2, "teen": 3, "char": 4, "paanch": 5, "chhe": 6, "saat": 7, "aath": 8,
+    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पाँच": 5, "पांच": 6, "छह": 6, "सात": 7, "आठ": 8,
+    "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
+    "ocho": 8, "nueve": 9, "diez": 10,
+}
+
+
+def _find_party_size(spoken: str) -> int | None:
+    r""""a table for four", "table for 4", "चार लोगों के लिए" -> 4.
+
+    `\S+` rather than `\w+` for the number token. `\w` is `str.isalnum()` plus underscore, and a
+    Devanagari matra is a combining mark for which that is False -- so `\w+` matched only "द" of
+    "दो" and every Hindi count silently failed. The same fact that broke `normalise`, twice.
+
+    Requires the "for" frame (or its equivalent) rather than picking up any number in the sentence:
+    "book me room three zero five for two nights" contains "two", and reading that as a party size
+    would turn a room booking into a table for two.
+    """
+    # The number must not be a DURATION. "book me a deluxe king for two nights" matched the "for"
+    # frame and turned a two-night room booking into a table for two -- the caller asked to sleep
+    # somewhere and was offered dinner.
+    match = re.search(
+        r"(?:for|के लिए|para)\s+(\d{1,2}|\S+)(?!\s*(?:night|nights|day|days|week|weeks"
+        r"|रात|रातों|दिन|noche|noches|dia|dias|día|días))",
+        spoken)
+    if match:
+        token = match.group(1)
+        if token.isdigit() and 1 <= int(token) <= 12:
+            return int(token)
+        if token in _SMALL_NUMBERS:
+            return _SMALL_NUMBERS[token]
+    # Hindi puts the number before the phrase: "चार लोगों के लिए".
+    match = re.search(r"(\S+)\s+(?:लोगों|लोग|जनों)", spoken)
+    if match and match.group(1) in _SMALL_NUMBERS:
+        return _SMALL_NUMBERS[match.group(1)]
+    return None
+
+
+def _find_nights(spoken: str) -> int | None:
+    """"for two nights", "three nights", "2 raat" -> the number of nights.
+
+    The mirror image of `_find_party_size`, and it has to be: the same "for two" can mean a party
+    or a stay, and the noun after it is the only thing that says which. One of the two rules has to
+    read that noun, so both do.
+    """
+    match = re.search(
+        r"(\d{1,2}|\S+)\s*(?:night|nights|रात|रातों|raat|raaton|noche|noches)", spoken)
+    if not match:
+        return None
+    token = match.group(1)
+    if token.isdigit() and 1 <= int(token) <= 30:
+        return int(token)
+    return _SMALL_NUMBERS.get(token)
+
+
+def _find_reference(spoken: str) -> str | None:
+    """A booking reference: four digits, spoken or written."""
+    digits = re.search(r"(?<!\w)(\d{3,5})(?!\w)", spoken)
+    if digits:
+        return digits.group(1)
+    words = spoken.split()
+    run: list[str] = []
+    for word in words:
+        value = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+                 "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}.get(word)
+        if value is None:
+            if len(run) >= 3:
+                break
+            run = []
+        else:
+            run.append(value)
+    return "".join(run) if len(run) >= 3 else None
+
+
 def _find_room_number(spoken: str) -> str | None:
     """Any room number the caller said, spoken or spelled. Existence is NOT checked here.
 
@@ -544,6 +649,53 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     if policy is not None:
         return Route("hotel_policy", {"topic": policy}, "policy")
 
+    # A0. TAKING A BOOKING. Before every read rule, because "book me a deluxe king" also contains
+    #     a room type and a price word and would otherwise be answered with the rate -- which is a
+    #     particularly annoying way to fail, since the caller has to ask twice.
+    #
+    #     The bar is deliberately high: a booking word AND either an explicit intent phrase or a
+    #     party size. "What is your cancellation policy" and "is there a booking on room two zero
+    #     two" both survive it, and both must.
+    # Whether the sentence is about food. Computed here because BOTH the booking rules and the room
+    # rules need it: "what type of dishes are available on the table" contains "table" and would
+    # otherwise be answered with restaurant availability, and "is the chicken kebab available
+    # tonight" contains a time word and would otherwise be answered with rooms.
+    mentions_food = (dish is not None or category is not None
+                     or _find_pair(spoken, _MENU_NOUNS) is not None)
+
+    party = _find_party_size(spoken)
+    if _says(spoken, _CANCEL_WORDS) and (reference := _find_reference(spoken)):
+        return Route("cancel_booking", {"reference": reference}, "cancel booking")
+
+    wants_to_book = _says(spoken, _BOOK_VERBS) or (
+        _says(spoken, _BOOK_NOUNS) and _says(spoken, _BOOK_INTENT)
+    )
+    # A table word counts as intent on its own: "reserve a table for twenty" carries no "can I"
+    # and no recognisable party size, and falling through to the model there means the caller is
+    # never told the largest table seats twelve.
+    if wants_to_book and (_says(spoken, _BOOK_INTENT) or party or room_type or room_number
+                          or _says(spoken, _TABLE_WORDS)):
+        # A party size only means a TABLE when no room has been named. "a room for four" is a
+        # room; "a table for four" is a table; "for four" alone is a table, which is what people
+        # mean when they say it.
+        if _says(spoken, _TABLE_WORDS) or (party and not room_type and not room_number):
+            return Route("reserve_table", {"party_size": party or 2}, "book a table")
+        nights = _find_nights(spoken)
+        stay = {"nights": nights} if nights else {}
+        if room_number:
+            return Route("reserve_room", {"room": room_number, **stay}, "book a named room")
+        if room_type:
+            return Route("reserve_room", {"room_type": room_type, **stay}, "book a room type")
+        return Route("reserve_room", dict(stay), "book any room")
+
+    # A0b. Asking whether a TABLE is free, which the rooms rules would otherwise answer about beds.
+    #      `not mentions_food`: "what type of dishes are available on the table" is a menu question
+    #      that happens to contain the word "table", and answering it with restaurant availability
+    #      is a confident answer to a question nobody asked.
+    if (_says(spoken, _TABLE_WORDS) and not mentions_food
+            and _says(spoken, _STATUS_WORDS + _LIST_WORDS)):
+        return Route("table_availability", {}, "table availability")
+
     # A1. The hotel itself: where it is, how big it is, how to reach it.
     if _says(spoken, _HOTEL_INFO_WORDS):
         return Route("hotel_info", {}, "hotel info")
@@ -585,8 +737,6 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     # A room noun claims the sentence outright. A time word only claims one that mentions no food:
     # "do you have anything free tonight" is a room question, "what starters do you have tonight"
     # is not, and neither is "is the chicken kebab available tonight".
-    mentions_food = (dish is not None or category is not None
-                     or _find_pair(spoken, _MENU_NOUNS) is not None)
     asks_about_rooms = _says(spoken, _ROOM_NOUNS) or (
         _says(spoken, _ROOM_TIME_WORDS) and not mentions_food
     )

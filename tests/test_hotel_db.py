@@ -417,7 +417,7 @@ def test_a_database_question_never_reaches_the_model(question):
 # which is the change working, not the test weakening. The assertion below is untouched; only the
 # examples moved, and each replacement was checked to have no row behind it.
 @pytest.mark.parametrize("question", [
-    "What time do you close?", "Can I book a table for eight?",
+    "What time do you close?", "Can I hire a car for the day?",
     "Hello, how are you?", "Do you have a rooftop terrace?",
     "What is your star rating?", "Is there a temple nearby?",
 ])

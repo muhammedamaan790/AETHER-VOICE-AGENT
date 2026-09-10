@@ -9,7 +9,12 @@ warehouse-assistant path and is a hand-written constant.
 # The hotel database — `aether_hotel.db`
 
 **The source of truth for every hotel fact AETHER states.** SQLite, 12 tables and 3 views,
-opened read-only. If it is not in this file, AETHER does not say it.
+opened read-only for facts. If it is not in this file, AETHER does not say it.
+
+**Bookings are the one exception, and a narrow one.** `aether/hotel/bookings.py` holds the only
+read-write connection, behind a `sqlite3` authorizer that permits writes to `reservations`,
+`table_bookings`, `guests` and the single column `rooms.status`, and refuses everything else at the
+driver. A price, an allergen or a room number cannot be changed by any code path in this project.
 
 | Table | Rows |
 |---|---|
@@ -21,6 +26,7 @@ opened read-only. If it is not in this file, AETHER does not say it.
 | `hotel` | 1 — check-in 14:00, check-out 12:00, INR |
 | `guests` / `reservations` | 4 / 3 |
 | `hotel_policies` | **27** — parking, wi-fi, breakfast, pets, smoking, children, airport transfer, early check-in, late check-out, luggage storage, accessibility, cancellation, payment, currency exchange, laundry, **swimming pool, gym, spa, extra bed, doctor on call, taxi booking, conference room, power backup, restaurant hours, bar hours, deposit, ID at check-in** |
+| `table_bookings` | 0 — written by `reserve_table`; a party size and a sitting, which a room reservation has no place for |
 | `service_requests` / `restaurant_orders` / `restaurant_order_items` | 0 / 2 / 4 |
 
 `hotel_policies` was added after an audit found that the commonest questions a hotel line receives
