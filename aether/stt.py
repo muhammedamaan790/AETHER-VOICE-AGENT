@@ -73,12 +73,23 @@ class WhisperSTT:
             size, code = chosen.whisper_model, chosen.whisper_code
         model = self._model if size == self.model_size else self._model_for(size)
 
+        # A VOCABULARY HINT for a closed question, carried as state like `language` so every test
+        # double keeps working. Set by the pipeline only while it is waiting for an answer to
+        # "English, Hindi, or Spanish?", and None otherwise, which is exactly the old behaviour.
+        #
+        # Measured, not assumed: the caller's real audio from a failed call said "Hindi" three
+        # times. `base.en` with no hint transcribed it as "in the, in the, in the". The same audio
+        # with the question as `initial_prompt` transcribed as "Hindi, Hindi, Hindi." The model
+        # was never wrong about the sound -- it had no reason to expect a word it rarely sees.
+        prompt = getattr(self, "prompt", None)
+
         t0 = now_ms()
         segments, _info = model.transcribe(
             samples,
             language=code,
             beam_size=5,
             vad_filter=False,   # segmentation already happened upstream in MicVAD
+            initial_prompt=prompt,
         )
         text = " ".join(s.text for s in segments).strip()
         elapsed = now_ms() - t0
@@ -93,6 +104,7 @@ class WhisperSTT:
             # Hindi turn they differ, and a trace that said otherwise would misattribute the latency.
             model=size,
             language=code,
+            prompted=prompt is not None,
             audio_ms=round(len(audio) / self.samplerate * 1000.0, 1),
         )
         return text

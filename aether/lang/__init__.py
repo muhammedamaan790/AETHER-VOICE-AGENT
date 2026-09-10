@@ -130,6 +130,56 @@ HOTEL_GREETING = {
     "spa": "Ha llamado a AETHER, la gerente del hotel. ¿En qué puedo ayudarle?",
 }
 
+# The recogniser is told what the caller is being asked, so it expects the three answers. Given as
+# Whisper's `initial_prompt` ONLY during selection -- biasing every turn towards language names
+# would be its own bug. Proven on a real failed call; see `aether/stt.py`.
+LANGUAGE_HINT = "English, Hindi, or Spanish?"
+
+# After two answers that name no language, stop asking. The failed call asked three times and the
+# caller hung up -- a selection loop with no exit is a demo that ends in silence. Continuing in
+# English is safe because the switch still works mid-call, and this sentence says so.
+SELECT_FALLBACK = ("Let's continue in English. You can say Hindi or Spanish at any time to "
+                   "switch. How may I help you?")
+
+# What `base.en` actually returns for a language name on a telephone line, heard on a real call
+# (2026-09-10): "Hindi" came back as "And it's...", "in the" and "Indeed.". These are accepted
+# ONLY while AETHER is waiting for an answer to "English, Hindi, or Spanish?" -- a closed question
+# with three possible answers, where the nearest sound is the right one. Mid-call they would be
+# absurd: "indeed" must never switch a conversation into Hindi.
+_HEARD_AS = {
+    "hin": ("in the", "indeed", "indie", "india", "indy", "hindu", "hindi", "hendy", "hinder",
+            "and it", "and it s", "in d", "hindee", "indi"),
+    "spa": ("spanish", "panish", "spinach", "the spanish", "a spanish", "spanglish", "espanol"),
+    "eng": ("english", "inglish", "england", "in glish", "angrezi"),
+}
+
+
+_MAX_ANSWER_WORDS = 3
+
+
+def heard_as_language(text: str):
+    """The language a SELECTION answer sounds like, for the mishearings a phone line produces.
+
+    Only called while the caller owes AETHER a choice. Word-based rather than a regex so the
+    phrases above read exactly as they were heard.
+    """
+    import re as _re
+
+    words = _re.sub(r"[^a-z ]", " ", str(text).lower()).split()
+    # SHORT ANSWERS ONLY. A language answer is one or two words, and every mishearing on the real
+    # call was ("And it's...", "in the", "Indeed."). A longer utterance is a real sentence, and "in
+    # the" is one of the commonest phrases in English -- "I'm calling about a room in the hotel"
+    # must not switch a caller into Hindi because it contains two words that sound like it.
+    if not words or len(words) > _MAX_ANSWER_WORDS:
+        return None
+    spoken = " " + " ".join(words) + " "
+    for code, phrases in _HEARD_AS.items():
+        for phrase in phrases:
+            if " " + phrase + " " in spoken:
+                return LANGUAGES[code]
+    return None
+
+
 # Asked again only while the caller has not yet chosen -- never once they have. Repeating the
 # question every turn would be its own failure mode.
 SELECT_RETRY = ("Sorry, I did not catch that. "
@@ -286,7 +336,7 @@ def detect_switch(text: str, current: Language) -> Language | None:
 
 
 __all__ = ["ACKNOWLEDGEMENT", "DEFAULT", "ENGLISH", "HINDI", "HOTEL_GREETING", "LANGUAGES",
-           "SELECT_PROMPT", "SELECT_RETRY", "SPANISH", "Language",
+           "LANGUAGE_HINT", "SELECT_FALLBACK", "SELECT_PROMPT", "SELECT_RETRY", "heard_as_language", "SPANISH", "Language",
            "asks_for_options", "by_code", "detect_switch", "language_offer", "name_of",
            "names_language",
            "spoken_language_list"]

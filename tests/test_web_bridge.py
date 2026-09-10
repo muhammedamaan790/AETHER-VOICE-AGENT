@@ -885,9 +885,19 @@ def test_the_scrollbar_is_visible_rather_than_an_overlay_that_fades():
 
 
 def test_both_controls_are_present_and_live_beside_the_conversation():
+    """The controls sit in the SAME column as the conversation, directly beneath it.
+
+    They lived in the left-hand aside until 2026-09-10, when the voice card moved under the
+    conversation to fill the space there. The property protected is unchanged: the operator's two
+    controls are next to the thing they act on, and they are wired.
+    """
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    aside = html.split('<aside class="aside">', 1)[1].split("</aside>", 1)[0]
-    assert 'id="listenBtn"' in aside and 'id="interruptBtn"' in aside
+    column = html.split('<div class="main-col">', 1)[1].split('<aside class="aside">', 1)[0]
+    assert 'class="card conversation"' in column, "the conversation left its column"
+    assert 'id="listenBtn"' in column and 'id="interruptBtn"' in column
+    assert column.index("conversation") < column.index("listenBtn"), (
+        "the controls should sit beneath the conversation, not above it"
+    )
     # and they must still be wired -- a visible button that does nothing is worse than none
     assert "listenBtn" in html.split("</style>", 1)[1]
     assert "interruptBtn" in html.split("</style>", 1)[1]
