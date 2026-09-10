@@ -1,1 +1,1 @@
-"""VAD, audio gate (duck / stop / resume), Rime speech output. TODO: Day 1-2."""
+"""VAD, audio gate (duck / stop / resume), and Rime speech output over /ws3."""

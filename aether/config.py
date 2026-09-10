@@ -1,6 +1,6 @@
 """Configuration placeholders for AETHER.
 
-No value here is invented. Anything unverified is None with a TODO. Rime endpoint/model/voice/
+No value here is invented. Anything unverified is None and says so. Rime endpoint/model/voice/
 language in particular have NOT been checked against the live catalog -- see RIME_EVIDENCE.md.
 """
 
@@ -19,7 +19,13 @@ def _env(name: str) -> str | None:
 class RimeConfig:
     """Rime is the primary and sole TTS in the judged path (RULES.md R9).
 
-    TODO: verify against Rime live catalog + organizer preflight (human task, Day 1).
+    VERIFIED against Rime's live public catalogue, twice (RIME_EVIDENCE.md Parts 1, 1a and 1c):
+    `mistv3`/`astra`/`eng` for English and Spanish (`isa`), `coda`/`nadi`/`hin` for Hindi. Re-check
+    before a demo -- the catalogue is not stable: Rime deleted the whole `arcana` model overnight on
+    2026-09-09, taking the Hindi voice this project had been using with it.
+
+    Still outstanding and NOT verified: organizer preflight and account rate limits, which are a
+    human task.
     """
 
     # repr=False: a dataclass repr prints every field, so a traceback, a log line or a
@@ -27,10 +33,12 @@ class RimeConfig:
     # Day 6: "Never show credentials, not even for one frame." Presence is still
     # reportable -- `missing_config()` answers by NAME, never by value.
     api_key: str | None = field(default=None, repr=False)
-    api_url: str | None = None      # TODO: verify against Rime live catalog
-    model: str | None = None        # TODO: verify against Rime live catalog
-    voice: str | None = None        # TODO: verify against Rime live catalog
-    language: str | None = None     # TODO: verify against Rime live catalog
+    # All four verified against the live catalogue; see the class docstring. They stay
+    # configuration rather than literals so a voice can be changed without a code change (R9.4).
+    api_url: str | None = None
+    model: str | None = None
+    voice: str | None = None
+    language: str | None = None
 
     @classmethod
     def from_env(cls) -> "RimeConfig":
@@ -45,7 +53,12 @@ class RimeConfig:
 
 @dataclass(frozen=True)
 class SttConfig:
-    """TODO: provider not yet chosen (Day 1/2 decision)."""
+    """faster-whisper, running locally on CPU. Chosen and in use.
+
+    `base.en` for English -- monolingual, and measurably faster and more accurate on English than
+    the multilingual model of the same size ("aisle 9" vs "IL-9"). Hindi and Spanish need the
+    multilingual `base`, which `aether/lang` selects and `aether/prewarm` warms.
+    """
 
     provider: str | None = None
     # repr=False: a dataclass repr prints every field, so a traceback, a log line or a
@@ -66,9 +79,11 @@ class SttConfig:
 
 @dataclass(frozen=True)
 class LlmConfig:
-    """Reasoning, classification, and the general-knowledge path.
+    """Reasoning and the general-knowledge path. (Classification is deterministic and uses no model.)
 
-    TODO: provider not yet chosen (Day 1 decision).
+    Provider CHOSEN: Gemini, `gemini-flash-lite-latest`, by measurement rather than preference --
+    see `aether/llm.py`, where the alternatives and their failure rates are recorded. Four providers
+    remain implemented behind one interface so the choice is reversible.
     """
 
     provider: str | None = None
@@ -93,11 +108,15 @@ class RuntimeConfig:
     trace_dir: str = "traces"
     log_level: str = "INFO"
 
-    # Below this classifier confidence, the supervisor takes the safe branch (fence).
-    # TODO: tune from measured classifier behaviour. None until chosen -- not a guessed default.
+    # DEAD, and kept only so an existing `.env` naming it does not look like it does something.
+    # The classifier turned out to need no threshold: it is closed-set and whole-utterance, so it
+    # either matches a table or falls through to REPLACEMENT, which fences. The fail-safe is the
+    # default branch rather than a comparison (RULES.md R2.1, amended).
     classifier_confidence_threshold: float | None = None
 
-    # TODO(Day 2): set once the VAD implementation is chosen.
+    # WebRTC VAD, chosen and in use. These stay None so the code's own defaults win unless an
+    # operator overrides them; the speech floor that actually needed tuning is AETHER_SPEECH_FLOOR,
+    # re-derived from real telephony audio (RIME_EVIDENCE Part 6).
     vad_aggressiveness: int | None = None
     vad_onset_ms: int | None = None
 

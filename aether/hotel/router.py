@@ -135,6 +135,73 @@ _STATUS_WORDS = ("free", "available", "vacant", "occupied", "empty", "taken", "r
 _DESCRIBE_WORDS = ("tell me about", "what is the", "what is in", "describe",
                    "what comes with", "like")
 
+# Policy questions, keyed to the `hotel_policies` topics. These are the commonest things a hotel
+# line is asked and the ones this router could not answer at all until the database grew a
+# `hotel_policies` table -- "do you have parking" reached the model with no fact behind it.
+#
+# Longest-first, so "late check out" is not eaten by the check-in/check-out rule and "early check
+# in" is not either.
+_POLICY_WORDS: tuple[tuple[str, str], ...] = tuple(sorted(
+    [
+        ("early check in", "early_check_in"), ("early check-in", "early_check_in"),
+        ("early checkin", "early_check_in"), ("check in early", "early_check_in"),
+        ("late check out", "late_check_out"), ("late check-out", "late_check_out"),
+        ("late checkout", "late_check_out"), ("check out late", "late_check_out"),
+        ("airport transfer", "airport_transfer"), ("airport pickup", "airport_transfer"),
+        ("pick me up", "airport_transfer"), ("airport", "airport_transfer"),
+        ("luggage storage", "luggage_storage"), ("store my luggage", "luggage_storage"),
+        ("keep my bags", "luggage_storage"), ("left luggage", "luggage_storage"),
+        ("currency exchange", "currency_exchange"), ("exchange money", "currency_exchange"),
+        ("wheelchair", "accessibility"), ("step free", "accessibility"),
+        ("accessible", "accessibility"), ("disabled access", "accessibility"),
+        ("cancellation", "cancellation"), ("cancel my booking", "cancellation"),
+        ("cancel the booking", "cancellation"), ("cancellation policy", "cancellation"),
+        ("payment", "payment"), ("pay by card", "payment"), ("credit card", "payment"),
+        ("debit card", "payment"), ("how can i pay", "payment"), ("upi", "payment"),
+        ("parking", "parking"), ("car park", "parking"), ("park my car", "parking"),
+        ("wifi", "wifi"), ("wi-fi", "wifi"), ("wi fi", "wifi"), ("internet", "wifi"),
+        ("breakfast", "breakfast"),
+        ("pets", "pets"), ("pet", "pets"), ("my dog", "pets"), ("my cat", "pets"),
+        ("smoking", "smoking"), ("smoke", "smoking"),
+        ("children", "children"), ("kids", "children"), ("my child", "children"),
+        ("laundry", "laundry"), ("wash my clothes", "laundry"),
+        # --- added 2026-09-10 ------------------------------------------------------------
+        ("swimming pool", "swimming_pool"), ("pool", "swimming_pool"),
+        ("swim", "swimming_pool"), ("swimming", "swimming_pool"),
+        ("gym", "gym"), ("fitness centre", "gym"), ("fitness center", "gym"),
+        ("work out", "gym"), ("workout", "gym"),
+        ("spa", "spa"), ("massage", "spa"),
+        ("extra bed", "extra_bed"), ("additional bed", "extra_bed"), ("extra mattress",
+                                                                     "extra_bed"),
+        ("doctor", "doctor_on_call"), ("a doctor", "doctor_on_call"),
+        ("medical help", "doctor_on_call"), ("if i fall ill", "doctor_on_call"),
+        ("taxi", "taxi_booking"), ("book a cab", "taxi_booking"), ("a cab", "taxi_booking"),
+        ("conference room", "conference_room"), ("meeting room", "conference_room"),
+        ("banquet", "conference_room"), ("event space", "conference_room"),
+        ("power backup", "power_backup"), ("power cut", "power_backup"),
+        ("generator", "power_backup"),
+        # DELIBERATELY NOT the bare words "restaurant" or "dinner". Policy words are matched
+        # BEFORE menu routing, so a bare "restaurant" would swallow "what is on the restaurant
+        # menu" and answer it with opening hours. Each of these carries its own time cue.
+        ("restaurant open", "restaurant"), ("restaurant close", "restaurant"),
+        ("restaurant hours", "restaurant"), ("restaurant timing", "restaurant"),
+        ("restaurant timings", "restaurant"), ("is the restaurant open", "restaurant"),
+        ("when does the restaurant", "restaurant"),
+        ("bar", "bar"), ("cocktail", "bar"), ("the bar open", "bar"),
+        ("deposit", "deposit"), ("security deposit", "deposit"),
+        ("id proof", "id_proof"), ("identity proof", "id_proof"), ("photo id", "id_proof"),
+        ("passport", "id_proof"), ("aadhaar", "id_proof"), ("aadhar", "id_proof"),
+        ("what documents", "id_proof"), ("which documents", "id_proof"),
+    ],
+    key=lambda pair: -len(pair[0]),
+))
+
+# Questions about the hotel itself rather than about a room or a dish.
+_HOTEL_INFO_WORDS = ("where are you", "where is the hotel", "your address", "hotel address",
+                     "how many floors", "how many rooms", "what is your number",
+                     "your phone number", "contact number", "how do i reach you",
+                     "where are you located", "location of the hotel")
+
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
 _AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
 _ALLERGEN_WORDS = ("allerg", "contain", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
@@ -313,6 +380,17 @@ def route(text: str) -> Route | None:
     # First because their nouns are unambiguous. "How much is an executive suite" contains a price
     # word and would otherwise be looked up as a dish; a sentence naming a room type is asking
     # about a room.
+
+    # A0. A named policy. BEFORE check-in/out, because "late check out" and "early check in"
+    #     contain the check-in words and are different questions with different answers -- one is a
+    #     time, the other is whether it is possible and what it costs.
+    policy = _find_pair(spoken, _POLICY_WORDS)
+    if policy is not None:
+        return Route("hotel_policy", {"topic": policy}, "policy")
+
+    # A1. The hotel itself: where it is, how big it is, how to reach it.
+    if any(phrase in spoken for phrase in _HOTEL_INFO_WORDS):
+        return Route("hotel_info", {}, "hotel info")
 
     # A. Check-in and check-out times. Read from the hotel row, so the model never guesses them.
     if any(word in spoken for word in _CHECKIN_WORDS):

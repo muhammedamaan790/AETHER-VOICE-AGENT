@@ -116,6 +116,19 @@ def say_time(clock: str) -> str:
     else:
         part, spoken_hour = "रात", hour - 12
 
+    # Hindi names the common fractions rather than counting minutes, and two of them are irregular:
+    # half past one is डेढ़ and half past two is ढाई -- neither is "साढ़े एक" or "साढ़े दो". Quarter
+    # past is सवा. "दस बजकर तीस मिनट" is understood but nobody says it, and on a hotel line that is
+    # exactly the phrasing that gives a machine away.
+    if minute == 30:
+        if spoken_hour == 1:
+            return f"{part} डेढ़ बजे"
+        if spoken_hour == 2:
+            return f"{part} ढाई बजे"
+        return f"{part} साढ़े {say_number(spoken_hour)} बजे"
+    if minute == 15:
+        return f"{part} सवा {say_number(spoken_hour)} बजे"
+
     base = f"{part} {say_number(spoken_hour)}"
     if minute:
         return f"{base} बजकर {say_number(minute)} मिनट"

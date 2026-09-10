@@ -321,6 +321,36 @@ def _reservation_for_room(store: HotelStore, *, room: str) -> tuple[list, dict]:
                                    "room_type": found.room_type}
 
 
+def _hotel_policy(store: HotelStore, *, topic: str) -> tuple[list, dict]:
+    """"Do you have parking?", "Can I bring my dog?", "Is breakfast included?"
+
+    One tool for every policy, because they all answer the same shape of question -- is it
+    offered, does it cost, when is it available -- and one tool means one renderer per language
+    rather than fifteen. `available=False` is a real answer and is returned as one; an unknown
+    topic raises, so a policy the hotel has no record of becomes "I do not have that" rather than
+    a plausible invention.
+    """
+    found = store.policy(topic)
+    return [{
+        "topic": found.topic, "available": found.available, "fee": found.fee,
+        "hours": found.hours, "limit_hours": found.limit_hours,
+        "options": list(found.options),
+    }], {"topic": found.topic, "available": found.available}
+
+
+def _hotel_info(store: HotelStore) -> tuple[list, dict]:
+    """"Where are you?", "What is your number?", "How many floors?"
+
+    `floors` is COUNTED from the rooms rather than stored, so it cannot contradict them.
+    """
+    info = store.hotel()
+    return [{
+        "name": info.name, "address": info.address, "phone": info.phone,
+        "currency": info.currency, "floors": store.floors(),
+        "rooms": len(store.rooms()),
+    }], {"name": info.name, "floors": store.floors()}
+
+
 HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     # Menu. None of these mutate: a caller asking about the menu must never be able to change it.
     "menu_overview": (_menu_overview, False),
@@ -342,6 +372,11 @@ HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     "service_hours": (_service_hours, False),
     "check_in_out": (_check_in_out, False),
     "reservation_for_room": (_reservation_for_room, False),
+    # Policies and the hotel itself. Added after an audit found that the commonest questions a
+    # hotel line receives -- parking, wi-fi, pets, breakfast, late checkout -- had no fact behind
+    # them at all, so they reached the model with nothing to answer from.
+    "hotel_policy": (_hotel_policy, False),
+    "hotel_info": (_hotel_info, False),
 }
 
 
@@ -540,6 +575,98 @@ def _speak_reservation_for_room(result) -> str:
             f"booked from {say_date(s['check_in'])} to {say_date(s['check_out'])}.")
 
 
+# What each policy is called when spoken. Machine keys are for the database; nobody says
+# "early_check_in" on a telephone.
+_POLICY_NAMES = {
+    "parking": "parking", "wifi": "Wi-Fi", "breakfast": "breakfast", "pets": "pets",
+    "smoking": "smoking", "children": "children", "airport_transfer": "an airport transfer",
+    "early_check_in": "early check-in", "late_check_out": "late check-out",
+    "luggage_storage": "luggage storage", "accessibility": "step-free access",
+    "cancellation": "free cancellation", "payment": "payment",
+    "currency_exchange": "currency exchange", "laundry": "a laundry service",
+    "swimming_pool": "a swimming pool", "gym": "a gym", "spa": "a spa",
+    "extra_bed": "an extra bed", "doctor_on_call": "a doctor on call",
+    "taxi_booking": "taxi booking", "conference_room": "a conference room",
+    "power_backup": "power backup", "restaurant": "the restaurant", "bar": "the bar",
+    "deposit": "a deposit", "id_proof": "photo identification",
+}
+
+_PAYMENT_NAMES = {"card": "card", "cash": "cash", "upi": "UPI"}
+
+# Spoken names for the documents `id_proof` lists. Machine keys live in the database; each language
+# names them itself, exactly as payment methods do.
+_ID_NAMES = {"passport": "a passport", "aadhaar": "an Aadhaar card",
+             "driving_licence": "a driving licence"}
+
+# Topics that are opening hours rather than things the hotel "offers". The generic template would
+# say "Yes, we offer the bar free of charge from five in the evening", which is three kinds of
+# wrong in one sentence.
+_OPENING_HOURS = {"restaurant": "The restaurant", "bar": "The bar"}
+
+
+def _speak_hotel_policy(result) -> str:
+    """One renderer for every policy, built from the structured row rather than stored prose.
+
+    "We do not offer that" is a real answer and reads as one; the alternative -- falling through to
+    the model with no fact behind it -- is how an invented policy gets spoken.
+    """
+    row = result.records[0]
+    name = _POLICY_NAMES.get(row["topic"], row["topic"].replace("_", " "))
+
+    if not row["available"]:
+        if row["topic"] in ("pets", "smoking"):
+            return f"I am afraid {name} are not allowed anywhere in the hotel."                 if row["topic"] == "pets" else "I am afraid the hotel is entirely non-smoking."
+        return f"I am sorry, we do not offer {name}."
+
+    if row["topic"] == "payment" and row["options"]:
+        methods = say_list([_PAYMENT_NAMES.get(o, o) for o in row["options"]])
+        return f"We accept {methods}."
+    if row["topic"] == "cancellation" and row["limit_hours"]:
+        return (f"You can cancel free of charge up to {say_number(row['limit_hours'])} "
+                f"hours before you arrive.")
+    if row["topic"] == "smoking":
+        return "Smoking is allowed only in the designated areas outside."
+    # Some topics are not things a hotel "offers". "Yes, we offer children" is what a template
+    # applied without thinking produces, and it is the kind of sentence that tells a caller they
+    # are talking to a machine.
+    if row["topic"] == "children":
+        return "Yes, children are very welcome, and they stay with you at no extra charge."
+    if row["topic"] == "accessibility":
+        return "Yes, the hotel has step-free access."
+    if row["topic"] in _OPENING_HOURS and row["hours"]:
+        opens, _, closes = str(row["hours"]).partition("-")
+        return (f"{_OPENING_HOURS[row['topic']]} is open from {say_time(opens)} "
+                f"until {say_time(closes)}.")
+    if row["topic"] == "deposit" and row["fee"]:
+        return (f"We take a refundable deposit of {say_price(row['fee'])} at check-in, "
+                f"returned when you leave.")
+    if row["topic"] == "id_proof" and row["options"]:
+        # "or", not "and": these are alternatives, and `say_list` would ask for all three.
+        names = [_ID_NAMES.get(o, o.replace("_", " ")) for o in row["options"]]
+        documents = ", ".join(names[:-1]) + f" or {names[-1]}" if len(names) > 1 else names[0]
+        return f"Every guest needs photo identification at check-in: {documents}."
+
+    bits = [f"Yes, we offer {name}"]
+    if row["fee"]:
+        bits.append(f"for {say_price(row['fee'])}")
+    elif row["topic"] not in ("children", "accessibility"):
+        bits.append("free of charge")
+    if row["hours"]:
+        hours = str(row["hours"])
+        if "24" in hours:
+            bits.append("around the clock")
+        else:
+            opens, _, closes = hours.partition("-")
+            bits.append(f"from {say_time(opens)} until {say_time(closes)}")
+    return " ".join(bits) + "."
+
+
+def _speak_hotel_info(result) -> str:
+    row = result.records[0]
+    return (f"{row['name']} is in {row['address']}. We have {say_number(row['floors'])} floors "
+            f"and {say_number(row['rooms'])} rooms.")
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "menu_overview": _speak_menu_overview,
     "list_category": _speak_list_category,
@@ -558,6 +685,8 @@ SPEAK: dict[str, Callable[..., str]] = {
     "service_hours": _speak_service_hours,
     "check_in_out": _speak_check_in_out,
     "reservation_for_room": _speak_reservation_for_room,
+    "hotel_policy": _speak_hotel_policy,
+    "hotel_info": _speak_hotel_info,
 }
 
 # Spoken when a tool ran but could not answer -- an unknown dish, an unknown room, an unrecognised
@@ -570,6 +699,25 @@ NOT_FOUND = "I am sorry, I could not find that. Could you say it again?"
 _EMPTY_IS_AN_ANSWER = frozenset({
     "list_category", "find_by_diet", "safe_for", "room_availability", "menu_overview",
 })
+
+
+def _renderer_for(language):
+    """The (templates, not-found sentence) pair for a language. English when in doubt.
+
+    Table-driven rather than a chain of `if`, so a fourth language is one entry here plus its
+    module -- and an unknown or missing language degrades to English rather than raising, because
+    the caller is on a telephone and silence is the worst outcome.
+    """
+    code = getattr(language, "code", None)
+    if code == "hin":
+        from . import tools_hi
+
+        return tools_hi.SPEAK, tools_hi.NOT_FOUND
+    if code == "spa":
+        from . import tools_es
+
+        return tools_es.SPEAK, tools_es.NOT_FOUND
+    return SPEAK, NOT_FOUND
 
 
 def render(result, language=None) -> str | None:
@@ -588,14 +736,7 @@ def render(result, language=None) -> str | None:
     if not result.may_speak:
         return None
 
-    from ..lang import DEFAULT, HINDI
-
-    language = language or DEFAULT
-    speakers, not_found = SPEAK, NOT_FOUND
-    if getattr(language, "code", None) == HINDI.code:
-        from . import tools_hi
-
-        speakers, not_found = tools_hi.SPEAK, tools_hi.NOT_FOUND
+    speakers, not_found = _renderer_for(language)
 
     if result.reason or (not result.records and result.tool not in _EMPTY_IS_AN_ANSWER):
         return not_found

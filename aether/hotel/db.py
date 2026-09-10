@@ -123,6 +123,25 @@ class HotelInfo:
     currency: str
 
 
+@dataclass(frozen=True)
+class Policy:
+    """One hotel policy, as structured values rather than as a sentence.
+
+    Deliberately not prose. Storing "Yes, parking is free" would put English inside the fact store
+    and leave Hindi and Spanish with nothing to render; storing `available=1, fee=None` lets three
+    languages each build their own sentence from one fact.
+
+    `available=0` is an ANSWER, not a gap: "we do not take pets" is exactly what a caller needs.
+    """
+
+    topic: str
+    available: bool
+    fee: float | None = None
+    hours: str | None = None
+    limit_hours: int | None = None
+    options: tuple[str, ...] = ()
+
+
 def _allergens(raw: str | None) -> tuple[str, ...]:
     """"Dairy, Nuts" -> ("dairy", "nuts"). Lowercased so the router and the tools agree."""
     if not raw or raw.strip() in ("", "-"):
@@ -176,6 +195,33 @@ class HotelDB:
             return self._db.execute(sql, params).fetchone()
 
     # --- the hotel itself -------------------------------------------------------------
+
+    def policies(self) -> list[Policy]:
+        """Every hotel policy. Empty list if the table is absent, so an older database still runs."""
+        try:
+            rows = self._all("SELECT * FROM hotel_policies ORDER BY topic")
+        except sqlite3.OperationalError:
+            return []
+        return [
+            Policy(
+                topic=r["topic"],
+                available=bool(r["available"]),
+                fee=r["fee_inr"],
+                hours=r["hours"],
+                limit_hours=r["limit_hours"],
+                options=tuple(o.strip() for o in (r["options"] or "").split(",") if o.strip()),
+            )
+            for r in rows
+        ]
+
+    def floors(self) -> int:
+        """How many floors the hotel has, COUNTED from the rooms rather than stored.
+
+        A stored copy would be a second source of truth able to contradict the first -- add a room
+        on a sixth floor and the stored number is silently wrong. Derived, it cannot be.
+        """
+        row = self._one("SELECT COUNT(DISTINCT floor) AS n FROM rooms")
+        return int(row["n"]) if row else 0
 
     def hotel(self) -> HotelInfo:
         r = self._one("SELECT * FROM hotel LIMIT 1")
@@ -317,6 +363,8 @@ class HotelStore:
         self._types: list[RoomType] | None = None
         self._services: list[Service] | None = None
         self._hotel: HotelInfo | None = None
+        self._policies: list[Policy] | None = None
+        self._floors: int | None = None
 
     # --- menu ---------------------------------------------------------------------------
 
@@ -420,3 +468,22 @@ class HotelStore:
         if self._hotel is None:
             self._hotel = self.db.hotel()
         return self._hotel
+
+    def policies(self) -> list[Policy]:
+        if self._policies is None:
+            self._policies = self.db.policies()
+        return list(self._policies)
+
+    def policy(self, topic: str) -> Policy:
+        """One policy by topic, or `UnknownRecord` -- which the tool turns into an honest "I do not
+        have that", never into a guess."""
+        wanted = str(topic).strip().lower()
+        for found in self.policies():
+            if found.topic == wanted:
+                return found
+        raise UnknownRecord(f"no policy for {topic!r}")
+
+    def floors(self) -> int:
+        if self._floors is None:
+            self._floors = self.db.floors()
+        return self._floors

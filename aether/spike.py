@@ -47,7 +47,14 @@ from .conversation import ConversationHistory
 from .hotel import HotelStore
 from .lang import ACKNOWLEDGEMENT as LANG_ACK
 from .lang import DEFAULT as LANG_DEFAULT
-from .lang import detect_switch
+from .lang import (
+    HOTEL_GREETING,
+    SELECT_RETRY,
+    asks_for_options,
+    detect_switch,
+    language_offer,
+    names_language,
+)
 from .hotel.router import route as route_menu
 from .hotel.tools import HOTEL_TOOLS, render
 from .events import EventType
@@ -154,6 +161,11 @@ class Day1Spike:
         self.language = LANG_DEFAULT
         self.rime = build_tts(trace, samplerate=self.gate.samplerate)
         self._speakers = {self.language.code: self.rime}
+        # Whether the caller still owes us a language choice. Defaults to FALSE so that every
+        # existing caller of this class -- and every test -- behaves exactly as before; the phone
+        # and console entry points opt in explicitly with `begin_language_selection()`. Making it
+        # default true would silently turn the first utterance of every test into a language answer.
+        self.awaiting_language = False
         # Session-scoped conversation history. Owned by this pipeline instance, never by the
         # provider object, so two sessions can never share or leak context.
         self.history = ConversationHistory()
@@ -488,6 +500,18 @@ class Day1Spike:
             # behind it. Level 1: a turn is remembered whole or not at all (MEMORY.md section 4).
             self.history.commit_turn(text, reply)
 
+            # Asked once, here, rather than in each of the three speak paths: the gate is the
+            # authority on when audio actually left, and it knows by the time the turn is spoken.
+            # None is a legitimate answer -- a turn whose audio never reached the device (fenced, or
+            # a gate that was never opened, as in the tests) has no output time, and recording 0
+            # would be a measurement of something that did not happen.
+            # `getattr`, not attribute access: the gate is duck-typed here the way the TTS config
+            # is -- the real `AudioGate`, and four test doubles across the suite. A gate that cannot
+            # report the mark yields None, which is the honest value ("not observed"), not zero.
+            first_output = getattr(self.gate, "first_output_ms", None)
+            timing.first_output = first_output(gen.id) if callable(first_output) else None
+            timing.device_latency_ms = getattr(self.gate, "device_latency_ms", None)
+
             timing.spoken = now_ms()
             print(f"  latency: {timing.summary()}")
 
@@ -663,7 +687,22 @@ class Day1Spike:
         # the call site does not change and every existing test double keeps working. Set with
         # setattr semantics rather than a method so a stub STT is unaffected either way.
         self.stt.language = language
+        # And the model, for the turns the router does not catch. Without this it answers a Hindi
+        # question in whichever language it feels like, and in whichever gender -- measured, not
+        # assumed: three Hindi questions came back as one Hindi reply and two English ones.
+        self.llm.language = language
         return True
+
+    def begin_language_selection(self) -> None:
+        """Open the call owing a language choice, before any hotel greeting is spoken.
+
+        The caller is asked which language first and nothing else happens until they answer. The
+        hotel greeting has to be spoken in *some* language, so greeting first would already have
+        chosen for them -- and a Hindi speaker would have to sit through an English greeting to be
+        offered Hindi.
+        """
+        self.awaiting_language = True
+        self.language = LANG_DEFAULT
 
     def _language_answer(self, text: str) -> str | None:
         """Switch language if the caller asked, and return the acknowledgement to speak.
@@ -675,8 +714,32 @@ class Day1Spike:
         `self.rime` by the time the caller's answer is synthesised. That is also what makes it
         useful: it is the switch's own proof that the new voice works, heard immediately.
         """
+        # Still owed a choice: this utterance IS the answer, whatever else it looks like.
+        if self.awaiting_language:
+            # `names_language`, not `detect_switch`: the caller is answering a question, so
+            # "English" is a real choice even though English is what the recogniser is already
+            # running. `detect_switch` deliberately ignores the current language and would have
+            # left an English-choosing caller being asked forever.
+            chosen = names_language(text)
+            if chosen is None:
+                print("  LANGUAGE: not understood, asking again")
+                return SELECT_RETRY
+            self.awaiting_language = False
+            self._set_language(chosen)
+            print(f"  LANGUAGE: selected {self.language.code} "
+                  f"({self.language.rime_voice}/{self.language.rime_model})")
+            # The real hotel greeting, now that there is a language to say it in.
+            return HOTEL_GREETING.get(self.language.code, HOTEL_GREETING["eng"])
+
         wanted = detect_switch(text, self.language)
         if wanted is None:
+            # "Can we switch language?" names no language, so switching would be a guess. Offer the
+            # list instead, in whatever language is being spoken now, and let the caller choose.
+            # Checked AFTER `detect_switch` so "switch to Spanish" switches rather than offering.
+            if asks_for_options(text):
+                offer = language_offer(self.language)
+                print(f"  LANGUAGE: offering {offer}")
+                return offer
             return None
         was = self.language
         if not self._set_language(wanted):
@@ -1115,6 +1178,7 @@ def main() -> None:
     onset_ms = args.vad_onset_ms if args.vad_onset_ms is not None else cfg.vad_onset_ms
 
     trace = Trace.new_run(cfg.trace_dir, echo=True)
+    trace.input_path = "local_microphone"     # a laptop microphone, not a telephone line
     kwargs = {}
     if onset_ms is not None:
         # MicVAD counts frames, not milliseconds. At least one frame, or onset can never confirm.

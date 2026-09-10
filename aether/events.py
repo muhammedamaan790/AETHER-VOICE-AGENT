@@ -74,6 +74,6 @@ class TransitionReason(str, Enum):
     NEW_TASK = "new_task"
 
 
-# TODO(Day 4): Event dataclass + append-only JSONL trace writer.
+# BUILT, in `aether/trace.py`: the Event dataclass and the append-only JSONL writer.
 # Every event carries: seq (monotonic), t (monotonic ms), turn_id, gen (nullable for
 # pre-generation audio events), plus the per-event fields in ARCHITECTURE.md section 4.
