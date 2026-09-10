@@ -364,6 +364,75 @@ def _hotel_info(store: HotelStore) -> tuple[list, dict]:
     }], {"name": info.name, "floors": store.floors()}
 
 
+def _reserve_room(store: HotelStore, *, room_type: str | None = None,
+                  room: str | None = None, nights: int = 1) -> tuple[list, dict]:
+    """"Book me a deluxe king for two nights." THE FIRST TOOL THAT CHANGES ANYTHING.
+
+    Everything above this line reads. This writes, and it is declared mutating in `HOTEL_TOOLS` so
+    `ToolRunner` checks the fence AFTER its delay and BEFORE this body runs -- a caller who changes
+    their mind while the booking is in flight leaves no row behind.
+
+    A refusal is an ANSWER, not an error: "no Deluxe King is free" is exactly what the caller needs
+    to hear, and raising would render the generic not-found line instead.
+    """
+    from .bookings import BookingRefused
+
+    try:
+        booking = store.bookings.reserve_room(room_type=room_type, room=room, nights=nights)
+    except BookingRefused as refused:
+        return [], {"booked": False, "why": refused.code, **refused.detail}
+
+    store.record_change()
+    return [{"reference": booking.reference, "room": booking.room_number}], {
+        "booked": True, "reference": booking.reference, "room": booking.room_number,
+        "room_type": booking.room_type, "rate": booking.rate, "nights": booking.nights,
+        "check_in": booking.check_in, "check_out": booking.check_out,
+    }
+
+
+def _reserve_table(store: HotelStore, *, party_size: int, sitting: str = "20:00"
+                   ) -> tuple[list, dict]:
+    """"A table for four at eight." Mutating, for the same reasons as `_reserve_room`."""
+    from .bookings import BookingRefused
+
+    try:
+        booking = store.bookings.reserve_table(party_size=int(party_size), sitting=sitting)
+    except BookingRefused as refused:
+        return [], {"booked": False, "why": refused.code, **refused.detail}
+    except ValueError:
+        return [], {"booked": False, "why": "party_not_understood"}
+
+    store.record_change()
+    return [{"reference": booking.reference}], {
+        "booked": True, "reference": booking.reference, "party_size": booking.party_size,
+        "sitting": booking.sitting,
+    }
+
+
+def _table_availability(store: HotelStore, *, sitting: str = "20:00") -> tuple[list, dict]:
+    """"Do you have a table free at eight?" -- a read, so it stays non-mutating."""
+    free = store.bookings.tables_free(sitting=sitting)
+    return [{"free": free}], {"free": free, "sitting": sitting}
+
+
+def _cancel_booking(store: HotelStore, *, reference: str) -> tuple[list, dict]:
+    """"Cancel booking one zero zero four." Mutating.
+
+    An unknown reference is an answer too -- and a deliberately unhelpful one to guess at, since
+    cancelling the wrong booking is not recoverable by saying sorry.
+    """
+    from .db import UnknownRecord
+
+    try:
+        kind = store.bookings.cancel(reference)
+    except UnknownRecord:
+        return [], {"cancelled": False, "reference": str(reference)}
+
+    store.record_change()
+    return [{"reference": str(reference)}], {"cancelled": True, "kind": kind,
+                                             "reference": str(reference)}
+
+
 HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     # Menu. None of these mutate: a caller asking about the menu must never be able to change it.
     "menu_overview": (_menu_overview, False),
@@ -389,6 +458,13 @@ HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     # hotel line receives -- parking, wi-fi, pets, breakfast, late checkout -- had no fact behind
     # them at all, so they reached the model with nothing to answer from.
     "hotel_policy": (_hotel_policy, False),
+    # THE FOUR THAT WRITE. `True` is the mutating flag the runner reads to decide where the fence
+    # check goes, and it is also documentation the trace carries -- a reader can tell at a glance
+    # which invocations could have changed the world.
+    "reserve_room": (_reserve_room, True),
+    "reserve_table": (_reserve_table, True),
+    "cancel_booking": (_cancel_booking, True),
+    "table_availability": (_table_availability, False),
     "hotel_info": (_hotel_info, False),
 }
 
@@ -689,6 +765,68 @@ def _speak_hotel_info(result) -> str:
             f"and {say_number(row['rooms'])} rooms.")
 
 
+def _refusal(summary) -> str:
+    """Why a booking could not be made, said in words rather than in codes or digits."""
+    why = summary.get("why")
+    if why == "room_not_free":
+        return f"I am sorry, room {say_room_number(summary['room'])} is not free."
+    if why == "none_of_that_type_free":
+        return f"I am sorry, we have no {summary['room_type']} free just now."
+    if why == "hotel_full":
+        return "I am sorry, we are fully booked tonight."
+    if why == "outside_hours":
+        return (f"The restaurant serves from {say_time(summary['opens'])} until "
+                f"{say_time(summary['closes'])}, so I cannot hold a table then.")
+    if why == "party_too_large":
+        return f"I am sorry, our largest table seats {say_number(summary['most'])}."
+    if why == "party_too_small":
+        return "How many people should I book the table for?"
+    if why == "min_one_night":
+        return "A stay is at least one night. How many nights would you like?"
+    return "I am sorry, I could not make that booking."
+
+
+def _speak_reserve_room(result) -> str:
+    """A confirmation the caller can act on: which room, what it costs, and the reference.
+
+    The reference is said digit by digit like a room number, for the same reason -- it names a
+    booking rather than counting anything, and a caller is going to write it down.
+    """
+    s = result.summary
+    if not s.get("booked"):
+        return _refusal(s)
+    return (f"Done. I have reserved the {s['room_type']}, room {say_room_number(s['room'])}, "
+            f"for {say_number(s['nights'])} {'night' if s['nights'] == 1 else 'nights'} "
+            f"at {say_price(s['rate'])} a night. "
+            f"Your reference is {say_room_number(s['reference'])}.")
+
+
+def _speak_reserve_table(result) -> str:
+    s = result.summary
+    if not s.get("booked"):
+        return _refusal(s)
+    return (f"Done. A table for {say_number(s['party_size'])} at {say_time(s['sitting'])}. "
+            f"Your reference is {say_room_number(s['reference'])}.")
+
+
+def _speak_table_availability(result) -> str:
+    s = result.summary
+    free = s["free"]
+    if not free:
+        return f"I am sorry, we are fully booked at {say_time(s['sitting'])}."
+    return (f"Yes, we have {say_number(free)} "
+            f"{'table' if free == 1 else 'tables'} free at {say_time(s['sitting'])}.")
+
+
+def _speak_cancel_booking(result) -> str:
+    s = result.summary
+    if not s.get("cancelled"):
+        return (f"I could not find a booking with reference "
+                f"{say_room_number(s['reference'])}. Could you check it for me?")
+    what = "room" if s.get("kind") == "room" else "table"
+    return f"That is cancelled. Your {what} booking is no longer held."
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "menu_overview": _speak_menu_overview,
     "list_category": _speak_list_category,
@@ -708,6 +846,10 @@ SPEAK: dict[str, Callable[..., str]] = {
     "check_in_out": _speak_check_in_out,
     "reservation_for_room": _speak_reservation_for_room,
     "hotel_policy": _speak_hotel_policy,
+    "reserve_room": _speak_reserve_room,
+    "reserve_table": _speak_reserve_table,
+    "table_availability": _speak_table_availability,
+    "cancel_booking": _speak_cancel_booking,
     "hotel_info": _speak_hotel_info,
 }
 
@@ -723,6 +865,10 @@ _EMPTY_IS_AN_ANSWER = frozenset({
     # "there is no room four one two" is information. Without this the renderer falls through to
     # the not-found sentence, which sounds like a mishearing rather than an answer.
     "room_status",
+    # And so is a REFUSED booking. "Room three zero five is not free" and "I have no booking with
+    # that reference" are the two most useful things these tools can say, and both come back with
+    # no records -- so without this the caller is asked to repeat a perfectly clear request.
+    "reserve_room", "reserve_table", "cancel_booking",
 })
 
 

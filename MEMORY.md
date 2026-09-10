@@ -3,10 +3,11 @@
 Authoritative state of the project. Read this first after any context loss. If this file disagrees
 with anyone's recollection, this file wins until it is updated with evidence.
 
-**Last updated:** 2026-09-09 — hotel SQLite database as the single source of truth, 19 read-only
-tools, three languages (English, Hindi, Spanish) sharing that one database, caller-chosen language
-before the hotel greeting, and a `hotel_policies` table for the questions a hotel line is actually
-asked. The realtime voice path and the continuity engine are both built and tested; salvage and the
+**Last updated:** 2026-09-10 — hotel SQLite database as the single source of truth, **23 tools
+(20 read, 3 book)**, three languages (English, Hindi, Spanish) that AETHER both *understands* and
+*answers* in from that one database, caller-chosen language before the hotel greeting, 27
+`hotel_policies` topics, a suggestion-and-repeat path for what the recogniser mangles, and real
+room and table bookings behind an authorizer that keeps every hotel FACT unwritable. The realtime voice path and the continuity engine are both built and tested; salvage and the
 unsafe-mode control path remain deliberately unbuilt.
 
 ---
@@ -104,7 +105,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1392 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1446 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -129,7 +130,7 @@ each names itself.
 | `aether/spike.py` — the voice loop | Implemented and **run end to end headless** (`scripts/bench_turn.py`: WAV → STT → Gemini → Rime WS3 → AudioGate, 3/3 turns spoke), and since run with a live microphone. Now also carries the classifier hook and the listening controls. **Never run over a real phone call** |
 | `aether/classify/` — six-class classifier | **Implemented, tested, wired (2026-09-08).** Closed sets, whole-utterance matching, no model, no confidence score. Runs after STT and **before** `begin_turn`, because allocation is what fences. `BACKCHANNEL` and `STATUS_QUERY` withhold a turn entirely; `CANCEL` fences with no successor; the other three proceed and label `TaskReplaced`. Anything unrecognised falls to `REPLACEMENT`, which fences |
 | Supervisor transitions | **Implemented for all six classes** in `Day1Spike.handle_utterance` / `_resolve_without_a_turn`, emitting `InterruptionClassified`, `BackchannelDetected`, `TaskReplaced` and `CancellationResolved`. There is still no separate supervisor *module*: the transitions live at the turn boundary, and `GenerationRegistry` remains the authority. **Salvage is not implemented and is not faked** |
-| `aether/hotel/` — database, tools, router | **Implemented, tested, wired (2026-09-07/08; SQLite from 2026-09-08).** `data/aether_hotel.db` is the source of truth: 12 menu items across five categories, 50 rooms, 5 room types, 6 services, **27 policy topics**, hotel timings and 3 reservations. Opened `mode=ro`, so writes are refused by the driver. **19** read-only tools through the existing `ToolRunner` (the original 17 plus `hotel_policy` and `hotel_info`); deterministic keyword/slot routing with spoken templates in **three** languages. A hotel fact the database holds never reaches the LLM -- the router intercepts first. A question it does NOT hold does reach the LLM, which may answer plausibly (RULES.md R8b). Replaced a hand-written 29-dish fixture — prices moved, and the spice column does not exist, so `spice_of`/`find_by_spice` were removed rather than faked |
+| `aether/hotel/` — database, tools, router | **Implemented, tested, wired (2026-09-07/08; SQLite from 2026-09-08).** `data/aether_hotel.db` is the source of truth: 12 menu items across five categories, 50 rooms, 5 room types, 6 services, **27 policy topics**, hotel timings and 3 reservations. Facts opened `mode=ro`; bookings written through an authorizer that refuses everything else (`aether/hotel/bookings.py`). **23** tools through the existing `ToolRunner` -- 20 read, 3 write (`reserve_room`, `reserve_table`, `cancel_booking`); deterministic keyword/slot routing with spoken templates in **three** languages. A hotel fact the database holds never reaches the LLM -- the router intercepts first. A question it does NOT hold does reach the LLM, which may answer plausibly (RULES.md R8b). Replaced a hand-written 29-dish fixture — prices moved, and the spice column does not exist, so `spice_of`/`find_by_spice` were removed rather than faked |
 | `aether/bridge/`, `aether/telephony/` — LiveKit transport | **Implemented, tested against synthetic audio only.** `InboundBridge`/`OutboundBridge` carry a transport into the unchanged pipeline; the worker uses `livekit.rtc` directly and never `AgentSession`. **Calls now connect, are answered, are understood and are transcribed** — telephony audio measured from 28 utterances across three calls, which is what moved the speech floor from 35 to 2500. STT word accuracy on narrowband audio is still not separately measured |
 | `aether/prewarm.py` — process warm-up | **Implemented, measured.** 3810 ms cold, 672 ms warm; run before the worker registers |
 | `aether/telephony/diagnostics.py` — failure-stage report | **Implemented, tested.** Names the first stage that produced nothing, from bridge counters and the trace |
@@ -448,6 +449,29 @@ Still `<from_run>` and must not be quoted:
   endpoint, and `test_a_longer_endpoint_widens_the_unmeasured_room_limitation` owns the interaction.
 
 ### Fixed 2026-09-10
+
+- **AETHER can take a booking, and the read-only guarantee survived it.** Room bookings, restaurant
+  table bookings, table availability and cancellation -- 23 tools now, 3 of which write. The facts
+  stay unwritable and SQLite still says so: the one read-write connection sits behind an authorizer
+  permitting `reservations`, `table_bookings`, `guests` and the single column `rooms.status`, and
+  refusing everything else at the driver. `mode=ro` narrowed, not abandoned.
+  `rooms.status` had to be writable or the hotel contradicts itself one turn after a booking --
+  and `record_change()` drops the room cache for the same reason, since rooms are cached on first
+  read and "reserve room one zero one" followed by "is room one zero one free" would otherwise
+  answer *yes* from a snapshot taken before the booking. `state_version` finally moves; it was
+  stamped on every result from day one and had stayed at zero because nothing could write.
+  A fenced booking never lands -- mutation-tested by moving the fence check after the tool body,
+  which fails seven tests.
+  Four things went wrong on the way and are worth keeping: `book*` as a stem matched "booking", so
+  **"is there a booking on room two zero two" took a new booking on room 202** -- a lookup becoming
+  a write, the worst failure a mutating tool has; "for two nights" matched the party-size frame and
+  booked a table for two; a refusal built from an exception message spoke "room 305" with a bare
+  numeral straight into Rime; and `\w+` matched only "द" of "दो", so every Hindi count failed --
+  the Devanagari-matra fact, found for the third time.
+  **And the suite wrote two reservations into the committed database.** Restored with
+  `git checkout`; `tests/conftest.py` now redirects every run to a private copy via
+  `AETHER_HOTEL_DB`, resolved at construction time because `router` and `clarify` build a store at
+  import and a fixture would be too late.
 
 - **Every keyword table was matched with `in`, and one of them finally bit.** Substring matching
   inside a sentence is a latent wrong-answer generator, and "night" is inside "tonight". The same

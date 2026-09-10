@@ -26,6 +26,21 @@ from pathlib import Path
 
 DB = Path(__file__).resolve().parents[1] / "data" / "aether_hotel.db"
 
+TABLE_BOOKINGS = """
+-- Restaurant table reservations. A separate table from `reservations`, which is for ROOMS: a table
+-- booking has a party size and a sitting, not a check-in and a check-out, and forcing both into one
+-- shape would mean nullable columns that only make sense half the time.
+CREATE TABLE IF NOT EXISTS table_bookings (
+    booking_id   INTEGER PRIMARY KEY,
+    guest_id     INTEGER REFERENCES guests(guest_id),
+    party_size   INTEGER NOT NULL CHECK(party_size > 0),
+    sitting      TEXT NOT NULL,          -- "HH:MM", the hour the table is held from
+    booked_for   TEXT NOT NULL,          -- ISO date
+    status       TEXT NOT NULL CHECK(status IN('confirmed','seated','cancelled')),
+    created_at   TEXT NOT NULL
+);
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS hotel_policies (
     topic        TEXT PRIMARY KEY,   -- machine key: parking, wifi, pets, ...
@@ -105,6 +120,10 @@ def apply(check_only: bool = False) -> int:
         wanted = {p[0] for p in POLICIES}
         missing = sorted(wanted - existing)
 
+        have_bookings = con.execute(
+            "select count(*) from sqlite_master where type='table' and name='table_bookings'"
+        ).fetchone()[0]
+        print(f"table_bookings table exists : {bool(have_bookings)}")
         print(f"hotel_policies table exists : {bool(have_table)}")
         print(f"topics present              : {len(existing)}")
         print(f"topics that would be added  : {len(missing)}" + (f" -> {missing}" if missing else ""))
@@ -113,6 +132,7 @@ def apply(check_only: bool = False) -> int:
             return 0
 
         con.executescript(SCHEMA)
+        con.executescript(TABLE_BOOKINGS)
         con.executemany(
             "INSERT OR IGNORE INTO hotel_policies "
             "(topic, available, fee_inr, hours, limit_hours, options) VALUES (?,?,?,?,?,?)",

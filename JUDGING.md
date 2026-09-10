@@ -4,7 +4,7 @@ Every claim here names the file, test or trace that backs it. Where something is
 measured, it says so — a rubric that rewards transparent method punishes overclaiming, and the
 "What we did not build" section at the end is not an afterthought.
 
-**Reproduce everything:** `python -m pytest -q` → **1392 passed, 2 skipped**.
+**Reproduce everything:** `python -m pytest -q` → **1446 passed, 2 skipped**.
 
 ---
 
@@ -112,7 +112,7 @@ a door — "three oh five", not "three hundred and five". Asserted in `tests/tes
 
 ## Evidence and reproducibility — 20%
 
-**1394 automated tests — 1392 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
+**1448 automated tests — 1446 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
 refuse to fake a result: `AETHER_UNSAFE_MODE` has no bypass path to exercise, and `ResultSalvaged`
 is not implemented and is not emitted to look like evidence.
 
@@ -271,5 +271,12 @@ each project's own README, fetched 2026-09-10.
   `input_path` is deliberately never `browser`: the web console is a viewer over the same
   local-microphone session the CLI runs, and no audio travels from the browser.
 - **Concurrency.** One caller at a time is the tested case.
-- **Reservations are read-only.** Nothing can be booked, cancelled or changed; the database is
-  opened `mode=ro`, so a write is refused by SQLite rather than by convention.
+- **Bookings are real, and the facts are still unwritable.** AETHER takes room and table bookings
+  and cancels them. What it cannot do is change a price, an allergen, a policy or a room number:
+  the one read-write connection sits behind a `sqlite3` authorizer that denies writes outside
+  `reservations`, `table_bookings`, `guests` and the single column `rooms.status`. That is the old
+  `mode=ro` guarantee narrowed rather than abandoned, and `tests/test_bookings.py` proves it by
+  attempting nine forbidden statements and being refused by the driver each time.
+  A **fenced booking never lands** -- `ToolRunner` checks validity after its delay and before the
+  tool body, so a caller who changes their mind mid-booking leaves no row behind. Mutation-tested:
+  moving that check after the body fails seven tests.

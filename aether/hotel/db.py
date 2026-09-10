@@ -29,6 +29,8 @@ about the hotel and stops, so the tools above it stay the only place that turns 
 
 from __future__ import annotations
 
+import os
+
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -37,7 +39,32 @@ from pathlib import Path
 from ..errors import ToolLookupError
 
 # Repository-relative, so a worker started from anywhere finds it.
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "aether_hotel.db"
+SHIPPED_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "aether_hotel.db"
+
+
+def default_db_path() -> Path:
+    """Which hotel database to open, resolved at CONSTRUCTION time rather than at import.
+
+    `AETHER_HOTEL_DB` points AETHER at a different file. That exists for two real reasons and one
+    urgent one:
+
+    * a demo can run against a scratch copy, so a booking taken on camera does not permanently
+      alter the data every later rehearsal reads;
+    * a second hotel is a second file, not a second build;
+    * and **the test suite must never write to the shipped database**. It did, once: the booking
+      tools landed, the suite ran, and `data/aether_hotel.db` came back with two rooms reserved and
+      two extra guests in it. `git checkout` undid that, and this makes it unrepeatable.
+
+    Read per call, not captured in a module constant, because the environment is set before the
+    tests import anything and a constant evaluated at import time would already be wrong.
+    """
+    override = (os.environ.get("AETHER_HOTEL_DB") or "").strip()
+    return Path(override) if override else SHIPPED_DB_PATH
+
+
+# Kept as a name because the whole codebase imports it. It is the SHIPPED file specifically; code
+# that should honour the override calls `default_db_path()` instead.
+DEFAULT_DB_PATH = SHIPPED_DB_PATH
 
 
 class HotelDataUnavailable(RuntimeError):
@@ -163,7 +190,8 @@ class HotelDB:
     serialises readers anyway; the lock is there so the cursor is not shared mid-fetch.
     """
 
-    def __init__(self, path: Path | str = DEFAULT_DB_PATH):
+    def __init__(self, path: Path | str | None = None):
+        path = Path(path) if path is not None else default_db_path()
         self.path = Path(path)
         if not self.path.exists():
             raise HotelDataUnavailable(
@@ -368,9 +396,12 @@ class HotelStore:
     is work with no benefit while nothing can write.
     """
 
-    def __init__(self, db: HotelDB | None = None, path: Path | str = DEFAULT_DB_PATH):
+    def __init__(self, db: HotelDB | None = None, path: Path | str | None = None):
+        path = Path(path) if path is not None else default_db_path()
         self.db = db if db is not None else HotelDB(path)
+        self.path = Path(path)
         self.state_version: int = 0
+        self._bookings = None
         self._menu: list[MenuItem] | None = None
         self._rooms: list[Room] | None = None
         self._room_bounds: tuple[str, str] | None = None
@@ -379,6 +410,33 @@ class HotelStore:
         self._hotel: HotelInfo | None = None
         self._policies: list[Policy] | None = None
         self._floors: int | None = None
+
+    @property
+    def bookings(self):
+        """The one writer, built on first use.
+
+        Lazy because most calls never book anything, and opening a read-write connection for a
+        caller who only asks about the menu would give away the read-only property for nothing.
+        """
+        if self._bookings is None:
+            from .bookings import Bookings
+            self._bookings = Bookings(self.path)
+        return self._bookings
+
+    def record_change(self) -> None:
+        """A booking happened. Bump the version and drop the caches it invalidated.
+
+        `state_version` was stamped on every result from the beginning and stayed at zero because
+        nothing could write -- it exists so a late answer is recognisable as describing a hotel
+        that has since changed. It now moves, which is the point of having had it.
+
+        The cache drop matters more than it looks: rooms are cached on first read, so without this
+        "reserve room two zero one" followed by "is room two zero one free" would answer *yes*
+        from a list captured before the booking. A booking that the very next turn contradicts is
+        worse than no booking at all.
+        """
+        self.state_version += 1
+        self._rooms = None
 
     # --- menu ---------------------------------------------------------------------------
 

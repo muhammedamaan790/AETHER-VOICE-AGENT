@@ -130,12 +130,30 @@ hotel's own description back instead of inventing a rating.
 | `hotel` | 1 | check-in and check-out times, address, currency |
 | `reservations` / `guests` | 3 / 4 | which dates a room is held for |
 
-**Read-only, and enforced by SQLite rather than by convention.** `aether/hotel/db.py` opens the file
-with the `mode=ro` URI, so a write is rejected by the driver, not by a code path that could be
-edited around. There is no tool that creates, cancels or changes anything, and a test asserts that
-every result is stamped `mutates: false`.
+**The facts are read-only, and SQLite says so rather than a convention.** Every price, allergen,
+policy, room rate and menu item is refused **by the driver**, mid-statement, whatever the code asks
+for. `aether/hotel/db.py` opens the file `mode=ro` for reading; the one read-write connection lives
+in `aether/hotel/bookings.py` behind a `sqlite3` authorizer that denies writes to everything except
+four places:
 
-Nineteen read-only tools run through the **existing** `ToolRunner`, so fencing, injectable delay
+| Writable | Why |
+|---|---|
+| `reservations` | a room booking |
+| `table_bookings` | a restaurant booking |
+| `guests` | the caller, so a booking belongs to someone |
+| `rooms.status` — **that column only** | or "is room three zero five free?" would keep saying yes one turn after it was booked |
+
+This is the old `mode=ro` guarantee **narrowed, not abandoned**, and
+[`tests/test_bookings.py`](tests/test_bookings.py) proves it by trying: nine statements that would
+reprice the menu, rewrite a policy or rename a room, each refused by SQLite. A tool with a bug
+cannot do it; nor can a model, which never reaches that class at all.
+
+**Three of the twenty-three tools write, and a fenced one never lands.** `ToolRunner` checks the
+fence *after* its delay and *before* the tool body, so a caller who changes their mind while a
+booking is in flight leaves no row behind. That is the strongest form of this project's claim: not
+merely that a stale answer is never spoken, but that a stale intention never happens.
+
+Twenty-three tools run through the **existing** `ToolRunner`, so fencing, injectable delay
 and result identity are not reimplemented:
 
 | | |
@@ -349,7 +367,7 @@ leaves the machine.
 
 **Local, no service and no credential:** `faster-whisper` (speech-to-text, CPU), `webrtcvad`
 (voice activity detection), `sounddevice`/PortAudio (microphone and speaker), SQLite
-(`data/aether_hotel.db`, opened `mode=ro`).
+(`data/aether_hotel.db` — facts read-only, bookings written through an authorizer).
 
 **No telemetry and no analytics.** Traces are written to `traces/` on disk and nowhere else.
 The hotel database never leaves the process. The only data that reaches a third party is the text
@@ -396,12 +414,12 @@ Nothing tunes itself.
 
 ## Status
 
-**1392 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
+**1446 tests pass, 2 are skipped.** Both skips are features that genuinely do not exist, and each one
 says which: the unsafe-mode control condition, and salvage.
 
 | Built and tested | Not built |
 |---|---|
-| Hotel SQLite database, 19 read-only tools, 3 languages, deterministic routing | Salvage / partial-result reuse |
+| Hotel SQLite database, 23 tools (20 read, 3 book), 3 languages, deterministic routing | Salvage / partial-result reuse |
 | Six-class deterministic classifier, wired into the turn path | Suspend/resume |
 | Generation registry, barge-in coordinator, four-layer fence | Evaluator (offline trace scoring) |
 | AudioGate with per-chunk generation tagging | Unsafe-mode control path |
