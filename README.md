@@ -429,7 +429,7 @@ evidence/        a real phone call's trace and worker log
 
 ## Status
 
-**1891 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
+**1903 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
 says which: the unsafe-mode control condition, and salvage.
 
 ## Documents

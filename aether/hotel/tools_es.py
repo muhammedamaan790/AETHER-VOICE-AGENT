@@ -338,6 +338,10 @@ def _speak_reservation_for_room(result) -> str:
     """
     s = result.summary
     number = say_room_number(s["room_number"])
+    if not s.get("any", True):
+        if s.get("status") == "available":
+            return f"No hay ninguna reserva en la habitación {number}. Está libre ahora."
+        return f"No consta ninguna reserva en la habitación {number}."
     status = {
         "checked_in": "está ocupada por un huésped que ya ha llegado",
         "confirmed": "está reservada con una reserva confirmada",

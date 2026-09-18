@@ -323,3 +323,54 @@ def test_safe_mode_blocks_the_same_stale_result(monkeypatch):
 def test_general_qa_refinement_salvages_nothing_and_says_so():
     """A correction that changes query identity: nothing is reusable, and that is reported."""
     raise NotImplementedError
+
+
+# ============================ how loud AETHER is ============================
+
+def test_the_output_gain_defaults_to_the_signal_rime_produced(monkeypatch):
+    """1.0 is what every recorded measurement was taken at. A volume control that changes the
+    default would quietly invalidate the evidence."""
+    from aether.audio.player import _output_gain
+
+    monkeypatch.delenv("AETHER_OUTPUT_GAIN", raising=False)
+    assert _output_gain() == 1.0
+
+
+@pytest.mark.parametrize(("value", "want"), [
+    ("1.6", 1.6),          # about +4 dB, the range worth reaching for on a quiet line
+    ("20", 4.0),           # clamped: a gain of 20 is not loudness, it is a square wave
+    ("0", 1.0),            # silence is not a volume setting
+    ("-2", 1.0),
+    ("loud", 1.0),         # a typo must not take the audio down mid-recording
+    ("", 1.0),
+])
+def test_the_output_gain_is_clamped_rather_than_trusted(monkeypatch, value, want):
+    from aether.audio.player import _output_gain
+
+    monkeypatch.setenv("AETHER_OUTPUT_GAIN", value)
+    assert _output_gain() == want
+
+
+def test_raising_the_volume_clips_rather_than_wrapping():
+    """int16 overflow wraps +32767 to -32768, which is heard as a CRACK rather than as loudness --
+    and a telephone codec makes it worse. The clip is what makes a gain above 1.0 safe to hand a
+    presenter.
+
+    Driven through the REAL `_callback`, because that is the one the telephony path calls too
+    (`OutboundBridge.pull`): a gain applied anywhere else would not reach a phone call.
+    """
+    import numpy as np
+
+    from aether.audio.player import AudioGate
+    from aether.trace import Trace
+
+    gate = AudioGate(Trace())
+    gate.output_gain = 1.8
+    gate.set_active_generation("G1", turn_id=1)
+    gate.enqueue(np.full(gate.blocksize, 30000, dtype=np.int16), turn_id=1, gen="G1")
+
+    out = np.zeros((gate.blocksize, 1), dtype=np.int16)
+    gate._callback(out, gate.blocksize, None, None)
+
+    assert out.max() == 32767, f"expected a clipped peak, got {out.max()}"
+    assert out.min() >= 0, f"the signal wrapped negative: {out.ravel()[:8]}"

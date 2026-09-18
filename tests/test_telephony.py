@@ -611,3 +611,71 @@ def test_diagnostics_does_not_import_livekit():
         if tok.type not in (tokenize.COMMENT, tokenize.STRING)
     ).lower()
     assert "livekit" not in code
+
+
+def test_the_opening_language_question_reaches_the_transcript():
+    """Reported from the console: the Live Conversation began at the caller's "English.", so a
+    recording opened on somebody answering a question nobody could see.
+
+    `speak_greeting` went straight to Rime and never emitted the event the transcript is built
+    from. The first thing a caller hears is the first thing a judge should read.
+    """
+    from aether.events import EventType
+    from aether.lang import SELECT_PROMPT
+    from aether.telephony.agent import speak_greeting
+    from aether.trace import Trace
+
+    trace = Trace()
+    spike = _stub_spike(trace, accepted=True)
+
+    assert speak_greeting(spike, SELECT_PROMPT) is True
+    spoken = trace.all(EventType.RESPONSE_SPOKEN)
+    assert spoken, "the greeting emitted no ResponseSpoken, so the console cannot show it"
+    assert spoken[-1].fields["text"] == SELECT_PROMPT
+    assert spoken[-1].turn_id == 0, "the greeting must be turn zero, before any caller turn"
+
+
+def test_a_greeting_nobody_heard_is_not_shown_as_spoken():
+    """The same rule every other turn follows. A greeting the gate refused was never heard, and
+    showing it in the transcript would be the lie this product is built to avoid."""
+    from aether.events import EventType
+    from aether.telephony.agent import speak_greeting
+    from aether.trace import Trace
+
+    trace = Trace()
+    spike = _stub_spike(trace, accepted=False)
+
+    assert speak_greeting(spike, "anything") is False
+    assert trace.all(EventType.RESPONSE_SPOKEN) == []
+
+
+def _stub_spike(trace, *, accepted: bool):
+    """The smallest thing `speak_greeting` needs: a coordinator, a gate and a speaker."""
+    from aether.audio.rime_ws import SpeakResult
+
+    class _Gen:
+        id = "G0"
+
+    class _Barge:
+        def begin_turn(self, turn_id):
+            return _Gen()
+
+        def end_turn(self):
+            pass
+
+        def is_valid(self, gen):
+            return True
+
+    class _Gate:
+        def set_active_generation(self, gen, turn_id=None):
+            pass
+
+    class _Rime:
+        name, transport, last_latency_ms = "rime", "fake", 1.0
+        config = type("c", (), {"model": "mistv3", "voice": "astra", "language": "eng"})()
+
+        def speak(self, text, *, gate, gen, turn_id=None, is_valid=None):
+            return SpeakResult(accepted=accepted, completed=accepted)
+
+    return type("S", (), {"barge": _Barge(), "gate": _Gate(), "rime": _Rime(),
+                          "trace": trace})()

@@ -19,6 +19,10 @@ python scripts/reset_hotel_db.py     # rehearsal bookings and guesses gone
 python scripts/run_call.py           # wait for: registered worker
 ```
 
+**If AETHER sounds quiet on the line**, set `AETHER_OUTPUT_GAIN=1.6` in `.env` before starting the
+worker. It is a multiplier on AETHER's voice only — it does not touch what the caller says, so it
+cannot make AETHER hear itself. Above about 1.8 it gets loud rather than clear.
+
 Open the console it prints, full screen, browser zoom 100%. Make a 20-second test call — say
 **"English"**, then **"menu"** — and hang up. If AETHER says *"Hello, are you there?"*, your voice
 isn't reaching it; fix the headset before you present.
@@ -229,7 +233,7 @@ Phone → LiveKit SIP → speech detection → Whisper → classifier
 *[Run it live if you have the time — it takes about two minutes. Otherwise show the last run.]*
 
 ```bash
-python -m pytest -q          # 1891 passed, 2 skipped
+python -m pytest -q          # 1903 passed, 2 skipped
 ```
 
 | | |

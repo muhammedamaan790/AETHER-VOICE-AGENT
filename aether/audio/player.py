@@ -33,6 +33,31 @@ from ..trace import Trace, now_ms
 
 DUCK_GAIN = 0.15  # attenuation on speech onset; not silence -- the user still hears context
 
+# How loud AETHER speaks, as a multiplier. 1.0 is the signal exactly as Rime produced it, which is
+# what every recorded measurement was taken at. A telephone line is quieter than a laptop speaker,
+# so this exists to be raised for a call; it is clamped rather than trusted, because a gain of 20
+# is not loudness, it is a square wave.
+_MAX_OUTPUT_GAIN = 4.0
+
+
+def _output_gain() -> float:
+    """`AETHER_OUTPUT_GAIN` as a multiplier, defaulting to 1.0 and never outside sane bounds.
+
+    Read here rather than at import so a presenter can change it between runs without reinstalling
+    anything, and clamped so a typo in an environment variable cannot destroy the audio on a call
+    that is already being recorded.
+    """
+    raw = (os.environ.get("AETHER_OUTPUT_GAIN") or "").strip()
+    if not raw:
+        return 1.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 1.0
+    if value <= 0:
+        return 1.0
+    return min(value, _MAX_OUTPUT_GAIN)
+
 
 def preferred_output_device() -> int | None:
     """Prefer WASAPI on Windows: measured 22 ms device latency vs 100 ms on MME.
@@ -110,6 +135,7 @@ class AudioGate:
         device: int | None = None,
         blocksize: int = 480,      # 10 ms at 48 kHz
         duck_gain: float = DUCK_GAIN,
+        output_gain: float | None = None,
     ):
         if device is None:
             device = preferred_output_device()
@@ -122,6 +148,14 @@ class AudioGate:
         self.device = device
         self.blocksize = blocksize
         self.duck_gain = duck_gain
+        # HOW LOUD AETHER IS, as a plain multiplier on the outbound signal. `AETHER_OUTPUT_GAIN=1.6`
+        # is about +4 dB and is the range worth reaching for on a quiet phone line; the clipping in
+        # `_callback` is what makes anything above 1.0 safe to hand a presenter.
+        #
+        # It does NOT touch the caller's audio or the VAD, so raising it cannot make AETHER hear
+        # itself and interrupt itself -- which is the failure a volume knob would otherwise invite,
+        # and the reason SETUP.md tells a presenter to wear a headset.
+        self.output_gain = _output_gain() if output_gain is None else float(output_gain)
 
         # Every queued chunk carries the generation that produced it. A bare PCM queue cannot
         # distinguish "audio the user still wants" from "audio the user already retracted".
@@ -291,8 +325,15 @@ class AudioGate:
         if pos > 0 and (self._first_out is None or self._first_out[0] != self._active_gen):
             self._first_out = (self._active_gen, now_ms())
 
+        # The caller's volume, applied in the same place as the duck so a call and a laptop get the
+        # identical signal -- the telephony path drives this exact callback (`OutboundBridge.pull`).
+        gain *= self.output_gain
         if gain != 1.0:
-            out = (out.astype(np.float32) * gain).astype(np.int16)
+            # CLIPPED, not wrapped. int16 overflow wraps a loud sample from +32767 to -32768, which
+            # is heard as a crack rather than as loudness, and a telephone codec makes it worse.
+            # `np.clip` before the cast costs one pass over 512 samples and makes a gain above 1.0
+            # safe to hand a presenter.
+            out = np.clip(out.astype(np.float32) * gain, -32768.0, 32767.0).astype(np.int16)
         outdata[:, 0] = out
 
     # --- watcher thread: turns applied timestamps into trace events -------------------

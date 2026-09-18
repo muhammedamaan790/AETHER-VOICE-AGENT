@@ -329,8 +329,24 @@ def _reservation_for_room(store: HotelStore, *, room: str) -> tuple[list, dict]:
     disclosure the database makes easy and the product should not make casual. The name is in the
     record and stays there; the template below never speaks it.
     """
-    found = store.reservation_for_room(room)
+    try:
+        found = store.reservation_for_room(room)
+    except UnknownRecord:
+        # NO BOOKING IS AN ANSWER, and a better one than asking the caller to repeat themselves.
+        # This used to raise, which the runner turns into "I am sorry, I could not find that. Could
+        # you say it again?" -- the sentence for a MISHEARD request. The caller was heard perfectly;
+        # the room simply has nobody booked into it, and being asked to say it again suggests
+        # otherwise. Seen on a real call against room one zero three.
+        #
+        # The room itself is still looked up, so a number this hotel does not have is still told
+        # apart from a room that is merely free.
+        try:
+            empty = store.room(room)
+        except UnknownRecord:
+            raise
+        return [], {"room_number": empty.number, "any": False, "status": empty.status}
     return [_reservation(found)], {"room_number": found.room_number, "status": found.status,
+                                   "any": True,
                                    "check_in": found.check_in, "check_out": found.check_out,
                                    "room_type": found.room_type}
 
@@ -968,6 +984,12 @@ def _speak_reservation_for_room(result) -> str:
     """
     s = result.summary
     number = say_room_number(s["room_number"])
+    # No booking at all. Said as a fact, with what IS true of the room, rather than raising -- which
+    # produced "could you say it again?", the sentence for a request that was misheard.
+    if not s.get("any", True):
+        if s.get("status") == "available":
+            return f"There is no booking on room {number}. It is free at the moment."
+        return f"There is no booking on record for room {number}."
     status = {"checked_in": "occupied by a guest who has checked in",
               "confirmed": "held on a confirmed booking",
               "cancelled": "no longer booked"}.get(s["status"], f"marked {s['status']}")
@@ -1409,7 +1431,7 @@ _EMPTY_IS_AN_ANSWER = frozenset({
     "list_category", "find_by_diet", "safe_for", "room_availability", "menu_overview",
     # "there is no room four one two" is information. Without this the renderer falls through to
     # the not-found sentence, which sounds like a mishearing rather than an answer.
-    "room_status",
+    "room_status", "reservation_for_room",
     # And so is a REFUSED booking. "Room three zero five is not free" and "I have no booking with
     # that reference" are the two most useful things these tools can say, and both come back with
     # no records -- so without this the caller is asked to repeat a perfectly clear request.

@@ -501,3 +501,48 @@ def test_a_reference_on_its_own_is_enough_to_look_a_booking_up():
     assert route("reference one zero zero eight").tool == "booking_status"
     assert route("booking number one zero zero eight").tool == "booking_status"
     assert route("my confirmation is one zero zero eight").tool == "booking_status"
+
+
+def test_a_room_with_no_booking_says_so_rather_than_asking_you_to_repeat(tmp_path):
+    """Seen on a real call: "can you give me details on a room I booked on another call, 103?"
+    came back "I am sorry, I could not find that. Could you say it again?"
+
+    That is the sentence for a request that was MISHEARD. The caller was heard perfectly -- room
+    103 simply had nobody booked into it (the working copy had been reset since). Being asked to
+    repeat a clear question suggests the fault was theirs.
+    """
+    import shutil
+
+    from aether.hotel.db import default_db_path
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    copy = tmp_path / "hotel.db"
+    shutil.copy(default_db_path(), copy)
+    store = HotelStore(path=copy)
+    free = next(r for r in store.rooms() if r.status == "available")
+
+    said = render(ToolRunner(Trace(), store, tools=HOTEL_TOOLS).run(
+        "reservation_for_room", gen="g", turn_id=1, is_valid=lambda: True, room=free.number))
+
+    assert "could not find that" not in said, said
+    assert "no booking" in said.lower(), said
+    assert "free" in said, f"it says there is no booking but not that the room is free: {said}"
+
+
+def test_a_room_the_hotel_does_not_have_is_still_told_apart(tmp_path):
+    """The guard on the answer above: "no booking on room nine nine nine" would be a confident
+    statement about a room that does not exist."""
+    import shutil
+
+    from aether.hotel.db import default_db_path
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    copy = tmp_path / "hotel.db"
+    shutil.copy(default_db_path(), copy)
+    said = render(ToolRunner(Trace(), HotelStore(path=copy), tools=HOTEL_TOOLS).run(
+        "reservation_for_room", gen="g", turn_id=1, is_valid=lambda: True, room="999"))
+    assert "no booking" not in said.lower(), f"invented a room: {said}"

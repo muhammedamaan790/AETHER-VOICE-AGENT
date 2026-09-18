@@ -53,6 +53,7 @@ from ..audio.player import AudioGate
 from ..bridge import InboundBridge, OutboundBridge
 from ..prewarm import prewarm
 from ..spike import HANDS_FREE, Day1Spike
+from ..events import EventType
 from ..trace import Trace
 from ..web.server import WebBridge
 from . import AGENT_NAME, TRANSPORT_CHANNELS, TRANSPORT_SAMPLE_RATE, LiveKitConfig
@@ -425,6 +426,28 @@ def speak_greeting(spike: Day1Spike, text: str = GREETING) -> bool:
             text, gate=spike.gate, gen=gen.id, turn_id=0,
             is_valid=lambda: spike.barge.is_valid(gen.id),
         )
+        # THE SAME EVENT AN ORDINARY TURN EMITS, so the opening line appears in the transcript with
+        # everything else. It did not: the console's conversation began at the caller's answer, and
+        # a recording therefore opened on somebody replying "English" to a question nobody could
+        # see. The first thing a caller hears is the first thing a judge should read.
+        #
+        # Emitted only when the gate accepted the audio, exactly as the turn loop does -- a greeting
+        # that was fenced or never reached the speaker was not spoken, and must not be shown as if
+        # it had been.
+        if result.accepted:
+            config = getattr(spike.rime, "config", None)
+            spike.trace.emit(
+                EventType.RESPONSE_SPOKEN,
+                turn_id=0,
+                gen=gen.id,
+                provider=spike.rime.name,
+                transport=spike.rime.transport,
+                model=getattr(config, "model", None),
+                voice=getattr(config, "voice", None),
+                voice_language=getattr(config, "language", None),
+                text=text,
+                tts_latency_ms=spike.rime.last_latency_ms,
+            )
         return bool(result.accepted)
     except Exception:
         logger.exception("greeting failed; the call continues without it")

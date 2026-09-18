@@ -383,10 +383,25 @@ def test_a_reservation_is_reported_by_room_and_never_by_guest_name(runner, store
 
 
 def test_a_room_with_no_reservation_is_admitted(runner, store):
+    """No booking is an ANSWER, and it used to be given as a mishearing.
+
+    This asserted `said == NOT_FOUND` -- "I am sorry, I could not find that. Could you say it
+    again?" -- which is the sentence for a request that did not come through. Reported from a real
+    call against room one zero three: the caller was heard perfectly, the room simply had nobody
+    booked into it, and being asked to repeat a clear question suggests the fault was theirs.
+
+    The property this test has always been about is unchanged and still asserted below: a room with
+    no booking must never be described as having one.
+    """
     booked = {r.room_number for r in store.reservations()}
     free_room = next(r for r in store.rooms() if r.number not in booked)
     tool, said = ask(runner, f"Is there a booking on room {free_room.number}?")
-    assert said == NOT_FOUND
+
+    assert said != NOT_FOUND, "the caller was heard; they must not be asked to repeat themselves"
+    assert "no booking" in said.lower(), said
+    assert say_room_number(free_room.number) in said
+    for invented in ("booked from", "checked in", "confirmed booking"):
+        assert invented not in said, f"a booking was described for a room with none: {said}"
 
 
 # ============================ Gemini must not be asked ============================
