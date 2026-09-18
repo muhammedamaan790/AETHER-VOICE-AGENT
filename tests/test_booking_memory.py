@@ -404,3 +404,100 @@ def test_an_unknown_reference_says_so_rather_than_guessing():
         "booking_status", gen="g", turn_id=1, is_valid=lambda: True, reference="8888")
     said = render(result)
     assert "no booking" in said.lower() and "eight eight eight eight" in said, said
+
+
+# ============================ asking who ============================
+#
+# REPORTED: "there were some reservation questions it was not answering when we gave room number
+# and reference id ... it should at least respond, like sorry I can't give personal info."
+#
+# They were being answered -- as something else. "Who is staying in room two zero one" went to
+# `room_status` and came back "room two zero one is already reserved": true, about availability,
+# and not the question. A caller who asks who is in a room and hears about the room has been
+# answered by something that was not listening.
+#
+# The withholding itself was never in doubt -- `_reservation_for_room` has always refused to speak
+# a guest's name, because a hotel line answers to whoever dials it. What was missing was saying so.
+
+@pytest.mark.parametrize("said", [
+    "who is staying in room two zero one",
+    "what is the name of the guest in room two zero one",
+    "can you give me the guest details for room two zero one",
+    "what is the phone number of the guest in room two zero one",
+    "who booked room two zero one",
+    "whose booking is one zero zero eight",
+    "tell me the guest name for booking one zero zero eight",
+])
+def test_asking_who_is_declined_rather_than_answered_as_something_else(said):
+    decision = route(said)
+    assert decision is not None, f"{said!r} reached the model"
+    assert decision.tool == "guest_privacy", (
+        f"{said!r} asks about a person and went to {decision.tool}"
+    )
+
+
+@pytest.mark.parametrize("said", [
+    "what is your phone number",          # the HOTEL's number, which is public
+    "who do I call for room service",     # an extension, not a guest
+    "where are you located",
+    "is room two zero one free",
+    "when will room two zero one be available",
+    "is there a booking on room two zero one",
+    "what is my booking reference",
+    "what is the status of booking one zero zero eight",
+])
+def test_ordinary_questions_are_not_refused_as_personal(said):
+    """The expensive direction. A hotel that will not say whether a room is free is useless, and
+    the hotel's own telephone number is not a guest's."""
+    decision = route(said)
+    assert decision is not None, f"{said!r} reached the model"
+    assert decision.tool != "guest_privacy", f"{said!r} was wrongly refused"
+
+
+def test_the_refusal_says_what_it_can_do_instead(tmp_path):
+    """A bare refusal on a telephone sounds like a fault. It has to hand the call back."""
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    said = render(ToolRunner(Trace(), STORE, tools=HOTEL_TOOLS).run(
+        "guest_privacy", gen="g", turn_id=1, is_valid=lambda: True))
+    assert "cannot give out" in said, said
+    assert "free" in said, f"the refusal offers nothing in return: {said}"
+
+
+def test_the_privacy_answer_reads_no_guest_record_at_all():
+    """Structural. The answer does not depend on the booking, so it must not look at one -- a tool
+    that reads the record to decide it cannot speak it is one edit away from speaking it."""
+    import inspect
+
+    from aether.hotel.tools import HOTEL_TOOLS
+
+    fn, mutating = HOTEL_TOOLS["guest_privacy"]
+    assert mutating is False
+    body = inspect.getsource(fn)
+    for reach in ("store.bookings", "reservation", "guest_name", "store.rooms", ".find("):
+        assert reach not in body.split('"""')[-1], (
+            f"guest_privacy consults {reach!r} -- it has no reason to"
+        )
+
+
+@pytest.mark.parametrize("code", ["eng", "hin", "spa"])
+def test_the_refusal_exists_in_every_language(code):
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.lang import by_code
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    said = render(ToolRunner(Trace(), STORE, tools=HOTEL_TOOLS).run(
+        "guest_privacy", gen="g", turn_id=1, is_valid=lambda: True), by_code(code))
+    assert said and len(said.split()) > 6, f"[{code}] {said!r}"
+
+
+def test_a_reference_on_its_own_is_enough_to_look_a_booking_up():
+    """"Reference one zero zero eight" reached the model, and "room two zero one, reference one
+    zero zero eight" was answered as though only the room had been said -- because `reference` was
+    not one of the words that makes a sentence about a booking."""
+    assert route("reference one zero zero eight").tool == "booking_status"
+    assert route("booking number one zero zero eight").tool == "booking_status"
+    assert route("my confirmation is one zero zero eight").tool == "booking_status"

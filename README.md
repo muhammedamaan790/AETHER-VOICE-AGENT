@@ -43,6 +43,7 @@ was said. For a hotel's phone line, speech isn't a nicer interface — it's the 
 | Book a room or a table, and cancel | *"Book it for two nights."* · *"A table for four at eight."* |
 | **Order food, and have it read back** | *"I'll have the chicken kebab."* · *"And two masala chai."* · *"Repeat my order."* |
 | **Ask about what they just did** | *"What was my reference?"* · *"When will room three zero one be free?"* |
+| Ask about a booking from an earlier call | *"Check reference one zero zero eight."* |
 | Speak Hindi or Spanish | *"चिकन कबाब कितने का है?"* · *"¿Tienen piscina?"* |
 | **Interrupt, change their mind, or say stop** | Talk over any answer, at any moment |
 
@@ -263,6 +264,11 @@ Three questions, three different behaviours, and the difference between them is 
 | "Is there a rooftop terrace?" | No row holds it, but it's a hotel question. The model answers as the duty manager — **and the answer is written down**. | one model call, then ~6 ms forever after |
 | "Who was Albert Einstein?" | Declined in one sentence, with an offer to help with the hotel. | one model call |
 
+**A guest's details are never given out.** *"Who is staying in room two zero one?"* is declined in
+one sentence — *"I cannot give out a guest's details. I can tell you whether a room is free and when
+it frees up, if that helps."* A hotel line answers to whoever dials it. The withholding was always
+there; what was missing was saying so, and the question was quietly answered as availability instead.
+
 **The line is the hotel and the stay, not the database.** Directions from the airport, the
 neighbourhood, and ordinary courtesy are a duty manager's job and no row holds any of them. Relativity
 isn't. Getting this wrong in either direction is a real failure — too narrow and you rebuild the "that
@@ -410,7 +416,7 @@ aether/
   classify/      the six interruption classes
   interruption/  barge-in: when a caller's speech fences an answer
   supervisor/    generation IDs and fencing
-  hotel/         the database, the router, 30 tools, orders, bookings, clarification, memory ("it")
+  hotel/         the database, the router, 33 tools, orders, bookings, clarification, memory ("it")
   lang/          English, Hindi and Spanish: names, greetings, voices
   telephony/     the LiveKit phone worker
   web/           the live console
@@ -423,7 +429,7 @@ evidence/        a real phone call's trace and worker log
 
 ## Status
 
-**1804 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
+**1891 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
 says which: the unsafe-mode control condition, and salvage.
 
 ## Documents

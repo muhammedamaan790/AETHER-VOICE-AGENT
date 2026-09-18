@@ -124,6 +124,26 @@ earlier, stricter one.*
   kept in the database, so "repeat my order" is a lookup with `llm_ms = 0` and gives the same answer
   every time it is asked. Both obey the completed/spoken boundary: a booking or a dish the caller
   never heard confirmed is neither written nor remembered.
+- R8b.11 **An order is editable, and an edit is never an addition.** Removing, replacing and
+  swapping are distinct from adding, and a sentence that asks for one must never do the other. *This
+  is the rule with the worst failure mode in the file:* with no removal rule at all, "remove paneer
+  butter masala" was read as an ORDER for it, and a caller correcting their order watched it go from
+  one to two to four of the dish they were removing. A removal that adds is worse than no removal,
+  because the caller is actively correcting it and every attempt makes it worse. A number the caller
+  states is honoured ("remove **one**"), and a missing number means the whole line.
+- R8b.13 **A guest's details are never given out, and the refusal is SPOKEN.** A hotel line answers
+  to whoever dials it, so a name, telephone number or address read back to an unauthenticated caller
+  is a disclosure the database makes easy and the product must not make casual. The withholding was
+  never in doubt — `reservation_for_room` has always refused to speak a name. What was missing was
+  saying so: "who is staying in room two zero one" was answered "room two zero one is already
+  reserved", which is true, about availability, and not the question. `guest_privacy` declines in
+  one warm sentence and names what it *can* say. It reads no record at all, because the answer does
+  not depend on one.
+- R8b.12 **What the hotel cannot serve is said, with what it can.** Three reasons and three answers:
+  sold out ("the Fish Curry is off today"), misheard ("we do not have chiken kebap, but we do have
+  the Chicken Kebab" — via `clarify.nearest`), and not on the menu at all ("we do not have naan — we
+  do have starters, mains, …"). Silence about part of a list reads, on a telephone, as an order that
+  worked.
 - R8b.10 **Taking an order writes to two more tables, and nothing else changed.** `bookings.py`
   named `restaurant_orders` and `restaurant_order_items` in its authorizer rather than relaxing it;
   a dish's price is *copied* onto the order line at the moment of ordering, so an order totals what

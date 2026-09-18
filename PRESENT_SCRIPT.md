@@ -137,6 +137,19 @@ hundred rupees.*
 > seven hundred rupees ten times, each in about a millisecond. A list carried in a model's context
 > can come back one dish longer. A row can't."
 
+**YOU:** "Can you remove one vegetable biryani?" → *I have taken off Vegetable Biryani. That leaves
+Vegetable Biryani and Paneer Butter Masala, eight hundred and seventy rupees.*
+
+**YOU:** "Replace the paneer butter masala with butter chicken." → *I have taken off Paneer Butter
+Masala and added Butter Chicken. That leaves Vegetable Biryani and Butter Chicken, nine hundred and
+ten rupees.*
+
+> "**Remove *one*, not remove them all** — and a swap does both halves in one turn. Most of a real
+> order is corrections, and this is where the worst bug we ever had lived: with no removal rule at
+> all, 'remove the paneer' was read as an *order* for it, and a caller correcting their order
+> watched it go one, two, four. A removal that adds is worse than no removal, because they're
+> actively trying to fix it and every attempt makes it worse."
+
 **YOU:** "What was my booking reference?" → *You have the Executive Suite, room three zero one, for
 two nights, reference one zero zero eight.*
 
@@ -216,7 +229,7 @@ Phone → LiveKit SIP → speech detection → Whisper → classifier
 *[Run it live if you have the time — it takes about two minutes. Otherwise show the last run.]*
 
 ```bash
-python -m pytest -q          # 1804 passed, 2 skipped
+python -m pytest -q          # 1891 passed, 2 skipped
 ```
 
 | | |

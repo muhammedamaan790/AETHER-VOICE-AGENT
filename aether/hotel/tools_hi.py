@@ -552,6 +552,37 @@ def _say_order_lines(items) -> str:
     return say_list(parts)
 
 
+def _what_we_could_not(s) -> str:
+    """क्या नहीं मिल सकता, और उसकी जगह क्या मिल सकता है.
+
+    Grouped rather than one sentence each, and it ends by naming the categories when nothing could
+    be suggested -- a caller on a telephone cannot see the menu, so "naan नहीं है" on its own leaves
+    them with no way back into it.
+    """
+    refused = s.get("refused") or []
+    if not refused:
+        return ""
+
+    out = ""
+    sold_out = [item["dish"] for item in refused if item.get("why") == "dish_unavailable"]
+    if sold_out:
+        verb = "है" if len(sold_out) == 1 else "हैं"
+        out += f" {say_list(sold_out)} आज उपलब्ध नहीं {verb}।"
+
+    for item in refused:
+        if item.get("why") == "no_such_dish" and item.get("instead"):
+            out += f" {item['dish']} हमारे पास नहीं है, लेकिन {item['instead']} है।"
+
+    stranded = [item["dish"] for item in refused
+                if item.get("why") == "no_such_dish" and not item.get("instead")]
+    if stranded:
+        out += f" {say_list(stranded)} हमारे मेन्यू में नहीं {'है' if len(stranded) == 1 else 'हैं'}।"
+        if s.get("categories"):
+            names = [_category(c) for c in s["categories"]]
+            out += f" हमारे पास {say_list(names)} हैं।"
+    return out
+
+
 def _speak_add_to_order(result) -> str:
     s = result.summary
     if not s.get("ordered"):
@@ -563,11 +594,7 @@ def _speak_add_to_order(result) -> str:
                        or [{"name": s["added"], "quantity": s["added_quantity"]}])]
     put_on = sum(int(a["quantity"]) for a in (s.get("added_all") or [])) or 1
     lead = f"{say_list(parts)} {_done(put_on, 'जोड़')}।"
-    for item in s.get("refused") or []:
-        if item.get("why") == "dish_unavailable":
-            lead += f" {item.get('dish')} आज उपलब्ध नहीं है।"
-        elif item.get("why") == "no_such_dish":
-            lead += f" {item.get('dish')} हमारे मेन्यू में नहीं है।"
+    lead += _what_we_could_not(s)
     return (f"{lead} अभी तक आपके ऑर्डर में {_say_order_lines(s['items'])} "
             f"{_order_verb(s['items'])}, कुल {say_price(s['total'])}।")
 
@@ -656,6 +683,11 @@ def _speak_my_booking(result) -> str:
             f"{say_reference(s['reference'])}।")
 
 
+def _speak_guest_privacy(result) -> str:
+    return ("माफ़ कीजिए, मैं मेहमान की जानकारी नहीं दे सकती। हाँ, कोई कमरा खाली है या कब खाली "
+            "होगा, यह मैं बता सकती हूँ।")
+
+
 def _speak_booking_status(result) -> str:
     s = result.summary
     if not s.get("found"):
@@ -742,6 +774,7 @@ SPEAK: dict[str, Callable[..., str]] = {
     "cancel_order": _speak_cancel_order,
     "my_booking": _speak_my_booking,
     "booking_status": _speak_booking_status,
+    "guest_privacy": _speak_guest_privacy,
     "cancel_my_booking": _speak_cancel_my_booking,
     "room_free_from": _speak_room_free_from,
 }

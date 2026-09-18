@@ -99,7 +99,7 @@ made silently:
 
 ### Beyond the original plan (2026-09-08)
 
-- [x] Hotel SQLite database, 30 tools (23 read, 7 write), deterministic routing — `aether/hotel/`
+- [x] Hotel SQLite database, 33 tools (25 read, 8 write), deterministic routing — `aether/hotel/`
 - [x] Three languages (English, Hindi, Spanish) over ONE facts database — `aether/lang/`,
       `aether/hotel/tools_hi.py`, `aether/hotel/tools_es.py`
 - [x] Caller chooses the language before the hotel greeting — `Day1Spike.begin_language_selection`

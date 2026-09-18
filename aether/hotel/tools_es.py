@@ -505,6 +505,37 @@ def _say_order_lines(items) -> str:
     return say_list(parts)
 
 
+def _what_we_could_not(s) -> str:
+    """Lo que no se puede servir, y lo que sí hay en su lugar.
+
+    Agrupado en vez de una frase por plato, y termina nombrando las categorías cuando no hay nada
+    que sugerir: por teléfono el cliente no ve la carta, así que "no tenemos naan" a secas lo deja
+    sin manera de volver a ella.
+    """
+    refused = s.get("refused") or []
+    if not refused:
+        return ""
+
+    out = ""
+    sold_out = [item["dish"] for item in refused if item.get("why") == "dish_unavailable"]
+    if sold_out:
+        verb = "está" if len(sold_out) == 1 else "están"
+        out += f" {say_list(sold_out)} no {verb} disponible hoy."
+
+    for item in refused:
+        if item.get("why") == "no_such_dish" and item.get("instead"):
+            out += f" No tenemos {item['dish']}, pero sí tenemos {item['instead']}."
+
+    stranded = [item["dish"] for item in refused
+                if item.get("why") == "no_such_dish" and not item.get("instead")]
+    if stranded:
+        out += f" No tenemos {say_list(stranded)}."
+        if s.get("categories"):
+            names = [_category(c) for c in s["categories"]]
+            out += f" Sí tenemos {say_list(names)}."
+    return out
+
+
 def _speak_add_to_order(result) -> str:
     s = result.summary
     if not s.get("ordered"):
@@ -515,11 +546,7 @@ def _speak_add_to_order(result) -> str:
              for a in (s.get("added_all")
                        or [{"name": s["added"], "quantity": s["added_quantity"]}])]
     lead = f"He añadido {say_list(parts)}."
-    for item in s.get("refused") or []:
-        if item.get("why") == "dish_unavailable":
-            lead += f" Hoy no tenemos {item.get('dish')}."
-        elif item.get("why") == "no_such_dish":
-            lead += f" No tenemos {item.get('dish')} en la carta."
+    lead += _what_we_could_not(s)
     return (f"{lead} Por ahora lleva {_say_order_lines(s['items'])}, "
             f"{say_price(s['total'])}.")
 
@@ -603,6 +630,11 @@ def _speak_my_booking(result) -> str:
     return (f"Tiene la {s['room_type']}, habitación {say_room_number(s['room_number'])}, "
             f"para {say_number(s['nights'])} {noches}, con el número "
             f"{say_reference(s['reference'])}.")
+
+
+def _speak_guest_privacy(result) -> str:
+    return ("Lo siento, no puedo dar los datos de un huésped. Sí puedo decirle si una habitación "
+            "está libre y cuándo queda libre, si le sirve.")
 
 
 def _speak_booking_status(result) -> str:
@@ -691,6 +723,7 @@ SPEAK: dict[str, Callable[..., str]] = {
     "cancel_order": _speak_cancel_order,
     "my_booking": _speak_my_booking,
     "booking_status": _speak_booking_status,
+    "guest_privacy": _speak_guest_privacy,
     "cancel_my_booking": _speak_cancel_my_booking,
     "room_free_from": _speak_room_free_from,
 }

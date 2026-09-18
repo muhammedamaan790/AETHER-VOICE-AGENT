@@ -437,7 +437,7 @@ def _order_summary(order) -> dict:
 
 
 def _add_to_order(store: HotelStore, *, dish: str | None = None, quantity: int = 1,
-                  dishes: list | None = None) -> tuple[list, dict]:
+                  dishes: list | None = None, unknown: list | None = None) -> tuple[list, dict]:
     """"I'd like the chicken kebab." Mutating, for the same reasons as `_reserve_table`.
 
     `dishes` carries MORE THAN ONE, because callers order in lists. "I need biryani naan and paneer
@@ -450,6 +450,23 @@ def _add_to_order(store: HotelStore, *, dish: str | None = None, quantity: int =
 
     wanted = list(dishes) if dishes else [{"dish": dish, "quantity": quantity}]
     order, added, turned_down = None, [], []
+    # Things the caller asked for that are not on this menu at all. They never reached the router's
+    # dish table, so nothing downstream would have mentioned them -- an order that quietly drops
+    # two of the four things asked for sounds exactly like one that got everything.
+    # AND WHAT WE DO HAVE INSTEAD. "We do not have naan" leaves a caller holding a menu they cannot
+    # see, on a line with no way to browse. Two different answers, because there are two different
+    # reasons a dish is unknown:
+    #
+    #   misheard        -- "chiken kebap" is the Chicken Kebab, and `clarify.nearest` knows it.
+    #                      Naming the real dish is the whole answer.
+    #   not on the menu -- "naan" is not a mangled anything. Nothing can be suggested for it, so
+    #                      the categories are offered once at the end instead.
+    from .clarify import nearest as _nearest
+
+    for name in unknown or []:
+        suggestion = _nearest(str(name))
+        near = suggestion.phrase if suggestion is not None else None
+        turned_down.append({"dish": str(name), "why": "no_such_dish", "instead": near})
     for item in wanted:
         try:
             order = store.bookings.add_to_order(dish=item["dish"],
@@ -474,10 +491,16 @@ def _add_to_order(store: HotelStore, *, dish: str | None = None, quantity: int =
         return [], {"ordered": False, **first}
 
     store.record_change()
+    # The categories, carried only when something was turned down with nothing to suggest -- that
+    # is the one case where the caller needs a way back into the menu, and reading them on every
+    # successful order would be noise.
+    stranded = any(item.get("why") == "no_such_dish" and not item.get("instead")
+                   for item in turned_down)
     return [{"name": a["name"]} for a in added], {
         "ordered": True,
         "added": added[0]["name"], "added_quantity": added[0]["quantity"],
         "added_all": added, "refused": turned_down,
+        "categories": store.categories() if stranded else [],
         **_order_summary(order),
     }
 
@@ -599,6 +622,24 @@ def _my_booking(store: HotelStore) -> tuple[list, dict]:
         "room_number": booking.room_number, "room_type": booking.room_type,
         "nights": booking.nights, "check_in": booking.check_in, "check_out": booking.check_out,
     }
+
+
+def _guest_privacy(store: HotelStore) -> tuple[list, dict]:
+    """"Who is staying in room two zero one?" -- answered, and answered no.
+
+    A hotel line answers to whoever dials it. Reading a guest's name, telephone number or address
+    out to an unauthenticated caller is a disclosure the database makes easy and the product should
+    not make casual -- `_reservation_for_room` already withholds the name for that reason.
+
+    What was missing was the REFUSAL. The question went to `room_status` and came back "room two
+    zero one is already reserved": true, about availability, and not the question asked. A caller
+    who asks who is in a room and hears about the room has been answered by something that was not
+    listening.
+
+    Takes nothing and reads nothing. There is no version of this that consults the guest record,
+    because the answer does not depend on it.
+    """
+    return [{"withheld": True}], {"withheld": True}
 
 
 def _booking_status(store: HotelStore, *, reference: str) -> tuple[list, dict]:
@@ -724,6 +765,7 @@ HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     # What this call has already done -- the questions a caller asks straight after booking.
     "my_booking": (_my_booking, False),
     "booking_status": (_booking_status, False),
+    "guest_privacy": (_guest_privacy, False),
     "cancel_my_booking": (_cancel_my_booking, True),
     "room_free_from": (_room_free_from, False),
 }
@@ -1109,6 +1151,45 @@ def _say_order_lines(items) -> str:
     return say_list(parts)
 
 
+def _what_we_could_not(s) -> str:
+    """What the caller asked for and cannot have, and what they can have instead.
+
+    Three shapes, because there are three reasons and they deserve different answers:
+
+        off today       the dish exists and the kitchen has run out
+        misheard        "chiken kebap" is the Chicken Kebab, so name the real one
+        not on the menu nothing to suggest, so offer the categories -- once, at the end
+
+    GROUPED, not one sentence each. "We do not have kandhuri grill on the menu. We do not have naan
+    on the menu." is the same sentence twice down a telephone; a person says "we do not have
+    kandhuri grill or naan".
+    """
+    refused = s.get("refused") or []
+    if not refused:
+        return ""
+
+    out = ""
+    sold_out = [item["dish"] for item in refused if item.get("why") == "dish_unavailable"]
+    if sold_out:
+        verb = "is" if len(sold_out) == 1 else "are"
+        out += f" The {say_list(sold_out)} {verb} off today."
+
+    misheard = [(item["dish"], item["instead"]) for item in refused
+                if item.get("why") == "no_such_dish" and item.get("instead")]
+    for heard, real in misheard:
+        out += f" We do not have {heard}, but we do have the {real}."
+
+    stranded = [item["dish"] for item in refused
+                if item.get("why") == "no_such_dish" and not item.get("instead")]
+    if stranded:
+        out += f" We do not have {say_list(stranded)}."
+        # The way back into a menu the caller cannot see. Only when nothing could be suggested --
+        # after "did you mean the Chicken Kebab", reading the categories is noise.
+        if s.get("categories"):
+            out += f" We do have {say_list(list(s['categories']))}."
+    return out
+
+
 def _speak_add_to_order(result) -> str:
     s = result.summary
     if not s.get("ordered"):
@@ -1119,12 +1200,7 @@ def _speak_add_to_order(result) -> str:
              for a in (s.get("added_all")
                        or [{"name": s["added"], "quantity": s["added_quantity"]}])]
     lead = f"I have added {say_list(parts)}."
-    # Something in the middle of a list that could not go on is SAID, rather than dropped.
-    for item in s.get("refused") or []:
-        if item.get("why") == "dish_unavailable":
-            lead += f" The {item.get('dish')} is off today."
-        elif item.get("why") == "no_such_dish":
-            lead += f" We do not have {item.get('dish')} on the menu."
+    lead += _what_we_could_not(s)
     # The running total every time, because a caller adding dishes over the phone is keeping count
     # in their head and should not have to.
     return f"{lead} That is {_say_order_lines(s['items'])}, {say_price(s['total'])} so far."
@@ -1214,6 +1290,13 @@ def _speak_my_booking(result) -> str:
             f"for {say_number(s['nights'])} "
             f"{'night' if s['nights'] == 1 else 'nights'}, "
             f"reference {say_reference(s['reference'])}.")
+
+
+def _speak_guest_privacy(result) -> str:
+    # Warm, one sentence, and it hands the call back -- a bare refusal on a telephone sounds like
+    # a fault. It also names what CAN be said, so the caller is not left guessing what to ask.
+    return ("I am sorry, I cannot give out a guest's details. I can tell you whether a room is "
+            "free and when it frees up, if that helps.")
 
 
 def _speak_booking_status(result) -> str:
@@ -1310,6 +1393,7 @@ SPEAK: dict[str, Callable[..., str]] = {
     "cancel_order": _speak_cancel_order,
     "my_booking": _speak_my_booking,
     "booking_status": _speak_booking_status,
+    "guest_privacy": _speak_guest_privacy,
     "cancel_my_booking": _speak_cancel_my_booking,
     "room_free_from": _speak_room_free_from,
 }
@@ -1336,7 +1420,7 @@ _EMPTY_IS_AN_ANSWER = frozenset({
     "repeat_order", "place_order", "cancel_order", "add_to_order",
     "remove_from_order",
     # "You have not booked anything on this call" is likewise an answer, not a mishearing.
-    "my_booking", "cancel_my_booking", "booking_status",
+    "my_booking", "cancel_my_booking", "booking_status", "guest_privacy",
 })
 
 

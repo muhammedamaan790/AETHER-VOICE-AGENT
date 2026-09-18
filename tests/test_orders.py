@@ -528,3 +528,310 @@ def test_the_reported_call_no_longer_makes_it_worse(monkeypatch, tmp_path):
     )
     assert on_it == {"Vegetable Biryani": 1, "Butter Chicken": 1}, on_it
     assert llm.calls == [], "an order must never reach the model"
+
+
+# ============================ ordering in a list ============================
+#
+# REPORTED FROM A REAL CALL: "I need two plates of biryani, one plate of kandhuri grill, two plates
+# of paneer butter masala and four naan." AETHER answered "I have added Paneer Butter Masala. That
+# is Paneer Butter Masala, four hundred and eighty rupees so far."
+#
+# Four items asked for, one added, one of a dish the caller wanted two of, and nothing said about
+# the two that are not on the menu. On a telephone that reads as an order that worked.
+
+def test_a_count_survives_a_unit_word():
+    """"Two plates of biryani" is two. The number was not adjacent to the dish, so it read as one
+    -- a party ordering two of everything got one of everything and only found out from the total."""
+    assert route("order two plates of biryani", ordering=True).params["quantity"] == 2
+    assert route("three portions of the chicken kebab", ordering=True).params["quantity"] == 3
+    assert route("two bowls of fresh fruit bowl", ordering=True).params["quantity"] == 2
+
+
+def test_a_count_works_on_a_dish_the_caller_named_by_its_short_name():
+    """The quantity was searched for in front of the MENU's name. A caller saying "biryani" for
+    Vegetable Biryani put the number in front of a phrase that is not in the sentence at all, so
+    every shorthand dish silently came back as one."""
+    assert route("order two biryani", ordering=True).params["quantity"] == 2
+    assert route("order three kebab", ordering=True).params["quantity"] == 3
+
+
+def test_a_number_somewhere_else_in_the_sentence_is_still_not_a_quantity():
+    """The guard that makes the rule above safe."""
+    assert route("order the chicken kebab for room two zero five",
+                 ordering=True).params["quantity"] == 1
+
+
+def test_the_whole_reported_list_is_taken_with_its_counts():
+    decision = route(
+        "I need two plates of biryani, one plate of kandhuri grill, two plates of paneer butter"
+        " masala and four naan", ordering=True)
+    assert decision.tool == "add_to_order"
+    got = {d["dish"]: d["quantity"] for d in decision.params["dishes"]}
+    assert got == {"vegetable biryani": 2, "paneer butter masala": 2}, got
+    assert set(decision.params["unknown"]) == {"kandhuri grill", "naan"}, decision.params
+
+
+def test_what_the_hotel_does_not_have_is_said_rather_than_dropped(tmp_path):
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    store = _hotel(tmp_path)
+    decision = route(
+        "I need two plates of biryani, one plate of kandhuri grill, two plates of paneer butter"
+        " masala and four naan", ordering=True)
+    said = render(ToolRunner(Trace(), store, tools=HOTEL_TOOLS).run(
+        decision.tool, gen="g", turn_id=1, is_valid=lambda: True, **decision.params))
+
+    assert "kandhuri grill" in said and "naan" in said, said
+    assert "two Vegetable Biryani" in said and "two Paneer Butter Masala" in said, said
+
+
+@pytest.mark.parametrize("said", [
+    "book a table for four people",
+    "book a deluxe king for two nights",
+    "order the chicken kebab for room two zero five",
+    "order two chicken kebab and three masala chai",
+])
+def test_ordinary_sentences_report_nothing_as_missing(said):
+    """The expensive direction. Telling a caller their dish is not on a menu that has it, or that
+    "four people" is not on the menu, is worse than saying nothing -- so when this is unsure it
+    stays quiet, which is the behaviour it replaces."""
+    from aether.hotel._foreign import to_router_language
+    from aether.hotel.router import _find_unknown_items, normalise
+
+    assert _find_unknown_items(to_router_language(normalise(said))) == [], said
+
+
+def test_chasing_a_dish_reads_the_order_back_rather_than_ordering_it_again():
+    """"I also ordered two plates of biryani. Where is it?" added two more, taking the caller's
+    two to four.
+
+    A caller chasing something they believe they ordered is the last person who should be given
+    more of it. The read-back answers the question either way -- if it is on the order they hear
+    it, and if it is not they hear that too and can ask for it.
+    """
+    for said in ("I also ordered two plates of biryani. Where is it?",
+                 "I already ordered the chicken kebab",
+                 "where is my biryani",
+                 "I ordered two biryani earlier"):
+        decision = route(said, ordering=True)
+        assert decision is not None, said
+        assert decision.tool == "repeat_order", f"{said!r} went to {decision.tool}"
+
+
+def test_actually_ordering_is_still_ordering():
+    """The guard on the rule above: present-tense requests are unaffected."""
+    for said in ("order two biryani", "I would like to order the chicken kebab",
+                 "and two masala chai", "I'll have the paneer tikka"):
+        assert route(said, ordering=True).tool == "add_to_order", said
+
+
+# ============================ editing an order, every phrasing ============================
+#
+# Two more from a real call:
+#
+#   "Can you remove one vegetable biryani?"  -> took off BOTH of the caller's two.
+#   "Can you replace my paneer butter and masala for butter chicken?"  -> added the butter chicken
+#                                                                        and left the paneer on.
+#
+# The first was a missing distinction: `_find_quantity` defaults a missing number to one, so "no
+# number" and "the number one" were the same value, and the removal rule read both as "all of them".
+# The second was a missing verb: `replace`, `swap` and `change ... to` matched no removal word at
+# all, so both dishes were read as an order.
+#
+# The table below is the sweep those fixes came from. It is wide rather than deep on purpose: a
+# phrasing that stops working shows up here rather than on a call.
+
+_EDIT_CASES = [
+    # (sentence, tool, dish going out, dishes coming in)
+    ("order the chicken kebab", "add_to_order", None, ["chicken kebab"]),
+    ("two plates of biryani please", "add_to_order", None, ["vegetable biryani"]),
+    ("and two masala chai", "add_to_order", None, ["masala chai"]),
+    ("order a kebab and a brownie", "add_to_order", None,
+     ["chicken kebab", "chocolate brownie"]),
+
+    ("remove the vegetable biryani", "remove_from_order", "vegetable biryani", []),
+    ("remove one vegetable biryani", "remove_from_order", "vegetable biryani", []),
+    ("take the paneer tikka off my order", "remove_from_order", "paneer tikka", []),
+    ("take off one masala chai", "remove_from_order", "masala chai", []),
+    ("cancel the chicken kebab from my order", "remove_from_order", "chicken kebab", []),
+    ("get rid of the brownie", "remove_from_order", "chocolate brownie", []),
+    ("leave out the paneer tikka", "remove_from_order", "paneer tikka", []),
+    ("drop the masala chai", "remove_from_order", "masala chai", []),
+
+    ("replace the paneer butter masala with butter chicken", "remove_from_order",
+     "paneer butter masala", ["butter chicken"]),
+    ("swap the chicken kebab for the paneer tikka", "remove_from_order",
+     "chicken kebab", ["paneer tikka"]),
+    ("change the masala chai to a fresh lime soda", "remove_from_order",
+     "masala chai", ["fresh lime soda"]),
+    ("I want butter chicken instead of paneer butter masala", "remove_from_order",
+     "paneer butter masala", ["butter chicken"]),
+    ("remove the biryani and add a butter chicken", "remove_from_order",
+     "vegetable biryani", ["butter chicken"]),
+
+    ("repeat my order", "repeat_order", None, []),
+    ("read my order back", "repeat_order", None, []),
+    ("where is my chicken kebab", "repeat_order", None, []),
+    ("that's all, place the order", "place_order", None, []),
+    ("send it to the kitchen", "place_order", None, []),
+    ("cancel my order", "cancel_order", None, []),
+    ("forget the whole order", "cancel_order", None, []),
+
+    # Nothing here may touch the order.
+    ("how much is the chicken kebab", "price_of", None, []),
+    ("is the fish curry off today", "check_availability", None, []),
+    ("what desserts do you have", "list_category", None, []),
+    ("does the butter chicken contain nuts", "check_allergens", None, []),
+    ("book a table for four at eight", "reserve_table", None, []),
+    ("is room three zero five free", "room_status", None, []),
+]
+
+
+@pytest.mark.parametrize(("said", "tool", "going", "coming"), _EDIT_CASES,
+                         ids=[c[0] for c in _EDIT_CASES])
+def test_every_way_of_editing_an_order(said, tool, going, coming):
+    decision = route(said, ordering=True)
+    assert decision is not None, f"{said!r} reached the model"
+    assert decision.tool == tool, f"{said!r} went to {decision.tool}"
+
+    if decision.tool == "remove_from_order":
+        assert decision.params["dish"] == going
+        assert [d["dish"] for d in decision.params.get("then_add", [])] == coming
+    elif decision.tool == "add_to_order":
+        added = ([d["dish"] for d in decision.params["dishes"]]
+                 if "dishes" in decision.params else [decision.params["dish"]])
+        assert added == coming
+
+
+def test_no_number_means_the_whole_line_and_one_means_one(orders):
+    """The distinction that was missing. A caller with two biryani who asks to remove one keeps
+    one; a caller who asks to remove "the" biryani keeps none."""
+    biryani = _dish(name="Vegetable Biryani")
+
+    orders.add_to_order(dish=biryani.name, quantity=2)
+    assert route("remove one vegetable biryani", ordering=True).params["quantity"] == 1
+    order, _name, went = orders.remove_from_order(dish=biryani.name, quantity=1)
+    assert went == 1 and order.lines[0].quantity == 1
+
+    assert route("remove the vegetable biryani", ordering=True).params["quantity"] is None
+    order, _name, went = orders.remove_from_order(dish=biryani.name, quantity=None)
+    assert order is None, "the whole line should have gone"
+
+
+def test_a_caller_padding_a_dish_name_is_still_understood():
+    """"Paneer butter AND masala" -- said by a real caller. It matched nothing, so the dish being
+    replaced stayed on the order while the replacement was added beside it."""
+    decision = route("replace my paneer butter and masala for butter chicken", ordering=True)
+    assert decision.tool == "remove_from_order"
+    assert decision.params["dish"] == "paneer butter masala"
+    assert [d["dish"] for d in decision.params["then_add"]] == ["butter chicken"]
+
+
+def test_the_dish_going_out_is_never_also_the_dish_coming_in():
+    """"Butter chicken INSTEAD OF paneer butter masala": "instead of" is a removal cue and
+    "instead" a swap preposition, and they start at the same character. On that tie the paneer was
+    counted as both, and went straight back onto the order it had just come off."""
+    for said in ("I want butter chicken instead of paneer butter masala",
+                 "replace the paneer butter masala with butter chicken",
+                 "swap the chicken kebab for the paneer tikka"):
+        decision = route(said, ordering=True)
+        coming = [d["dish"] for d in decision.params.get("then_add", [])]
+        assert decision.params["dish"] not in coming, said
+
+
+@pytest.mark.parametrize(("code", "said", "tool"), [
+    ("hin", "मसाला चाय हटा दीजिए", "remove_from_order"),
+    ("hin", "एक मसाला चाय हटाइए", "remove_from_order"),
+    ("hin", "मेरा ऑर्डर दोहराइए", "repeat_order"),
+    ("hin", "दो मसाला चाय ऑर्डर कीजिए", "add_to_order"),
+    ("spa", "quite el masala chai", "remove_from_order"),
+    ("spa", "elimine el masala chai de mi pedido", "remove_from_order"),
+    ("spa", "repita mi pedido", "repeat_order"),
+    ("spa", "pedir dos masala chai", "add_to_order"),
+])
+def test_editing_an_order_works_in_every_language(code, said, tool):
+    """RULES.md R8b.6: an English-only hotel capability is a defect, and removal was English-only
+    when it was written."""
+    decision = route(said, ordering=True)
+    assert decision is not None, f"[{code}] {said!r} reached the model"
+    assert decision.tool == tool, f"[{code}] {said!r} went to {decision.tool}"
+
+
+# ============================ and what we DO have ============================
+#
+# "We do not have naan" on its own leaves a caller holding a menu they cannot see, on a line with
+# no way to browse it. Three reasons a dish cannot go on, and they deserve three different answers:
+# a dish the kitchen has run out of, a dish the recogniser mangled, and a dish this hotel simply
+# does not serve.
+
+def _order(store, said):
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    decision = route(said, ordering=True)
+    assert decision is not None, f"{said!r} reached the model"
+    return render(ToolRunner(Trace(), store, tools=HOTEL_TOOLS).run(
+        decision.tool, gen="g", turn_id=1, is_valid=lambda: True, **decision.params))
+
+
+def test_a_dish_we_do_not_serve_is_followed_by_what_we_do(tmp_path):
+    said = _order(_hotel(tmp_path), "order two plates of naan and one paneer butter masala")
+
+    assert "Paneer Butter Masala" in said, said
+    assert "naan" in said, said
+    # The way back into a menu the caller cannot see.
+    for category in STORE.categories():
+        assert category in said, f"{category!r} missing from: {said}"
+
+
+def test_a_misheard_dish_is_answered_with_the_real_one(tmp_path):
+    """"Chiken kebap" is the Chicken Kebab. Naming the real dish IS the answer, so the categories
+    would only be noise after it."""
+    said = _order(_hotel(tmp_path), "order a chiken kebap and a masala chai")
+
+    assert "chiken kebap" in said and "Chicken Kebab" in said, said
+    assert "starters" not in said, f"the categories were read out unnecessarily: {said}"
+
+
+def test_a_sold_out_dish_is_not_confused_with_one_we_do_not_serve(tmp_path):
+    sold_out = _dish(available=False)
+    said = _order(_hotel(tmp_path), f"order the {sold_out.name.lower()} and a masala chai")
+
+    assert "off today" in said, said
+    assert "do not have" not in said, f"a real dish was reported as missing: {said}"
+
+
+def test_missing_dishes_are_grouped_into_one_clause(tmp_path):
+    """"We do not have kandhuri grill on the menu. We do not have naan on the menu." is the same
+    sentence twice down a telephone."""
+    said = _order(_hotel(tmp_path),
+                  "order one plate of kandhuri grill, four naan and a masala chai")
+
+    assert said.count("We do not have") == 1, said
+    assert "kandhuri grill" in said and "naan" in said, said
+
+
+def test_an_ordinary_order_says_nothing_about_missing_dishes(tmp_path):
+    said = _order(_hotel(tmp_path), "order two chicken kebab and three masala chai")
+    assert "do not have" not in said and "We do have" not in said, said
+
+
+@pytest.mark.parametrize("code", ["eng", "hin", "spa"])
+def test_every_language_names_what_is_missing_and_what_we_have(code, tmp_path):
+    """RULES.md R8b.6 again: a caller stranded in Hindi needs the way back into the menu too."""
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.lang import by_code
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    decision = route("order two plates of naan and one paneer butter masala", ordering=True)
+    said = render(ToolRunner(Trace(), _hotel(tmp_path), tools=HOTEL_TOOLS).run(
+        decision.tool, gen="g", turn_id=1, is_valid=lambda: True, **decision.params),
+        by_code(code))
+
+    assert "naan" in said, f"[{code}] {said}"
+    assert "Paneer Butter Masala" in said, f"[{code}] {said}"
+    assert len(said.split()) > 12, f"[{code}] the answer lost its detail: {said}"

@@ -42,8 +42,8 @@ against it, takes food orders into it, and never lets a language model near a pr
 
 | | |
 |---|---|
-| Tools | **30** — 23 read, 7 write |
-| Tests | **1804 passing, 2 skipped**, one command |
+| Tools | **33** — 25 read, 8 write |
+| Tests | **1891 passing, 2 skipped**, one command |
 | Routing accuracy | **31/31 in each of three languages** |
 | Deterministic answer | **~1 ms** median (route + lookup + render) |
 | First audio, real phone call | **280 ms** median |
@@ -302,6 +302,31 @@ order" ten times and get the same seven hundred rupees ten times, each in ~1 ms.
 overnight, an order taken today still totals what the caller was told — and the menu row is still
 unwritable.
 
+### Correcting an order
+
+Most of a real order is corrections, and this is where the worst bug in the project's history lived:
+with no removal rule at all, *"remove paneer butter masala"* was read as an **order** for it, and a
+caller trying to correct their order watched it go from one to two to four of the dish they were
+removing. A removal that adds is worse than no removal, because the caller is actively correcting it
+and every attempt makes it worse.
+
+| Caller says | What happens |
+|---|---|
+| *"Remove the biryani"* | the whole line comes off |
+| *"Remove **one** biryani"* | one comes off, the rest stay |
+| *"Replace the paneer butter masala with butter chicken"* | both halves, one turn |
+| *"I also ordered two biryani, where is it?"* | reads the order back — never adds |
+
+A stated number is honoured and a missing number means the whole line. Those were the same value
+until a caller asked to remove one of their two biryani and lost both.
+
+**And what cannot be served is said, with what can.** Three reasons deserve three answers: sold out
+(*"the Fish Curry is off today"*), misheard (*"we do not have chiken kebap, but we do have the
+Chicken Kebab"* — through the same `clarify.nearest` the router uses), and not on the menu at all
+(*"we do not have naan — we do have starters, mains, vegetarian mains, desserts and drinks"*). The
+detection is deliberately timid: it ignores anything a known dish covers, drops words that follow a
+number without naming food, skips anything the hotel *does* have, and says nothing when unsure.
+
 ### And what this call has already booked
 
 A telephone caller gives no name and no number, so a booking made on the call has **nothing to be
@@ -421,7 +446,7 @@ real phone calls. That is the golden invariant holding on real audio.
 
 ## 12. Testing, and how we know
 
-**1804 passing, 2 skipped**, across 49 test files, in one command:
+**1891 passing, 2 skipped**, across 49 test files, in one command:
 
 ```bash
 python -m pytest -q
@@ -502,6 +527,14 @@ nothing, because the fence check runs before the tool body rather than after.
 For anything with a database route: the model is never asked. For allergens specifically there is a
 second rule — never guess, even when the model could. A wrong opening time is corrected next call; a
 wrong allergen answer is not.
+
+**"What stops someone ringing up and getting a guest's details?"**
+Nothing in the database prevents it — which is exactly why the product has to. `reservation_for_room`
+returns dates and status and never the name, and any question about *who* is declined outright:
+*"I cannot give out a guest's details. I can tell you whether a room is free and when it frees up."*
+The refusal reads no guest record at all, because the answer does not depend on one. A hotel line
+answers to whoever dials it, and a name read back to an unauthenticated caller is a disclosure the
+schema makes easy and the product should not make casual.
 
 **"Your agent made something up about a rooftop terrace and saved it. Isn't that dangerous?"**
 It would be if we treated it as a fact. We deliberately do not. It is stored unconfirmed, in a

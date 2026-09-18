@@ -3,12 +3,13 @@
 Authoritative state of the project. Read this first after any context loss. If this file disagrees
 with anyone's recollection, this file wins until it is updated with evidence.
 
-**Last updated:** 2026-09-18 — hotel SQLite database as the single source of truth, **30 tools
-(23 read, 7 write)**, three languages (English, Hindi, Spanish) that AETHER both *understands* and
+**Last updated:** 2026-09-19 — hotel SQLite database as the single source of truth, **33 tools
+(25 read, 8 write)**, three languages (English, Hindi, Spanish) that AETHER both *understands* and
 *answers* in from that one database, caller-chosen language before the hotel greeting, 27
 `hotel_policies` topics, a suggestion-and-repeat path for what the recogniser mangles, real
 room and table bookings behind an authorizer that keeps every hotel FACT unwritable, **food orders
-taken and read back**, and **what this call has already done** answerable without the model. The
+taken, edited and read back**, and **what this call has already done** answerable without the model,
+including a booking made on an earlier call and given by its reference. The
 realtime voice path and the continuity engine are both built and tested; salvage and the
 unsafe-mode control path remain deliberately unbuilt.
 
@@ -129,7 +130,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1804 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1891 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -529,7 +530,7 @@ Still `<from_run>` and must not be quoted:
   passes either way and is labelled in its docstring as the baseline, not as the proof.
 
 - **AETHER can take a booking, and the read-only guarantee survived it.** Room bookings, restaurant
-  table bookings, table availability and cancellation -- 30 tools now, 7 of which write (orders added 2026-09-18). The facts
+  table bookings, table availability and cancellation -- 33 tools now, 8 of which write (orders and order editing added 2026-09-18). The facts
   stay unwritable and SQLite still says so: the one read-write connection sits behind an authorizer
   permitting `reservations`, `table_bookings`, `guests` and the single column `rooms.status`, and
   refusing everything else at the driver. `mode=ro` narrowed, not abandoned.

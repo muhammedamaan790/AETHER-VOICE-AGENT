@@ -134,6 +134,28 @@ order"* is a **lookup at `llm_ms = 0`** that gives the same answer every time it
 The price is **copied onto the order line** when the dish is ordered, so the total is what the caller
 was told even if the kitchen reprices overnight — and the menu row is still unwritable.
 
+**And an order can be corrected, which is where most voice agents fall over.**
+
+```
+CALLER   Can you remove one vegetable biryani?
+AETHER   I have taken off Vegetable Biryani. That leaves Vegetable Biryani and Paneer Butter
+         Masala, eight hundred and seventy rupees.
+CALLER   Can you replace my paneer butter and masala for butter chicken?
+AETHER   I have taken off Paneer Butter Masala and added Butter Chicken. That leaves Vegetable
+         Biryani and Butter Chicken, nine hundred and ten rupees.
+```
+
+*"Remove **one**"* takes one off and leaves the rest; *"remove the biryani"* clears the line. A swap
+does both halves in one turn. *"I also ordered two biryani, where is it?"* reads the order back
+rather than adding two more — a caller chasing something they think they ordered is the last person
+who should be given more of it.
+
+**And what the hotel cannot serve is said, with what it can.** Three reasons, three answers: *"the
+Fish Curry is off today"* (sold out), *"we do not have chiken kebap, but we do have the Chicken
+Kebab"* (misheard), and *"we do not have naan — we do have starters, mains, vegetarian mains,
+desserts and drinks"* (not on the menu). Silence about two of four items reads, on a phone, as an
+order that worked.
+
 **And it remembers what this call did.** *"What was my booking reference?"* answers from a booking made
 four turns earlier. A telephone caller gives no name and no number — there is **nothing to look a
 booking up by** — so the session remembers. Interrupt mid-booking and it correctly says you have not
@@ -155,6 +177,12 @@ forgetting.
 courtesy are a duty manager's job with no row behind them. Relativity is not. Getting this wrong in
 either direction is a real failure — too narrow and you rebuild the *"that isn't in my records"*
 agent, too wide and the hotel's line is a search engine — so **both ends are pinned by tests**.
+
+**And a guest's details are never given out.** *"Who is staying in room two zero one?"* →
+*"I am sorry, I cannot give out a guest's details. I can tell you whether a room is free and when it
+frees up, if that helps."* A hotel line answers to whoever dials it. The withholding was always
+there — `reservation_for_room` has never spoken a name — but the question used to be answered as
+availability instead, which is a confident answer to something nobody asked.
 
 **Remembering buys consistency, not truth.** When the model answers a hotel question it couldn't look
 up, the answer is stored and replayed to the next caller — **1023 ms the first time, 7.6 ms the
@@ -207,7 +235,7 @@ Three callers told they had a Deluxe King that somebody else had also been given
 # 9. Everything reproduces with one command
 
 ```bash
-python -m pytest -q          # 1804 passed, 2 skipped — about two minutes
+python -m pytest -q          # 1891 passed, 2 skipped — about two minutes
 ```
 
 Both skips are features that genuinely don't exist, documented in the test body.
@@ -253,8 +281,8 @@ project refuses: an undocumented endpoint that merely happens to respond.
 | | |
 |---|---|
 | Stale results ever spoken | **0** across 95 runs, 6,869 events |
-| Tests | **1804 passing, 2 skipped**, 49 files |
-| Tools | 30 — 23 read, 7 write |
+| Tests | **1891 passing, 2 skipped**, 49 files |
+| Tools | 33 — 25 read, 8 write |
 | Routing accuracy | **31/31** in each of three languages |
 | Database answer | **~1 ms** |
 | Rime first audio, real call | **280 ms** median |

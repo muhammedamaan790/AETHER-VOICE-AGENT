@@ -163,7 +163,30 @@ _RESERVATION_WORDS = ("reservation", "reserved", "booking", "booked", "reservati
 # existing booking rather than a request for a new one -- and "reserved"/"booked" are participles
 # that appear in both.
 _RESERVATION_NOUNS = ("reservation", "reservations", "booking", "bookings",
-                      "बुकिंग", "आरक्षण", "reserva", "reservas")
+                      # What a caller calls the number they were given. Without these, "reference
+                      # one zero zero eight" reached the model and "room two zero one, reference
+                      # one zero zero eight" was answered as though only the room had been said.
+                      "reference", "references", "confirmation", "booking number",
+                      "booking id", "reservation number", "reference number",
+                      "बुकिंग", "आरक्षण", "बुकिंग नंबर", "reserva", "reservas",
+                      "número de reserva", "numero de reserva", "referencia")
+
+# ASKING ABOUT A PERSON, not about a room. "Who is staying in room two zero one" was answered
+# "room two zero one is already reserved" -- true, about availability, and not remotely the
+# question. A caller asking WHO deserves an answer to that question, and the answer is no.
+#
+# The hotel's own contact details are deliberately absent: "what is your phone number" is a
+# question about the hotel and `hotel_info` answers it.
+_PERSONAL_WORDS = ("who is", "who s", "whos", "who booked", "whose", "guest name",
+                   "name of the guest", "guest details", "guest s name", "who has booked",
+                   "staying in", "occupant", "occupants", "their name", "his name", "her name",
+                   "guest phone", "guest number", "guest email", "guest address",
+                   "of the guest", "of the occupant", "for the guest",
+                   "guests name", "guests phone", "guests number",
+                   "personal details", "personal information", "contact details of",
+                   "कौन ठहरा", "कौन रुका", "मेहमान का नाम", "किसने बुक",
+                   "quién está", "quien esta", "quién se aloja", "quien se aloja",
+                   "nombre del huésped", "nombre del huesped", "quién reservó", "quien reservo")
 
 # Asking AETHER to DO something rather than to tell you something. Deliberately separate from
 # `_RESERVATION_WORDS`, which is about looking an existing booking up: "is there a booking on room
@@ -229,12 +252,38 @@ _ORDER_NOUNS = ("order", "orders", "ऑर्डर", "pedido", "pedidos")
 # OFF" -- so "take off" as one keyword matches "take off the paneer" and misses the commoner
 # phrasing entirely. `off my order` and friends are listed whole because a bare "off" is not a
 # removal: "is the fish curry off today" asks whether it is available.
+# `replace`, `swap` and `change ... to` are removals with an add attached, and they were missing
+# entirely: "can you replace my paneer butter masala for butter chicken" matched no removal word,
+# so both dishes were read as an ORDER and the caller ended up with the thing they were replacing
+# AND the thing they replaced it with.
 _REMOVE_WORDS = ("off my order", "off the order", "off my bill", "off that order",
+                 "replace", "replaces", "swap", "swaps", "switch the", "change the",
+                 "instead of", "in place of", "rather than",
                  "remove", "removes", "remove the", "take off", "take out", "take away",
                  "delete", "drop the", "drop that", "get rid of", "scratch the", "scratch that",
                  "cancel the", "leave out", "leave off", "forget the", "not the", "instead of",
                  "हटा*", "निकाल*", "रद्द कर*",
                  "quit*", "quite*", "elimin*", "saca*", "sin el", "sin la", "borra*")
+
+# ALREADY ORDERED IT, or believes they have. "I also ordered two plates of biryani, where is it?"
+# is a question about an order, not a second order for the same thing -- and it was read as one,
+# taking a caller's two biryani to four. A caller chasing something they think they ordered is the
+# last person who should be given more of it.
+#
+# These route to a READ-BACK rather than an add, which answers the question either way: if the dish
+# is on the order they hear it, and if it is not they hear that too and can say "add two biryani".
+# The cost of being wrong is one extra turn; the cost of adding is the wrong food and the wrong
+# bill.
+_ALREADY_ORDERED = ("i ordered", "i also ordered", "i already ordered", "i had ordered",
+                    "we ordered", "we also ordered", "we already ordered", "had ordered",
+                    "i asked for", "we asked for", "where is my", "where is our",
+                    "where are my", "where are our", "what happened to",
+                    "मैंने ऑर्डर किया", "मैंने मंगवाया", "कहाँ है",
+                    "ya pedí", "ya pedi", "he pedido", "dónde está mi", "donde esta mi")
+
+# The preposition that introduces the dish coming IN on a swap. Only consulted once a removal word
+# is already present, which is what keeps "a table for four" out of it.
+_SWAP_TO_WORDS = ("with", "for", "to", "by", "instead")
 
 # "Say it back to me." A read, and it must never be confused with placing one.
 # `दोहरा*` and `repit*` are STEMS, and they have to be. Hindi inflects the verb -- दोहराइए,
@@ -243,6 +292,8 @@ _REMOVE_WORDS = ("off my order", "off the order", "off my bill", "off that order
 _REPEAT_WORDS = ("repeat", "read back", "read it back", "read me back", "say it back",
                  "what did i", "did i order", "what have i", "what is on", "what s on",
                  "whats on",
+                 # Split around the object: "read my order BACK", "read that back to me".
+                 "read my order", "read the order", "read that back", "read it back to",
                  "so far", "go over", "run through", "run over", "check my", "confirm my",
                  "दोहरा*", "बता*", "repit*", "repít*", "repás*", "repas*")
 # "Send it." A write, and the end of the order.
@@ -263,7 +314,8 @@ _MY_BOOKING_WORDS = ("my booking", "my bookings", "my reservation", "my reservat
                      # apart in Spanish, so "mi reserva" never matched the commonest phrasing.
                      "numero de reserva", "número de reserva", "mi número", "mi numero")
 
-_CANCEL_WORDS = ("cancel*", "रद्द", "cancelar*", "anular*")
+_CANCEL_WORDS = ("cancel*", "forget*", "scrap*", "scratch*",
+                 "रद्द", "cancelar*", "anular*", "olvide*", "olvida*")
 _STATUS_WORDS = ("free", "available", "vacant", "occupied", "empty", "taken", "ready",
                  # Spanish and Hindi say the STATE with their own words, and `_foreign.py`
                  # translates nouns rather than adjectives -- so "hasta cuando está reservada la
@@ -448,15 +500,16 @@ def _find_dish(spoken: str) -> str | None:
     Longest-first matters: "paneer butter masala" must not be answered as "paneer tikka" because
     both contain "paneer".
     """
-    for name in _DISH_NAMES:
-        if name in spoken:
-            return name
-    # Then the shorthand a caller actually uses -- "the kebab", "the brownie". Whole words only,
-    # so "chai" cannot be found inside another word.
-    for word, name in _DISH_SHORTHAND:
-        if re.search(rf"\b{re.escape(word)}\b", spoken):
-            return name.lower()
-    return None
+    # Through `_find_dish_spans`, so this and `_find_dishes` cannot disagree about what is in the
+    # sentence. They did: this used a literal `in` test, so "paneer butter and masala" -- a caller
+    # padding a remembered name -- was invisible here while the other found it, and a swap removed
+    # the wrong dish.
+    spans = _find_dish_spans(spoken)
+    if not spans:
+        return None
+    # The LONGEST name, not the first said: "paneer butter masala" must not be answered as
+    # "paneer tikka" because both contain "paneer".
+    return max(spans, key=lambda span: len(span[0]))[0]
 
 
 def _find_dishes(spoken: str) -> list[str]:
@@ -471,18 +524,122 @@ def _find_dishes(spoken: str) -> list[str]:
     invisible here by design; the renderer reads the whole order back, which is where a caller
     notices something they asked for is missing.
     """
+    return [name for name, _said, _at in _find_dish_spans(spoken)]
+
+
+@lru_cache(maxsize=256)
+def _dish_pattern(name: str) -> re.Pattern[str]:
+    r"""A dish name, tolerating an "and" a caller drops into the middle of it.
+
+    "Can you replace my paneer butter AND masala for butter chicken?" -- said by a real caller, and
+    it matched nothing, so the dish they were replacing stayed on the order while the replacement
+    was added beside it. People pad a remembered name with connectives; the menu spells it one way.
+
+    Only an optional `and` between the name's own words, so this cannot invent a dish out of two
+    others: the words still have to appear, in order, with nothing else between them.
+    """
+    words = name.split()
+    if len(words) == 1:
+        return re.compile(rf"\b{re.escape(name)}\b")
+    joined = r"\s+(?:and\s+)?".join(re.escape(word) for word in words)
+    return re.compile(rf"\b{joined}\b")
+
+
+def _find_dish_spans(spoken: str) -> list[tuple[str, str, int]]:
+    """Each dish as (menu name, the words the CALLER used, where they start).
+
+    The surface form is carried because a quantity sits before the words the caller actually said,
+    not before the menu's name for them. Looking for the canonical name meant "two plates of
+    biryani" was searched for as "... vegetable biryani", which is not in the sentence at all -- so
+    every dish named by a shorthand silently came back as a quantity of one.
+    """
     left, found = spoken, []
     for name in _DISH_NAMES:                      # already sorted longest-first
-        at = left.find(name)
-        if at != -1:
-            found.append((at, name))
-            left = left[:at] + (" " * len(name)) + left[at + len(name):]
+        match = _dish_pattern(name).search(left)
+        if match:
+            at, said = match.start(), match.group(0)
+            found.append((at, name, said))
+            left = left[:at] + (" " * len(said)) + left[at + len(said):]
     for word, name in _DISH_SHORTHAND:
         match = re.search(rf"\b{re.escape(word)}\b", left)
-        if match and name.lower() not in [n for _pos, n in found]:
-            found.append((match.start(), name.lower()))
+        if match and name.lower() not in [n for _pos, n, _said in found]:
+            found.append((match.start(), name.lower(), word))
             left = left[:match.start()] + (" " * len(word)) + left[match.end():]
-    return [name for _position, name in sorted(found)]
+    return [(name, said, at) for at, name, said in sorted(found)]
+
+
+# Words that follow a number without being a dish. Without these, "a table for four people" and
+# "book it for two nights" would be reported to the caller as things missing from the menu.
+_NOT_A_DISH = {
+    # Function words. Admitting the article "a" as a quantity widened this net a long way: without
+    # these it reported "for", "at" and "available" to the caller as things missing from the menu.
+    "for", "at", "in", "on", "to", "with", "from", "by", "as", "is", "are", "was", "be",
+    "do", "does", "did", "have", "has", "had", "can", "could", "would", "will", "shall",
+    "you", "your", "me", "my", "our", "us", "it", "its", "that", "this", "there", "here",
+    "available", "free", "some", "any", "other", "another", "also", "just", "still",
+    "you have", "we have", "i have", "i need", "i want", "like",
+    "people", "person", "persons", "guests", "guest", "adults", "children", "kids",
+    "nights", "night", "days", "day", "weeks", "week", "hours", "hour", "minutes",
+    "rooms", "room", "tables", "table", "beds", "bed", "floor", "floors",
+    "rupees", "rupee", "o clock", "oclock", "pm", "am", "thirty", "hundred", "thousand",
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "plates", "plate", "portions", "portion", "orders", "order",
+    "servings", "serving", "pieces", "piece", "bowls", "bowl", "glasses", "glass",
+    "cups", "cup", "more", "each", "of", "and", "the", "please", "extra",
+}
+
+
+def _find_unknown_items(spoken: str) -> list[str]:
+    """Things the caller ASKED FOR by the plate that are not on this menu.
+
+    Reported from a real call. "Two plates of biryani, one plate of kandhuri grill, two plates of
+    paneer butter masala and four naan" put the biryani and the paneer on the order and said
+    **nothing at all** about the other two. The caller asked for four items and heard about two,
+    with no hint that the rest had been dropped -- which on a phone reads as the order being right.
+
+    Deliberately conservative. It only looks at a number followed by a noun phrase, ignores anything
+    a known dish already covers, and drops the words that follow a number without naming food
+    ("four people", "two nights"). When it is unsure it returns nothing, which is the behaviour
+    this replaces -- the cost of a miss is silence, and the cost of a false positive is telling a
+    caller their dish is not on a menu that has it.
+    """
+    taken = []
+    for _name, said, at in _find_dish_spans(spoken):
+        taken.append((at, at + len(said)))
+
+    # The noun phrase STOPS at the next number or connector. Left greedy, "two plates of biryani one
+    # plate of kandhuri grill" captured "biryani one plate" as a single phrase -- which the biryani
+    # already claimed, so the whole thing was skipped and the kandhuri grill went unreported. One
+    # item's phrase must not eat the next item's number.
+    counts = "|".join(sorted(_SMALL_NUMBERS, key=len, reverse=True))
+    # `a` and `an` count too. "Order a chiken kebap and a masala chai" has no digit anywhere, so the
+    # misheard kebab was invisible here and vanished from a list the caller heard read back without
+    # it. An article is a quantity of one, said the way people actually say it.
+    stop = rf"(?:and|or|with|plus|a|an|{counts}|\d)\b"
+    unknown: list[str] = []
+    pattern = (rf"\b(\d{{1,2}}|an?|{counts})\s+(?:{_UNIT_WORDS}\s+)?"
+               rf"((?!{stop})[a-z]+(?:\s+(?!{stop})[a-z]+){{0,2}})")
+    for match in re.finditer(pattern, spoken):
+        start, end = match.span(2)
+        if any(start < to and at < end for at, to in taken):
+            continue                                    # a dish already claims these words
+        phrase = match.group(2).strip()
+        # Trim trailing filler so "kandhuri grill two plates" reports only the dish.
+        words = [w for w in phrase.split() if w not in _NOT_A_DISH]
+        while words and words[-1] in _NOT_A_DISH:
+            words.pop()
+        phrase = " ".join(words)
+        if not phrase or phrase in unknown:
+            continue
+        # THINGS THE HOTEL DOES HAVE, just not on the menu. "Do you have a swimming pool" would
+        # otherwise be reported as "we do not have swimming pool" -- about a pool this hotel has.
+        # Only a phrase the hotel knows nothing about is worth telling the caller about.
+        if (_find_policy(phrase) or _find_pair(phrase, _ROOM_TYPE_WORDS)
+                or _find_pair(phrase, _SERVICE_WORDS) or _find_category(phrase)
+                or _says(phrase, _ROOM_NOUNS)):
+            continue
+        unknown.append(phrase)
+    return unknown[:3]                                   # three is already a long apology
 
 
 def _cue_at(spoken: str, entries: tuple[str, ...]) -> list[int]:
@@ -505,15 +662,27 @@ def _split_remove_and_add(spoken: str, dishes: list[str]) -> tuple[str | None, l
     Position, not keyword order, because "add a butter chicken instead of the paneer" reverses them.
     """
     removes = _cue_at(spoken, _REMOVE_WORDS)
-    adds = _cue_at(spoken, _ORDER_VERBS)
+    # A SWAP names the incoming dish with a preposition, not with an order verb: "replace the paneer
+    # WITH a butter chicken", "swap it FOR the kebab". Without these the incoming dish had no add
+    # cue before it and was silently dropped, so a swap did only its first half.
+    adds = _cue_at(spoken, _ORDER_VERBS + _SWAP_TO_WORDS)
+    # Positions come from the spans, not from `spoken.find(name)`: the menu's name for a dish is
+    # often not the phrase the caller used ("biryani", "paneer butter and masala"), so looking for
+    # the canonical form returned -1 and the dish was skipped -- which on a swap meant the dish
+    # going out was never identified and the one coming in was removed instead.
+    where = {name: at for name, _said, at in _find_dish_spans(spoken)}
     going, coming = None, []
     for name in dishes:
-        at = spoken.find(name)
+        at = where.get(name, -1)
         if at == -1:
             continue
         last_remove = max([p for p in removes if p < at], default=None)
         last_add = max([p for p in adds if p < at], default=None)
-        if last_remove is not None and (last_add is None or last_remove > last_add):
+        # `>=`, so a TIE goes to the removal. "instead of" is a removal cue and "instead" is a swap
+        # preposition, and both start at the same character -- so on a tie the dish was counted as
+        # coming in as well as going out, and "butter chicken instead of paneer butter masala" put
+        # the paneer straight back on the order it had just been taken off.
+        if last_remove is not None and (last_add is None or last_remove >= last_add):
             if going is None:
                 going = name
         elif last_add is not None:
@@ -703,6 +872,13 @@ def _find_party_size(spoken: str) -> int | None:
     return None
 
 
+# What a caller puts between the number and the dish: "two PLATES OF biryani", "three PORTIONS OF
+# the kebab". Without this the number was not adjacent to the dish and the count came back as one,
+# so a party ordering two of everything got one of everything -- and only found out from the total.
+_UNIT_WORDS = (r"(?:plates?|portions?|orders?|servings?|pieces?|bowls?|glass(?:es)?|cups?)"
+               r"(?:\s+of)?(?:\s+the)?")
+
+
 def _find_quantity(spoken: str, dish: str | None) -> int:
     """"two chicken kebabs" -> 2. Defaults to one, which is what a caller who says no number means.
 
@@ -710,15 +886,32 @@ def _find_quantity(spoken: str, dish: str | None) -> int:
     "the chicken kebab, and send it to room two zero five" into an order for 205 kebabs -- and a
     quantity is the one parameter here where being wrong is expensive rather than merely unhelpful.
     """
+    return _stated_quantity(spoken, dish) or 1
+
+
+def _stated_quantity(spoken: str, dish: str | None) -> int | None:
+    """The number the caller actually SAID before this dish, or None if they said none.
+
+    The distinction matters for removal and only for removal. "Remove the vegetable biryani" means
+    the whole line; "remove ONE vegetable biryani" means one of them. `_find_quantity` defaults a
+    missing number to 1, so the two were indistinguishable -- and the removal rule read "no number"
+    and "one" alike as *all of them*, so a caller asking to take one of their two biryani off lost
+    both.
+    """
     if not dish:
-        return 1
-    match = re.search(rf"(\d{{1,2}}|\S+)\s+(?:{re.escape(dish)})", spoken)
+        return None
+    # The words the CALLER used for this dish, which is what a number sits in front of. Searching
+    # for the menu's own name found nothing when the caller said "biryani" for Vegetable Biryani,
+    # and a missing match silently returns one.
+    said = next((surface for name, surface, _at in _find_dish_spans(spoken) if name == dish), dish)
+    match = re.search(
+        rf"(\d{{1,2}}|\S+)\s+(?:{_UNIT_WORDS}\s+)?(?:{re.escape(said)})", spoken)
     if not match:
-        return 1
+        return None
     token = match.group(1)
     if token.isdigit():
-        return int(token) if 1 <= int(token) <= 20 else 1
-    return _SMALL_NUMBERS.get(token, 1)
+        return int(token) if 1 <= int(token) <= 20 else None
+    return _SMALL_NUMBERS.get(token)
 
 
 def _find_nights(spoken: str) -> int | None:
@@ -935,6 +1128,11 @@ def route(text: str, subject: Subject | None = None, *, ordering: bool = False) 
     says_remove = _says(spoken, _REMOVE_WORDS)
     dishes = _find_dishes(spoken)
 
+    #  CHASING SOMETHING, not ordering it. Before every add rule, because these sentences name a
+    #  dish and a count and look exactly like an order until you read the tense.
+    if ordering and _says(spoken, _ALREADY_ORDERED):
+        return Route("repeat_order", {}, "already ordered")
+
     #  TAKING SOMETHING OFF COMES FIRST, before every add rule and before cancelling the lot.
     #
     #  Reported by a real caller. "Can you remove paneer butter masala and add chicken butter?"
@@ -948,8 +1146,11 @@ def route(text: str, subject: Subject | None = None, *, ordering: bool = False) 
         going = going or dish
         #  "Remove the TWO paneer butter masala" -- the count says how many to take off, and it was
         #  being read as how many to add. That is what turned each correction into a doubling.
-        count = _find_quantity(spoken, going)
-        params = {"dish": going, "quantity": count if count > 1 else None}
+        #
+        #  `_stated_quantity`, not `_find_quantity`: a missing number means the whole line, and the
+        #  number ONE means one. `_find_quantity` defaults a missing number to 1 and made them the
+        #  same, so "remove one vegetable biryani" took both of the caller's two off.
+        params = {"dish": going, "quantity": _stated_quantity(spoken, going)}
         #  A SWAP is one sentence and two intentions. Doing only the removal leaves the caller to
         #  ask again for the dish they just asked for.
         if coming:
@@ -982,13 +1183,30 @@ def route(text: str, subject: Subject | None = None, *, ordering: bool = False) 
             adding = "add to order"
         elif ordering and not _says(spoken, _DESCRIBE_WORDS + _AVAILABLE_WORDS + _LIST_WORDS):
             adding = "add to open order"
-        if adding and len(dishes) > 1:
-            return Route("add_to_order",
-                         {"dishes": [{"dish": name, "quantity": _find_quantity(spoken, name)}
-                                     for name in dishes]}, adding)
         if adding:
-            return Route("add_to_order",
-                         {"dish": dish, "quantity": _find_quantity(spoken, dish)}, adding)
+            # What the caller asked for that this menu does not have. Carried through so the
+            # answer can say so: an order that silently drops two of the four things asked for
+            # sounds, on a telephone, exactly like an order that got everything.
+            missing = _find_unknown_items(spoken)
+            params: dict = {"dishes": [{"dish": name, "quantity": _find_quantity(spoken, name)}
+                                       for name in dishes]} if len(dishes) > 1 else {
+                "dish": dish, "quantity": _find_quantity(spoken, dish)}
+            if missing:
+                params["unknown"] = missing
+            return Route("add_to_order", params, adding)
+
+    # A00. ASKING WHO, which is a question about a person and is answered "no".
+    #
+    #      Before every room and booking rule, because all of them would answer it as something
+    #      else: "who is staying in room two zero one" went to `room_status` and came back "room
+    #      two zero one is already reserved" -- a confident answer about availability to a question
+    #      about a guest. Silence would have been better; a plain refusal is better still.
+    #
+    #      Needs a room, a reference or a booking noun, so "who do I call for room service" and
+    #      "what is your phone number" are untouched -- those are about the hotel, not a guest.
+    if _says(spoken, _PERSONAL_WORDS) and (room_number or _find_reference(spoken)
+                                           or _says(spoken, _RESERVATION_NOUNS)):
+        return Route("guest_privacy", {}, "guest details withheld")
 
     # A REFERENCE THE CALLER ACTUALLY GAVE beats anything the session remembers, and beats reading
     # its first three digits as a room number.
