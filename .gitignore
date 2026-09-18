@@ -48,3 +48,7 @@ Thumbs.db
 data/*.live.db
 data/*.live.db.partial
 *.db-journal
+
+# What the model has said about things the hotel has no row for. Never committed: it is one
+# deployment's guesses, not part of the hotel -- see aether/hotel/learned.py.
+data/aether_learned.db

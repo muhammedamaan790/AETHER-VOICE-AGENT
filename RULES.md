@@ -88,7 +88,8 @@ earlier, stricter one.*
   plausibly as the duty manager, in the caller's language. It must NOT say "that is not in the
   database", refuse, or redirect to the menu. *This reverses the previous rule that the model may
   never state an unlisted hotel fact: that rule was correct about accuracy and wrong about the
-  product — a duty manager who answers "not in my records" is useless on a telephone.*
+  product — a duty manager who answers "not in my records" is useless on a telephone.* Bounded by
+  R8b.7: this licenses answering about *the hotel* without a row, not answering about anything.
 - R8b.4 **The facts it IS given are authoritative.** The model may not contradict, restate or alter
   any price, time, name or allergen that appears in the hotel data injected into its prompt.
 - R8b.5 **One safety exception: allergens and dietary status are never guessed.** Not whether a dish
@@ -97,7 +98,44 @@ earlier, stricter one.*
   database holds the answer it is given deterministically; where it does not, the caller is told it
   will be checked with the kitchen.
 - R8b.6 Every deterministic capability exists in **all supported languages**. An English-only hotel
-  capability is a defect.
+  capability is a defect. *Measured, not asserted:* `scripts/measure_understanding.py` routes the
+  same 31 sentences per language and reports what reached which tool; `tests/test_understanding.py`
+  is the same table as a test, and it also guards that the three languages are tested equally.
+- R8b.6a **A question is never answered by a mutating tool.** A lookup that silently becomes a write
+  is the worst failure this router can produce, and it has happened twice — both times outside
+  English. "क्या कमरे पर कोई बुकिंग है" (*is there a booking on that room*) and
+  "बुकिंग रद्द कीजिए" (*cancel that booking*) both reached `reserve_room`, because English is
+  protected by exact-form verbs and neither Hindi nor Spanish separates the verb from the noun.
+  Pinned per language in `tests/test_understanding.py`.
+- R8b.7 **The line is the hotel and the stay, not the database.** *Added 2026-09-18, and it reverses
+  a previous instruction that the model could answer general knowledge freely.* Anything a duty
+  manager would reasonably handle is in scope even with no row behind it: rooms, food, services,
+  policies, the building, getting here, the local area, and ordinary courtesy. Anything else —
+  history, science, politics, celebrities, arithmetic, coding, the news, a joke, a recipe — is
+  declined in one warm sentence that offers help with the hotel instead. *Live: "Who was Albert
+  Einstein?" was answered with a paragraph on relativity. A caller who dials a hotel and gets a
+  physics lesson has reached the wrong number.* Note that R8b.7 and R8b.3 pull in opposite
+  directions on purpose, and the tests pin both ends: over-correcting here re-creates the
+  "not in my records" agent R8b.3 exists to prevent.
+- R8b.9 **What this call has done is part of what AETHER knows.** A telephone caller gives no name
+  and no number, so a booking made on the call has nothing to be looked up *by* — it is remembered
+  on the session, and "what was my reference?", "when is my table booked for?" and "cancel my
+  reservation" are answered from it rather than from the model. An order is the same shape and is
+  kept in the database, so "repeat my order" is a lookup with `llm_ms = 0` and gives the same answer
+  every time it is asked. Both obey the completed/spoken boundary: a booking or a dish the caller
+  never heard confirmed is neither written nor remembered.
+- R8b.10 **Taking an order writes to two more tables, and nothing else changed.** `bookings.py`
+  named `restaurant_orders` and `restaurant_order_items` in its authorizer rather than relaxing it;
+  a dish's price is *copied* onto the order line at the moment of ordering, so an order totals what
+  the caller was told and the menu row is still unwritable.
+- R8b.8 **A model answer to a hotel question is remembered, and remains a guess.** Once spoken, it
+  is written to `learned_answers` and replayed verbatim to the next caller who asks the same
+  question, with no model call. This buys **consistency, not truth**: nothing verified it, so the
+  row is stored `confirmed = 0`, never outranks a deterministic route, and is reported as a guess by
+  `scripts/review_learned.py` until a human agrees. It is kept in its own database file
+  (`data/aether_learned.db`), not in `aether_hotel.db` — R8b.1 is about hotel facts, and a guess is
+  not one; keeping them in separate files makes that structural rather than merely stated. Only an answer the caller actually heard is written down — a fenced or ungated turn is
+  not, by the same rule that governs conversation history.
 
 ## R9 — Rime
 

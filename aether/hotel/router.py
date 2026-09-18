@@ -23,7 +23,7 @@ import re
 from functools import lru_cache
 from dataclasses import dataclass
 
-from ._foreign import to_router_language
+from ._foreign import _INSIDE_A_WORD, to_router_language
 from ._text import is_kept as _is_kept_char
 from ._text import normalise as _normalise
 from .context import Subject, resolve
@@ -158,6 +158,13 @@ _CHECKIN_WORDS = ("check in", "check-in", "checkin", "check out", "check-out", "
                   "checking in", "checking out", "arrival time", "departure time")
 _RESERVATION_WORDS = ("reservation", "reserved", "booking", "booked", "reservations")
 
+# The reservation NOUN, in three languages. Its own table rather than an addition to
+# `_RESERVATION_WORDS`, because this one is used to decide that a sentence is a QUESTION about an
+# existing booking rather than a request for a new one -- and "reserved"/"booked" are participles
+# that appear in both.
+_RESERVATION_NOUNS = ("reservation", "reservations", "booking", "bookings",
+                      "बुकिंग", "आरक्षण", "reserva", "reservas")
+
 # Asking AETHER to DO something rather than to tell you something. Deliberately separate from
 # `_RESERVATION_WORDS`, which is about looking an existing booking up: "is there a booking on room
 # two zero two" must stay a question, and "book me room two zero two" must not.
@@ -188,8 +195,64 @@ _BOOK_INTENT = ("i want", "i would like", "i need", "can i", "could i", "please"
 
 _TABLE_WORDS = ("table", "tables", "मेज", "टेबल", "mesa", "mesas")
 
+# "When?" in three languages. Its own table because two rules need it and because a question word
+# is what separates "until when is room one zero two booked" from "book room one zero two".
+_WHEN_WORDS = ("when", "till when", "until when", "how long",
+               "कब", "कब तक", "कितने बजे",
+               "cuando", "cuándo", "hasta cuando", "hasta cuándo", "hasta que")
+
+# TAKING AN ORDER. "I'll have the chicken kebab" is a request to DO something; "how much is the
+# chicken kebab" is a question. The two sentences share a dish and nothing else, so the verb is the
+# whole distinction and these are exact forms rather than stems.
+#
+# `have` is deliberately absent on its own: "do you have the chicken kebab" is an availability
+# question and must stay one, so only the first-person frames ("can i have", "i'll have") count.
+# `normalise` turns an apostrophe into a SPACE, so "I'll have" reaches here as "i ll have". Both
+# spellings are listed because both are real: the recogniser returns the apostrophe and the router
+# sees it stripped, and an entry that only matched one silently matched neither in practice.
+_ORDER_VERBS = ("order", "orders", "ordering", "i ll have", "ill have", "i will have",
+                "i ll take", "ill take", "i will take", "can i have", "can i get",
+                "could i have", "could i get", "i d like", "id like", "i would like",
+                "i want", "give me", "send up", "bring me", "put me down for", "add",
+                # Hindi and Spanish. `order` is what people actually say in both, so it carries.
+                "मंगवा", "ऑर्डर", "भेज दीजिए", "le quiero", "quiero pedir", "pedir", "traiga")
+_ORDER_NOUNS = ("order", "orders", "ऑर्डर", "pedido", "pedidos")
+
+# "Say it back to me." A read, and it must never be confused with placing one.
+# `दोहरा*` and `repit*` are STEMS, and they have to be. Hindi inflects the verb -- दोहराइए,
+# दोहराओ, दोहरा दीजिए -- and a whole-word entry matched none of them, so "मेरा ऑर्डर दोहराइए"
+# reached the model. Spanish has the same shape: repetir, repita, repítame.
+_REPEAT_WORDS = ("repeat", "read back", "read it back", "read me back", "say it back",
+                 "what did i", "did i order", "what have i", "what is on", "what s on",
+                 "whats on",
+                 "so far", "go over", "run through", "run over", "check my", "confirm my",
+                 "दोहरा*", "बता*", "repit*", "repít*", "repás*", "repas*")
+# "Send it." A write, and the end of the order.
+_PLACE_WORDS = ("place", "send it", "send that", "send them", "submit", "go ahead",
+                "that is all", "that s all", "thats all", "that is everything",
+                "that s everything", "thats everything", "put it through", "send it through",
+                "confirm the order", "confirm that order",
+                "भेज दीजिए", "envíe", "envie", "mande")
+
+# "What did I book?" -- about THIS call, not about a room number the caller never gave.
+_MY_BOOKING_WORDS = ("my booking", "my bookings", "my reservation", "my reservations",
+                     "my table", "my room", "my reference", "booking reference",
+                     "reference number", "what did i book", "what have i booked",
+                     "मेरी बुकिंग", "मेरा कमरा", "मेरी टेबल", "मेरी बुकिंग का नंबर",
+                     "बुकिंग नंबर", "बुकिंग का नंबर",
+                     "mi reserva", "mi mesa", "mi habitación", "mi habitacion",
+                     # "cual es mi numero de reserva" -- the possessive and the noun are two words
+                     # apart in Spanish, so "mi reserva" never matched the commonest phrasing.
+                     "numero de reserva", "número de reserva", "mi número", "mi numero")
+
 _CANCEL_WORDS = ("cancel*", "रद्द", "cancelar*", "anular*")
-_STATUS_WORDS = ("free", "available", "vacant", "occupied", "empty", "taken", "ready")
+_STATUS_WORDS = ("free", "available", "vacant", "occupied", "empty", "taken", "ready",
+                 # Spanish and Hindi say the STATE with their own words, and `_foreign.py`
+                 # translates nouns rather than adjectives -- so "hasta cuando está reservada la
+                 # habitación uno cero dos" matched no status word and was answered "está ocupada",
+                 # which is true and is not when it frees up.
+                 "reservada", "reservado", "ocupada", "ocupado", "libre", "disponible",
+                 "खाली", "बुक है", "बुक हैं", "भरा", "उपलब्ध")
 _DESCRIBE_WORDS = ("tell me about", "what is the", "what is in", "describe",
                    "what comes with", "like")
 
@@ -402,10 +465,18 @@ def _compile(entry: str) -> re.Pattern[str]:
 
     A trailing `*` is the only special character, and no keyword in this file legitimately contains
     one.
+
+    THE BOUNDARY KNOWS ABOUT DEVANAGARI, and `\\w` alone does not -- a matra is a combining mark for
+    which `str.isalnum()` is False, so `(?!\\w)` reports a word boundary in the middle of a Hindi
+    word. `बुक` ("book") therefore matched inside `बुकिंग` ("booking"), and "कमरा तीन शून्य पाँच पर
+    कोई बुकिंग है क्या" -- *is there a booking on room 305* -- was read as an instruction to book it.
+    The exact-form/stem distinction above exists precisely to keep a noun from firing a verb, and in
+    Hindi it was not holding. `_foreign.py` carries the same fix for the same reason.
     """
     if entry.endswith("*"):
-        return re.compile(rf"(?<!\w){re.escape(entry[:-1])}\w*")
-    return re.compile(rf"(?<!\w){re.escape(entry.strip())}(?!\w)")
+        return re.compile(rf"(?<!{_INSIDE_A_WORD}){re.escape(entry[:-1])}{_INSIDE_A_WORD}*")
+    return re.compile(
+        rf"(?<!{_INSIDE_A_WORD}){re.escape(entry.strip())}(?!{_INSIDE_A_WORD})")
 
 
 def _says(spoken: str, entries: tuple[str, ...]) -> bool:
@@ -423,6 +494,33 @@ def _find_pair(spoken: str, table: tuple[tuple[str, str], ...]) -> str | None:
         if re.search(rf"\b{re.escape(word)}\b", spoken):
             return value
     return None
+
+
+def _find_policy(spoken: str) -> str | None:
+    """The policy this sentence asks about -- or None when it names more than one.
+
+    `_find_pair` returns the LONGEST matching keyword, which is the right rule for overlapping
+    phrases ("late check out" must beat "check out") and the wrong rule when a sentence genuinely
+    names two different topics. "Is the gym open to children?" matched both `gym` and `children`,
+    `children` won on length alone, and the caller was told that children stay free -- a confident
+    answer to a question nobody asked.
+
+    Naming two topics is exactly the ambiguity this router refuses to guess at elsewhere (a dish
+    shorthand claimed by two dishes is left alone for the same reason). So it declines, and the
+    model answers -- which it can now do from the hotel's own facts, and does better: asked about
+    the gym and children it replies "children are welcome in the gym when accompanied by an adult",
+    addressing both instead of one.
+
+    Several keywords for the SAME topic are not ambiguity: "wifi", "wi-fi" and "internet" all mean
+    `wifi`, and that sentence is answered.
+    """
+    found: list[str] = []
+    for word, topic in _POLICY_WORDS:
+        if topic not in found and re.search(rf"\b{re.escape(word)}\b", spoken):
+            found.append(topic)
+            if len(found) > 1:
+                return None
+    return found[0] if found else None
 
 
 def _find_allergen(spoken: str) -> str | None:
@@ -473,7 +571,11 @@ _SMALL_NUMBERS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
     "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
     "ek": 1, "do": 2, "teen": 3, "char": 4, "paanch": 5, "chhe": 6, "saat": 7, "aath": 8,
-    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पाँच": 5, "पांच": 6, "छह": 6, "सात": 7, "आठ": 8,
+    # `पांच` is FIVE. It read 6 until 2026-09-18 -- a copy-paste from the छह line beside it -- so
+    # "पांच लोगों के लिए टेबल" booked a table for six. A wrong party size is not a wrong answer that
+    # gets corrected next turn; it is a table laid for the wrong number of people.
+    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पाँच": 5, "पांच": 5, "छह": 6, "सात": 7, "आठ": 8,
+    "नौ": 9, "दस": 10,
     "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
     "ocho": 8, "nueve": 9, "diez": 10,
 }
@@ -490,12 +592,23 @@ def _find_party_size(spoken: str) -> int | None:
     "book me room three zero five for two nights" contains "two", and reading that as a party size
     would turn a room booking into a table for two.
     """
+    # THE EXPLICIT FRAME FIRST, because it is the specific one. Hindi puts the number BEFORE the
+    # phrase -- "चार लोगों के लिए", "char logon ke liye" -- and running the "for" rule ahead of it
+    # read the wrong number out of the same sentence: "चार लोगों के लिए आठ बजे टेबल" matched
+    # "के लिए" followed by "आठ" and booked a table for EIGHT people at eight o'clock. A wrong party
+    # size is not corrected on the next turn; it is a table laid for the wrong number of people.
+    match = re.search(
+        r"(\S+)\s+(?:लोगों|लोग|जनों|logon|log|logo|jano|jane|admi|aadmi|people|persons|person)",
+        spoken)
+    if match and match.group(1) in _SMALL_NUMBERS:
+        return _SMALL_NUMBERS[match.group(1)]
     # The number must not be a DURATION. "book me a deluxe king for two nights" matched the "for"
     # frame and turned a two-night room booking into a table for two -- the caller asked to sleep
-    # somewhere and was offered dinner.
+    # somewhere and was offered dinner. Nor a TIME: "के लिए आठ बजे" is the hour, not the party.
     match = re.search(
         r"(?:for|के लिए|ke liye|para)\s+(\d{1,2}|\S+)(?!\s*(?:night|nights|day|days|week|weeks"
-        r"|रात|रातों|दिन|noche|noches|dia|dias|día|días))",
+        r"|रात|रातों|दिन|noche|noches|dia|dias|día|días"
+        r"|बजे|baje|o'clock|oclock))",
         spoken)
     if match:
         token = match.group(1)
@@ -503,14 +616,25 @@ def _find_party_size(spoken: str) -> int | None:
             return int(token)
         if token in _SMALL_NUMBERS:
             return _SMALL_NUMBERS[token]
-    # Hindi puts the number BEFORE the phrase: "चार लोगों के लिए", "char logon ke liye". English
-    # word order is the reason the rule above cannot find it -- there is no number after "for".
-    match = re.search(
-        r"(\S+)\s+(?:लोगों|लोग|जनों|logon|log|logo|jano|jane|admi|aadmi|people|persons|person)",
-        spoken)
-    if match and match.group(1) in _SMALL_NUMBERS:
-        return _SMALL_NUMBERS[match.group(1)]
     return None
+
+
+def _find_quantity(spoken: str, dish: str | None) -> int:
+    """"two chicken kebabs" -> 2. Defaults to one, which is what a caller who says no number means.
+
+    The number must sit immediately BEFORE the dish. Reading any number in the sentence would turn
+    "the chicken kebab, and send it to room two zero five" into an order for 205 kebabs -- and a
+    quantity is the one parameter here where being wrong is expensive rather than merely unhelpful.
+    """
+    if not dish:
+        return 1
+    match = re.search(rf"(\d{{1,2}}|\S+)\s+(?:{re.escape(dish)})", spoken)
+    if not match:
+        return 1
+    token = match.group(1)
+    if token.isdigit():
+        return int(token) if 1 <= int(token) <= 20 else 1
+    return _SMALL_NUMBERS.get(token, 1)
 
 
 def _find_nights(spoken: str) -> int | None:
@@ -530,6 +654,22 @@ def _find_nights(spoken: str) -> int | None:
     return _SMALL_NUMBERS.get(token)
 
 
+# Digits as they are actually said down a telephone, in all three languages. ONE table, because a
+# reference and a room number are both read out digit by digit and they were drifting apart: the
+# Hindi and Spanish digits existed for neither until 2026-09-18, and the consequences were not
+# symmetrical. A room number that failed to parse gave a wrong answer; a REFERENCE that failed to
+# parse turned "बुकिंग एक शून्य शून्य चार रद्द कीजिए" -- cancel booking one zero zero four -- into a
+# new room booking, because the cancel rule needs a reference and the booking rule does not.
+_SPOKEN_DIGITS = {
+    "zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "शून्य": "0", "सुन्य": "0", "एक": "1", "दो": "2", "तीन": "3", "चार": "4",
+    "पाँच": "5", "पांच": "5", "छह": "6", "छः": "6", "सात": "7", "आठ": "8", "नौ": "9",
+    "cero": "0", "uno": "1", "una": "1", "dos": "2", "tres": "3", "cuatro": "4",
+    "cinco": "5", "seis": "6", "siete": "7", "ocho": "8", "nueve": "9",
+}
+
+
 def _find_reference(spoken: str) -> str | None:
     """A booking reference: four digits, spoken or written."""
     digits = re.search(r"(?<!\w)(\d{3,5})(?!\w)", spoken)
@@ -538,8 +678,7 @@ def _find_reference(spoken: str) -> str | None:
     words = spoken.split()
     run: list[str] = []
     for word in words:
-        value = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4",
-                 "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}.get(word)
+        value = _SPOKEN_DIGITS.get(word)
         if value is None:
             if len(run) >= 3:
                 break
@@ -560,9 +699,15 @@ def _find_room_number(spoken: str) -> str | None:
     """
     for token in re.findall(r"\b\d{3}\b", spoken):
         return token
-    # "three oh five", "three zero five" -- how a number is actually said on an English phone line.
-    digits = {"zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2", "three": "3", "four": "4",
-              "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}
+    # "three oh five", "three zero five" -- how a number is actually said on an English phone line,
+    # and digit by digit is how it is said on a Hindi or Spanish one too.
+    #
+    # THE HINDI AND SPANISH DIGITS WERE MISSING, and the failure was not a polite one. "hasta cuando
+    # esta reservada la habitacion uno cero dos" found no room number, fell past every room rule,
+    # and the conversational-subject memory resolved the sentence against the last dish mentioned --
+    # so a caller asking when a room frees up was told the price of a Masala Chai. A confident
+    # answer to a question nobody asked, in the caller's own language.
+    digits = _SPOKEN_DIGITS
     words = spoken.split()
     for i in range(len(words) - 2):
         trio = [digits.get(w) for w in words[i:i + 3]]
@@ -616,11 +761,17 @@ def subject_of(decision: "Route | None", spoken: str) -> tuple[str | None, str |
     return None, None
 
 
-def route(text: str, subject: Subject | None = None) -> Route | None:
+def route(text: str, subject: Subject | None = None, *, ordering: bool = False) -> Route | None:
     """Pick a menu tool for this sentence, or None to let the LLM handle it.
 
     Order is by specificity, not by frequency: a sentence naming a dish AND asking about allergens
     must go to the allergen tool, not to the price tool, so the narrower rules are tested first.
+
+    `ordering` says whether this caller has an order open, and it changes exactly one thing: a bare
+    dish name. "Chicken kebab" means *how much is it* to someone browsing and *add it* to someone
+    mid-order, and nothing in the sentence can tell the two apart -- the caller who has just
+    ordered a kebab and says "and two masala chai" is not asking the price. Passed in rather than
+    read here, because routing stays a pure function of what was said plus what the session knows.
     """
     # The caller's own words first, then the ASR repairs, then one tested set of English rules.
     # A Hindi or Spanish caller used to match nothing here and fall through to the model -- which
@@ -655,7 +806,7 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     # A0. A named policy. BEFORE check-in/out, because "late check out" and "early check in"
     #     contain the check-in words and are different questions with different answers -- one is a
     #     time, the other is whether it is possible and what it costs.
-    policy = _find_pair(spoken, _POLICY_WORDS)
+    policy = _find_policy(spoken)
     if policy is not None:
         return Route("hotel_policy", {"topic": policy}, "policy")
 
@@ -677,6 +828,86 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
     nights = _find_nights(spoken)
     if _says(spoken, _CANCEL_WORDS) and (reference := _find_reference(spoken)):
         return Route("cancel_booking", {"reference": reference}, "cancel booking")
+
+    # A0a. THE ORDER, before the booking rules and before every menu rule.
+    #
+    #      Before the menu rules because "I'll have the chicken kebab" names a dish and would
+    #      otherwise be answered with its price -- a caller who has just ordered being quoted a
+    #      number instead. Before the booking rules because "I want to order a table for four"
+    #      is still a table, and `_ORDER_VERBS` shares "i want" with `_BOOK_INTENT`, so the order
+    #      rules below all require an order NOUN or a dish and none of them fire on a table.
+    #
+    #      Reading the order back is first within the block: "repeat my order" contains "order",
+    #      and an order rule that tested for the noun alone would place it.
+    says_order = _says(spoken, _ORDER_NOUNS)
+    if says_order and _says(spoken, _CANCEL_WORDS) and not _find_reference(spoken):
+        return Route("cancel_order", {}, "cancel order")
+    if says_order and _says(spoken, _REPEAT_WORDS):
+        return Route("repeat_order", {}, "repeat order")
+    if says_order and _says(spoken, _PLACE_WORDS):
+        return Route("place_order", {}, "place order")
+    # "that's all" and "send it through" carry no noun at all, and are how people actually finish.
+    if _says(spoken, _PLACE_WORDS) and not mentions_food and not _says(spoken, _ROOM_NOUNS):
+        return Route("place_order", {}, "place order")
+    if dish is not None and not _says(spoken, _PRICE_WORDS) and not _says(spoken, _ALLERGEN_WORDS):
+        # Mid-order, a dish name on its own is another item. "And two masala chai" carries no verb
+        # at all, and answering it with a price is how a waiter who is not listening behaves.
+        # Off-order it still needs an explicit order verb, so browsing the menu is unaffected.
+        if _says(spoken, _ORDER_VERBS):
+            return Route("add_to_order",
+                         {"dish": dish, "quantity": _find_quantity(spoken, dish)}, "add to order")
+        if ordering and not _says(spoken, _DESCRIBE_WORDS + _AVAILABLE_WORDS + _LIST_WORDS):
+            return Route("add_to_order",
+                         {"dish": dish, "quantity": _find_quantity(spoken, dish)},
+                         "add to open order")
+
+    # A0a. ASKING WHETHER A NAMED ROOM IS BOOKED, before the booking rules can take it as an order.
+    #
+    #      English separates the verb from the noun -- `_BOOK_VERBS` holds exact forms so that
+    #      "booking" cannot fire "book" -- and neither Hindi nor Spanish gives that for free.
+    #      `reserva` IS the Spanish booking verb, and `बुक` matches inside `बुकिंग` because a
+    #      Devanagari matra is not a `\w` character, so the whole-word guard does not bite. Both
+    #      "कमरा तीन शून्य पाँच पर कोई बुकिंग है क्या" and "hay alguna reserva en la habitación tres
+    #      cero cinco" -- *is there a booking on room 305* -- went to `reserve_room` and tried to
+    #      take one.
+    #
+    #      A reservation NOUN plus a room number is a question about an existing booking, unless the
+    #      caller also said to do something ("बुकिंग कीजिए"), which is what `_BOOK_INTENT` is for.
+    #      This is English rule B moved earlier and made multilingual; the English behaviour is
+    #      unchanged, because an English booking request contains no reservation noun.
+    if (room_number and _says(spoken, _RESERVATION_NOUNS)
+            and not _says(spoken, _BOOK_INTENT)):
+        return Route("reservation_for_room", {"room": room_number}, "room+reservation")
+
+    # A0b. ASKING ABOUT A BOOKING IS NOT MAKING ONE, and this rule exists because the Hindi path
+    #      got that wrong in the worst possible direction. "कमरा एक शून्य दो कब तक बुक है" -- "until
+    #      when is room one zero two booked" -- contains बुक, which is in `_BOOK_VERBS`, so it was
+    #      read as *book room 102* and went to `reserve_room`. It happened to be refused because
+    #      that room is occupied; on a free room it would have taken a booking the caller never
+    #      asked for. A lookup silently becoming a write is the exact trap `_BOOK_VERBS` was made
+    #      exact-form to avoid, and Hindi has no separate word for the noun to key off.
+    #
+    #      A question word plus a room number is a question. Placed before the booking rules so it
+    #      wins, and narrow enough that "book me room two zero one" is untouched -- that sentence
+    #      asks nothing.
+    # `_RESERVATION_WORDS` as well as the status words: "how long is room three zero five booked
+    # for" asks when, names a room, and uses neither "free" nor "check out".
+    asking_when = _says(spoken, _WHEN_WORDS)
+    if asking_when and room_number and _says(
+            spoken, _STATUS_WORDS + _CHECKIN_WORDS + _RESERVATION_WORDS):
+        return Route("room_free_from", {"room": room_number}, "room free from")
+
+    # A0c. WHAT THIS CALL HAS BOOKED. Before check-in/out and before the table rules: "when is my
+    #      table booked for" contains a table word, and "when do I check out" after a booking is
+    #      about that booking rather than about the hotel's general times.
+    if _says(spoken, _MY_BOOKING_WORDS) and not room_number:
+        # "Cancel my reservation" carries no reference, and a reference is normally required --
+        # cancelling the wrong booking is not recoverable by saying sorry. It is safe here for one
+        # reason only: "my" means the booking made on THIS call, and there is exactly one of it.
+        # The tool asks for a reference as before when this call has booked nothing.
+        if _says(spoken, _CANCEL_WORDS):
+            return Route("cancel_my_booking", {}, "cancel my booking")
+        return Route("my_booking", {}, "my booking")
 
     wants_to_book = _says(spoken, _BOOK_VERBS) or (
         _says(spoken, _BOOK_NOUNS) and _says(spoken, _BOOK_INTENT)
@@ -716,8 +947,25 @@ def route(text: str, subject: Subject | None = None) -> Route | None:
         return Route("table_availability", {}, "table availability")
 
     # A1. The hotel itself: where it is, how big it is, how to reach it.
-    if _says(spoken, _HOTEL_INFO_WORDS):
+    #
+    #     `not _says(_STATUS_WORDS)` because "how many rooms" is in this table and "how many rooms
+    #     are free" is not a question about the building. It was answered "we have five floors and
+    #     fifty rooms" -- a fact, confidently given, to a caller who asked a different one.
+    if _says(spoken, _HOTEL_INFO_WORDS) and not _says(spoken, _STATUS_WORDS):
         return Route("hotel_info", {}, "hotel info")
+
+    # A2. WHEN a named room frees up, before the check-in/out rule and before room status.
+    #
+    #     Before check-in/out because "when does the guest in three zero five check out" contains
+    #     "check out" and was being answered with the hotel's general checkout time -- a confident
+    #     answer about the wrong thing, to someone asking about one specific room.
+    #
+    #     Before `room_status` because "when will room two zero one be available" was answered
+    #     "room two zero one is already reserved": true, and not the question. A caller asking
+    #     *when* wants a date, and the reservation holds one.
+    if room_number and asking_when and _says(
+            spoken, _STATUS_WORDS + _CHECKIN_WORDS + _RESERVATION_WORDS):
+        return Route("room_free_from", {"room": room_number}, "room free from")
 
     # A. Check-in and check-out times. Read from the hotel row, so the model never guesses them.
     if _says(spoken, _CHECKIN_WORDS):

@@ -127,7 +127,12 @@ SELECT_PROMPT = ("Welcome to AETHER, your hotel manager. "
 HOTEL_GREETING = {
     "eng": "You've reached AETHER, the hotel's manager. How may I help you?",
     "hin": "नमस्ते, आप AETHER से बात कर रहे हैं, होटल की मैनेजर। मैं आपकी क्या मदद कर सकती हूँ?",
-    "spa": "Ha llamado a AETHER, la gerente del hotel. ¿En qué puedo ayudarle?",
+    # A FULL STOP AFTER THE NAME, not a comma, and that is a pronunciation fix rather than a style
+    # choice. `mistv3/isa` ran "AETHER, la" together into one word: round-tripped through Rime and
+    # back, "Ha llamado a AETHER, la gerente" came out as "un vitro blanco" -- the hotel garbling
+    # its own name in its first sentence. Ending the sentence isolates it, and the same round trip
+    # then returns "Aiter", which is a fair Spanish reading of AETHER. Measured, not guessed.
+    "spa": "Ha llamado a AETHER. Soy la gerente del hotel. ¿En qué puedo ayudarle?",
 }
 
 # The recogniser is told what the caller is being asked, so it expects the three answers. Given as

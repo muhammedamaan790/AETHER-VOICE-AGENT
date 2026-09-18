@@ -190,7 +190,8 @@ def test_the_prompt_still_forbids_guessing_about_allergens():
     """The ONE thing the model may not improvise, and it is a safety rule rather than an accuracy one.
 
     The product deliberately allows the model to answer plausibly about hotel details the database
-    does not hold -- a rooftop pool, a gym -- because a duty manager who says "that is not in my
+    does not hold -- a rooftop terrace, a car hire -- because a duty manager who says "that is not
+    in my
     records" is useless on a phone. Allergens are the exception: a guessed "no, that has no nuts"
     can put somebody in hospital, and unlike a wrong opening time it cannot be corrected afterwards.
     """
@@ -306,11 +307,75 @@ def test_the_prompt_forbids_inventing_hours_rates_and_services():
     assert "never change a price, a time or a name" in p
 
 
-def test_the_prompt_still_allows_ordinary_general_knowledge():
-    """The other half, and it was a real defect: scoping the restriction too widely made a duty
-    manager who could not answer "what is the capital of France?" -- careful about nothing, and
-    useless about everything else."""
+# ============================ the line of the job ============================
+#
+# REVERSED 2026-09-18, on the hotel manager's instruction. A test here used to assert the opposite
+# -- that the prompt let the model answer "what is the capital of France?" normally -- on the
+# reasoning that a manager careful about nothing and useless about everything else is no manager.
+#
+# Live probing settled it the other way. "Who was Albert Einstein?" reached the model on the
+# hotel's line and got a paragraph about relativity. A duty manager is not a search engine, and a
+# caller who dials a hotel and gets a physics lesson has reached the wrong number.
+#
+# The line is drawn at THE HOTEL AND THE STAY, not at the database. That distinction is the whole
+# subtlety and both halves are pinned below, because it is easy to over-correct back into the
+# "I do not have that information" agent that an earlier reversal already removed once.
+
+
+def test_the_prompt_keeps_the_model_on_the_hotel():
     p = SYSTEM_PROMPT.lower()
-    assert "not about this hotel" in p
-    assert "answer normally" in p
-    assert "do not refuse a general question" in p
+    assert "you only discuss this hotel and this caller's stay" in p
+    assert "do not answer it, even if you know the answer" in p
+    for off_topic in ("general knowledge", "history", "science", "politics", "celebrities",
+                      "arithmetic", "coding", "a joke", "a recipe"):
+        assert off_topic in p, f"the prompt must name {off_topic!r} as off the hotel's line"
+
+
+def test_the_old_general_knowledge_permission_is_gone():
+    """Pinned as an absence, because it is the sentence that caused the defect and it reads
+    reasonable enough to be re-added by someone tidying the prompt."""
+    p = SYSTEM_PROMPT.lower()
+    for permission in ("do not refuse a general question", "answer normally",
+                       "not about this hotel"):
+        assert permission not in p, (
+            f"{permission!r} is the reversed instruction; it must not come back"
+        )
+
+
+def test_declining_is_warm_brief_and_offers_a_way_forward():
+    """A bare refusal on a phone line sounds like a fault. The decline has to hand the call back."""
+    p = SYSTEM_PROMPT.lower()
+    assert "only help with the hotel" in p
+    assert "offer to help with something here" in p
+    assert "one sentence" in p
+    assert "do not lecture the caller" in p
+
+
+def test_the_hotel_side_of_the_line_is_drawn_wider_than_the_database():
+    """The over-correction guard.
+
+    Directions, the area and ordinary courtesy are a duty manager's job and no row holds any of
+    them. If the scope gate were read as "only what the database knows", the agent would go back
+    to refusing "how do I get there from the airport?" -- which is the failure this project has
+    already fixed once, and `test_the_prompt_does_not_forbid_answering_about_unlisted_hotel_details`
+    guards from the other direction.
+    """
+    p = SYSTEM_PROMPT.lower()
+    for in_scope in ("getting", "the local area", "greetings", "thanks", "small talk"):
+        assert in_scope in p, f"{in_scope!r} is inside the line and the prompt must say so"
+    assert "anything a duty manager would reasonably handle" in p
+
+
+def test_the_scope_gate_reaches_a_live_call_in_every_language():
+    """Structural, and it is the bug that already happened once.
+
+    `RetryingLLM` silently dropped `.language`, so the multilingual directive never reached a real
+    call while every prompt-content test above still passed. Asserting the constant is not
+    asserting the call, so this goes through the function the turn loop actually uses.
+    """
+    from aether.llm import system_prompt_for
+
+    for language in (None, "eng", "hin", "spa"):
+        assert "you only discuss this hotel" in system_prompt_for(language).lower(), (
+            f"the scope gate is missing from the prompt built for {language!r}"
+        )

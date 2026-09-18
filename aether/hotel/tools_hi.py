@@ -450,6 +450,15 @@ def _refusal(summary) -> str:
         return "कितने लोगों के लिए टेबल बुक करूँ?"
     if why == "min_one_night":
         return "कम से कम एक रात की बुकिंग होती है। आप कितनी रातें रुकेंगे?"
+    if why == "dish_unavailable":
+        return f"माफ़ कीजिए, {summary['dish']} आज उपलब्ध नहीं है। कुछ और लाऊँ?"
+    if why == "no_such_dish":
+        return f"माफ़ कीजिए, {summary['dish']} हमारे मेन्यू में नहीं है।"
+    if why == "too_many_of_one_dish":
+        return (f"एक ऑर्डर में एक ही चीज़ की {say_number(summary['most'])} तक ले सकती हूँ। "
+                f"उससे ज़्यादा के लिए मैं रेस्टोरेंट से बात करा देती हूँ।")
+    if why in ("min_one_item", "quantity_not_understood"):
+        return "कितने चाहिए?"
     return "माफ़ कीजिए, यह बुकिंग नहीं हो पाई।"
 
 
@@ -488,6 +497,109 @@ def _speak_cancel_booking(result) -> str:
     return "आपकी बुकिंग रद्द कर दी गई है।"
 
 
+# --- ऑर्डर लेना / taking an order ---------------------------------------------------------------
+#
+# Dish names stay in their own script. They are the names printed on the hotel's menu and on the
+# kitchen's ticket, and transliterating them would leave a caller asking for something the
+# restaurant does not recognise -- the same rule the rest of this file already follows.
+
+
+def _say_order_lines(items) -> str:
+    parts = []
+    for item in items:
+        qty = int(item["quantity"])
+        parts.append(item["name"] if qty == 1 else f"{say_number(qty)} {item['name']}")
+    return say_list(parts)
+
+
+def _speak_add_to_order(result) -> str:
+    s = result.summary
+    if not s.get("ordered"):
+        return _refusal(s)
+    added = s["added"] if s["added_quantity"] == 1 else \
+        f"{say_number(s['added_quantity'])} {s['added']}"
+    return (f"{added} जोड़ दिया है। अभी तक आपके ऑर्डर में {_say_order_lines(s['items'])} है, "
+            f"कुल {say_price(s['total'])}।")
+
+
+def _speak_repeat_order(result) -> str:
+    s = result.summary
+    if s.get("empty"):
+        return "आपने अभी तक कुछ ऑर्डर नहीं किया है। क्या लेना चाहेंगे?"
+    return (f"आपके ऑर्डर में {_say_order_lines(s['items'])} है। "
+            f"कुल {say_price(s['total'])} होते हैं।")
+
+
+def _speak_place_order(result) -> str:
+    s = result.summary
+    if s.get("placed") is False and s.get("why"):
+        if s["why"] == "nothing_ordered":
+            return "आपने अभी तक कुछ ऑर्डर नहीं किया है। क्या लेना चाहेंगे?"
+        if s["why"] == "already_placed":
+            return "वह ऑर्डर रसोई में भेजा जा चुका है।"
+        return "माफ़ कीजिए, मैं यह ऑर्डर नहीं भेज सकी।"
+    return (f"ऑर्डर रसोई में भेज दिया है: {_say_order_lines(s['items'])}, "
+            f"कुल {say_price(s['total'])}। आपका ऑर्डर नंबर "
+            f"{say_room_number(s['reference'])} है।")
+
+
+def _speak_cancel_order(result) -> str:
+    s = result.summary
+    if not s.get("cancelled"):
+        if s.get("why") == "nothing_ordered":
+            return "आपके ऑर्डर में रद्द करने के लिए कुछ नहीं है।"
+        if s.get("why") == "already_placed":
+            return "वह ऑर्डर रसोई में जा चुका है, मैं उन्हें बता देती हूँ।"
+        return "माफ़ कीजिए, मैं यह ऑर्डर रद्द नहीं कर सकी।"
+    return "ऑर्डर रद्द कर दिया है। रसोई में कुछ नहीं भेजा गया।"
+
+
+def _speak_my_booking(result) -> str:
+    s = result.summary
+    if not s.get("any"):
+        return "आपने इस कॉल में अभी तक कोई बुकिंग नहीं की है।"
+    if s["kind"] == "table":
+        return (f"आपकी टेबल {say_number(s['party_size'])} लोगों के लिए "
+                f"{say_time(s['sitting'])} पर बुक है, बुकिंग नंबर "
+                f"{say_room_number(s['reference'])}।")
+    return (f"आपके पास {s['room_type']}, कमरा {say_room_number(s['room_number'])}, "
+            f"{say_number(s['nights'])} रात के लिए है, बुकिंग नंबर "
+            f"{say_room_number(s['reference'])}।")
+
+
+def _speak_cancel_my_booking(result) -> str:
+    s = result.summary
+    if not s.get("cancelled"):
+        if s.get("why") == "nothing_booked_here":
+            return ("आपने इस कॉल में कोई बुकिंग नहीं की है। अगर आपके पास बुकिंग नंबर है "
+                    "तो मैं रद्द कर देती हूँ।")
+        return "माफ़ कीजिए, मैं यह बुकिंग रद्द नहीं कर सकी।"
+    what = "कमरे" if s.get("kind") == "room" else "टेबल"
+    return (f"रद्द कर दिया है। आपकी {what} की बुकिंग, नंबर "
+            f"{say_room_number(s['reference'])}, अब नहीं है।")
+
+
+# Why a room is unavailable, in the same words `_speak_room_status` already uses. A room out for
+# repair and a room whose guest has not left are not the same answer.
+_OUT_OF_SERVICE = {
+    "housekeeping": "अभी सफ़ाई के लिए बंद है",
+    "maintenance": "अभी मरम्मत के लिए बंद है",
+    "occupied": "अभी भरा हुआ है",
+    "reserved": "पहले से बुक है",
+}
+
+
+def _speak_room_free_from(result) -> str:
+    s = result.summary
+    room = say_room_number(s["room_number"])
+    if s.get("free_now"):
+        return f"कमरा {room} अभी खाली है।"
+    if not s.get("until"):
+        why = _OUT_OF_SERVICE.get(s.get("status", ""), "अभी खाली नहीं है")
+        return f"कमरा {room} {why}, और कब खाली होगा इसकी तारीख़ मेरे पास नहीं है।"
+    return f"कमरा {room} {say_date(s['until'])} तक बुक है।"
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "menu_overview": _speak_menu_overview,
     "list_category": _speak_list_category,
@@ -512,4 +624,11 @@ SPEAK: dict[str, Callable[..., str]] = {
     "table_availability": _speak_table_availability,
     "cancel_booking": _speak_cancel_booking,
     "hotel_info": _speak_hotel_info,
+    "add_to_order": _speak_add_to_order,
+    "repeat_order": _speak_repeat_order,
+    "place_order": _speak_place_order,
+    "cancel_order": _speak_cancel_order,
+    "my_booking": _speak_my_booking,
+    "cancel_my_booking": _speak_cancel_my_booking,
+    "room_free_from": _speak_room_free_from,
 }

@@ -4,7 +4,7 @@ Every claim here names the file, test or trace that backs it. Where something is
 measured, it says so — a rubric that rewards transparent method punishes overclaiming, and the
 "What we did not build" section at the end is not an afterthought.
 
-**Reproduce everything:** `python -m pytest -q` → **1528 passed, 2 skipped**.
+**Reproduce everything:** `python -m pytest -q` → **1761 passed, 2 skipped**.
 
 ---
 
@@ -48,6 +48,8 @@ superseded turn cannot reach the speaker even if it completes.
 | Endpointing and speech floor, calibrated from real calls | `aether/audio/vad.py` | Part 6 — floor moved 35 → **2500** on 28 pooled utterances |
 | Surviving recogniser error | `aether/hotel/router.py` | `tests/test_hotel_db.py`, and below |
 | **Multilingual**: caller picks English/Hindi/Spanish before the greeting, switches mid-call | `aether/lang/`, `aether/hotel/tools_hi.py`, `tools_es.py` | `tests/test_language.py` |
+| **Multilingual understanding, measured** — 31 sentences per language, **31/31 in each** | `aether/hotel/_foreign.py`, `router.py` | `scripts/measure_understanding.py`; `tests/test_understanding.py` enforces the same table |
+| **Multi-turn state**: an order built across turns, a booking reference remembered | `aether/hotel/bookings.py` | `tests/test_orders.py`, `tests/test_booking_memory.py` |
 
 **Two voice-specific defects, found in traces rather than imagined.** `suite` is pronounced "sweet",
 so `base.en` returns `suit` or `sweet` and the room-type match missed entirely — one real turn spent
@@ -79,6 +81,26 @@ The honest cost: **Hindi is roughly 3x slower to first audio than English** (~1.
 ~0.4 s). It is recorded rather than hidden, and it is why the switch is opt-in -- an English call
 never opens the Hindi socket and never pays for it.
 
+**Understanding is measured per language, not asserted.** `scripts/measure_understanding.py` routes
+a fixed 31 sentences per language across four capabilities — the menu, rooms and policies, booking,
+ordering — and reports which tool each reached. It found real defects rather than confirming a
+belief: **eng 31/31, hin 23/31, spa 25/31** on the first run, and two of those misses were the worst
+kind a router can produce. *"क्या कमरे पर कोई बुकिंग है"* (is there a booking on that room) and
+*"बुकिंग रद्द कीजिए"* (cancel that booking) both reached **`reserve_room`** and tried to take one —
+a lookup and a cancel silently becoming a write. English is protected by exact-form verbs; neither
+Hindi nor Spanish separates the verb from the noun, and `बुक` matched inside `बुकिंग` because a
+Devanagari matra is not a `\w` character, so the whole-word guard never bit. The same fact had
+mangled *"बारे"* ("about") into the word *"bar"*, so "tell me about the paneer tikka" was answered
+with the bar's opening hours. All fixed at the root; now **31/31 in all three languages**, and
+`tests/test_understanding.py` pins each sentence, including that no question reaches a mutating tool.
+
+**Multi-turn state, and it obeys the same rule as everything else.** An order is built across turns
+and kept in the database rather than in the model's context, so *"repeat my order"* is a lookup with
+`llm_ms = 0` that gives the same answer every time it is asked. A booking made on the call is
+remembered on the session, because a telephone caller has given no name and no number to look one up
+by. Both respect the completed/spoken boundary: interrupt mid-dish and it does not join the order;
+interrupt mid-booking and *"what was my reference?"* correctly says you have not booked anything.
+
 **Latency is the reason the model is not in the path** for a fact the hotel holds. Those are read
 from SQLite and rendered by template — worth ~1.8 s per turn, and it makes it *impossible* for the
 model to quote a price the hotel does not charge, because it is never asked.
@@ -87,6 +109,18 @@ For anything the hotel has no record of the model **is** used, and is expected t
 as the duty manager rather than refuse (RULES.md R8b.3). The one carve-out is allergens and dietary
 status, which are never guessed — a wrong opening time is corrected next call, a wrong allergen
 answer is not.
+
+**Two boundaries around that, both added after live probing rather than from theory** (R8b.7,
+R8b.8). Asked "Who was Albert Einstein?", AETHER used to answer — a hotel's phone line behaving like
+a search engine. It now declines anything off the hotel and the stay in one warm sentence, while
+still answering airport directions and local recommendations that no row holds; the tests pin both
+ends, because over-correcting rebuilds the "not in my records" agent R8b.3 removed. And when the
+model does answer a hotel question, that answer is **written down and replayed to the next caller**
+— otherwise two callers asking about the rooftop terrace get two different plausible answers and the
+hotel contradicts itself. Remembering buys consistency, not truth: the row is stored unconfirmed,
+kept in a **separate database file** from the hotel's facts so it cannot be joined to a price, never
+allowed to outrank a route, and listed as a guess by `scripts/review_learned.py` until a human
+agrees. Measured: the second caller is answered in **6 ms instead of 1374 ms, with no model call**.
 
 ## Rime integration and voice experience — 20%
 
@@ -112,7 +146,7 @@ a door — "three oh five", not "three hundred and five". Asserted in `tests/tes
 
 ## Evidence and reproducibility — 20%
 
-**1530 automated tests — 1528 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
+**1763 automated tests — 1761 passing, 2 skipped** — and both skips are deliberate, documented in the test body, and
 refuse to fake a result: `AETHER_UNSAFE_MODE` has no bypass path to exercise, and `ResultSalvaged`
 is not implemented and is not emitted to look like evidence.
 
@@ -125,6 +159,7 @@ is not implemented and is not emitted to look like evidence.
 | The demo script says what AETHER says | `tests/test_demo_script.py` — parses `DEMO_SCRIPT.md` and re-runs every line against the database |
 | Hotel answers match the database | `tests/test_hotel_db.py` — expectations read from SQLite, not written down |
 | Hindi says the same facts as English | `tests/test_language.py` — same rows, both renderers, no model in either |
+| A guess never becomes a hotel fact | `tests/test_learned_answers.py` — a separate database, six forbidden writes refused by SQLite even when pointed at the hotel's, and a remembered answer that never outranks a route |
 | Which Hindi voice, and why | `scripts/verify_rime_hindi.py` — four voices measured over `/ws3` |
 
 **The evidence file records being wrong.** A speech-floor claim made from one call was contradicted

@@ -21,7 +21,9 @@ true.
 
 **Contents** — [What it does](#what-it-does) · [Quick start](#quick-start) ·
 [The hard problem](#the-hard-problem-interruption-and-recovery) · [How it works](#how-it-works) ·
-[Three languages](#one-hotel-three-languages) · [Bookings](#bookings-and-what-can-never-be-written) ·
+[Three languages](#one-hotel-three-languages) ·
+[Orders and bookings](#orders-bookings-and-remembering-what-the-caller-just-did) ·
+[What it will and won't answer](#what-aether-will-and-wont-answer) ·
 [Speech output](#speech-output--rime) · [Results](#measured-results) ·
 [Third-party services](#third-party-services) · [Failure behaviour](#failure-behaviour) ·
 [Known limitations](#known-limitations) · [Repository](#repository-map)
@@ -39,13 +41,17 @@ was said. For a hotel's phone line, speech isn't a nicer interface — it's the 
 | Ask about rooms, rates and what's free | *"How much is an executive suite?"* |
 | Ask about 27 hotel policies | *"Do you have a swimming pool?"* · *"What ID do I need?"* |
 | Book a room or a table, and cancel | *"Book it for two nights."* · *"A table for four at eight."* |
+| **Order food, and have it read back** | *"I'll have the chicken kebab."* · *"And two masala chai."* · *"Repeat my order."* |
+| **Ask about what they just did** | *"What was my reference?"* · *"When will room three zero one be free?"* |
 | Speak Hindi or Spanish | *"चिकन कबाब कितने का है?"* · *"¿Tienen piscina?"* |
 | **Interrupt, change their mind, or say stop** | Talk over any answer, at any moment |
 
 Hotel facts come **from the hotel's own database, never from a language model**. A question the
 database can answer never reaches the model at all. A database answer starts playing in about
 **a third of a second**. Questions the hotel has no record of go to Gemini, which answers naturally
-as the duty manager.
+as the duty manager — about the hotel and the stay, and nothing else. Anything off that line is
+declined in one sentence, and an answer Gemini does compose is remembered so the next caller is told
+the same thing: [what AETHER will and won't answer](#what-aether-will-and-wont-answer).
 
 ---
 
@@ -181,16 +187,59 @@ nothing for the other two. First audio in the same measured run: English 320–3
 
 ---
 
+## Orders, bookings, and remembering what the caller just did
+
+A caller who has just booked a table asks *"what was my reference?"*, and a caller ordering dinner
+says *"and two masala chai"* three turns after the first dish. Both questions are about **this call**,
+and neither has anything to look up by — a telephone caller has given no name and no number.
+
+```
+CALLER   I'll have the chicken kebab.
+AETHER   I have added Chicken Kebab. That is Chicken Kebab, four hundred and twenty rupees so far.
+CALLER   And two masala chai.
+AETHER   I have added two Masala Chai. That is Chicken Kebab and two Masala Chai, seven hundred
+         rupees so far.
+CALLER   Repeat my order.
+AETHER   Your order is Chicken Kebab and two Masala Chai. That comes to seven hundred rupees.
+CALLER   That's all, place the order.
+AETHER   That is with the kitchen: Chicken Kebab and two Masala Chai, seven hundred rupees. Your
+         order number is five zero zero three.
+```
+
+Every line of that is `llm_ms = 0`.
+
+- **The order lives in the database, not in the model's context.** A list carried in the
+  conversation is re-read every turn and can come back one dish longer; a row cannot. That is what
+  makes *"repeat my order"* the same answer every time it is asked.
+- **A dish's price is copied onto the order line when it is ordered**, so the total is what the
+  caller was told even if the kitchen reprices overnight — and the menu row is still unwritable.
+- **A sold-out dish is refused, by name.** *"I'm sorry, the Fish Curry is off today. Can I get you
+  something else?"* — an order must never disagree with what *"is the fish curry available?"* says.
+- **A bare dish name means different things at different moments.** *"Two masala chai"* is a price
+  question to someone browsing and another item to someone mid-order. Nothing in the sentence can
+  tell them apart, so the session does.
+- **What the caller never heard is never remembered.** Interrupt mid-dish and it does not join the
+  order; interrupt mid-booking and *"what was my reference?"* correctly says you have not booked
+  anything.
+
+The same applies to bookings, which is where *"when will room three zero one be available?"* comes
+from — it reads the reservation's check-out date, so it answers with a **date** rather than with
+*"it is already reserved"*.
+
+---
+
 ## Bookings, and what can never be written
 
 AETHER takes real bookings — rooms, restaurant tables, and cancellations. That means it writes to the
 database, so it gives up as little as possible:
 
 - **The hotel's facts can't be changed by any code path.** Prices, allergens, policies, room rates and
-  room numbers are refused **by SQLite itself**, through an authorizer on the only writable connection.
-  Only four places can be written: `reservations`, `table_bookings`, `guests`, and the single column
-  `rooms.status`. [`tests/test_bookings.py`](tests/test_bookings.py) attempts nine forbidden writes and
-  every one is refused.
+  room numbers are refused **by SQLite itself**, through an authorizer on the only connection that may
+  change the hotel. Six places can be written: `reservations`, `table_bookings`, `guests`,
+  `restaurant_orders`, `restaurant_order_items`, and the single column `rooms.status`.
+  [`tests/test_bookings.py`](tests/test_bookings.py) attempts nine forbidden writes and every one is
+  refused. *It was four until AETHER learned to take an order — widening a guarantee this project
+  states out loud is worth stating: two tables were named rather than the authorizer relaxed.*
 - **A booking the caller abandons writes nothing.** The fence is checked before the booking runs.
   Moving that check after the booking fails seven tests.
 - **Two callers can't both get the last room.** Each booking takes the database's write lock first.
@@ -201,6 +250,55 @@ database, so it gives up as little as possible:
 
 The database itself — 50 rooms, 12 dishes, 27 policies, and the guests and bookings — is described in
 [data/README.md](data/README.md).
+
+---
+
+## What AETHER will and won't answer
+
+Three questions, three different behaviours, and the difference between them is the whole design.
+
+| Caller asks | What happens | Cost |
+|---|---|---|
+| "How much is the chicken kebab?" | A route exists. The database answers through a template. | `llm_ms = 0` |
+| "Is there a rooftop terrace?" | No row holds it, but it's a hotel question. The model answers as the duty manager — **and the answer is written down**. | one model call, then ~6 ms forever after |
+| "Who was Albert Einstein?" | Declined in one sentence, with an offer to help with the hotel. | one model call |
+
+**The line is the hotel and the stay, not the database.** Directions from the airport, the
+neighbourhood, and ordinary courtesy are a duty manager's job and no row holds any of them. Relativity
+isn't. Getting this wrong in either direction is a real failure — too narrow and you rebuild the "that
+isn't in my records" agent, too wide and the hotel's phone line is a search engine. Both ends are
+pinned by tests in [`tests/test_llm_providers.py`](tests/test_llm_providers.py).
+
+**Remembering buys consistency, not truth.** When the model answers a hotel question it couldn't look
+up, that answer goes into a `learned_answers` table and the next caller asking the same thing gets it
+back verbatim, with no model call. Without this, two callers asking about the pool get two different
+plausible answers and the hotel contradicts itself.
+
+But nothing verified there is a pool. So a learned answer:
+
+- is stored `confirmed = 0` and **never merges into the hotel's facts** — it lives in its own
+  database file (`data/aether_learned.db`, gitignored), so it can't be quoted as a price, a policy or
+  an allergen, and can't be joined to one by accident;
+- **never outranks the database** — a question with a route is answered from the route, always;
+- is only written down **after the caller actually heard it**. A fenced or interrupted turn is not
+  remembered, by the same rule that governs conversation history;
+- is matched **exactly**, not fuzzily. A near-miss costs a second; a bad fuzzy hit answers a question
+  nobody asked.
+
+Review what it has made up, and decide:
+
+```bash
+python scripts/review_learned.py                        # what's been guessed, most-asked first
+python scripts/review_learned.py --confirm "<question>" # agree
+python scripts/review_learned.py --forget  "<question>" # disagree; the model tries again
+```
+
+Read the list as a to-do: a question asked six times that the database can't answer is a missing row.
+Adding the real fact is better than confirming the guess, because a row is spoken in all three
+languages and a learned answer is stored per language.
+
+This is [`aether/hotel/learned.py`](aether/hotel/learned.py), rules R8b.7 and R8b.8 in
+[RULES.md](RULES.md).
 
 ---
 
@@ -312,7 +410,7 @@ aether/
   classify/      the six interruption classes
   interruption/  barge-in: when a caller's speech fences an answer
   supervisor/    generation IDs and fencing
-  hotel/         the database, the router, 23 tools, bookings, clarification, memory ("it")
+  hotel/         the database, the router, 30 tools, orders, bookings, clarification, memory ("it")
   lang/          English, Hindi and Spanish: names, greetings, voices
   telephony/     the LiveKit phone worker
   web/           the live console
@@ -325,7 +423,7 @@ evidence/        a real phone call's trace and worker log
 
 ## Status
 
-**1528 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
+**1761 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
 says which: the unsafe-mode control condition, and salvage.
 
 ## Documents

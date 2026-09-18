@@ -4,6 +4,8 @@ INSERT INTO "guests" VALUES(1,'Eleanor Whitfield','+44 20 7946 0118','eleanor@ex
 INSERT INTO "guests" VALUES(2,'Arjun Mehta','+91 90000 10002','arjun@example.test','English');
 INSERT INTO "guests" VALUES(3,'Sofia Martin','+33 1 4000 1003','sofia@example.test','French');
 INSERT INTO "guests" VALUES(4,'Daniel Chen','+65 6000 1004','daniel@example.test','English');
+INSERT INTO "guests" VALUES(7,'In-house guest 207',NULL,NULL,'English');
+INSERT INTO "guests" VALUES(8,'In-house guest 305',NULL,NULL,'English');
 INSERT INTO "hotel" VALUES(1,'AETHER Grand Hotel','Fictional full-service city hotel used as the AETHER demo environment.','+91 44 4000 1000','frontdesk@aether.example','Chennai, Tamil Nadu, India','14:00','12:00','INR');
 INSERT INTO "hotel_policies" VALUES('parking',1,NULL,'24 hours',NULL,NULL);
 INSERT INTO "hotel_policies" VALUES('wifi',1,NULL,'24 hours',NULL,NULL);
@@ -58,6 +60,8 @@ INSERT INTO "menu_items" VALUES(12,5,'Mineral Water','Still bottled water.',80.0
 INSERT INTO "reservations" VALUES(1001,1,10,'2026-09-07','2026-09-12',1,0,'checked_in','Late checkout requested','2026-08-30T10:00:00');
 INSERT INTO "reservations" VALUES(1002,2,2,'2026-09-06','2026-09-10',2,0,'checked_in','Extra towels','2026-08-31T09:00:00');
 INSERT INTO "reservations" VALUES(1003,3,6,'2026-09-15','2026-09-18',2,0,'confirmed','Vegetarian breakfast','2026-09-01T11:00:00');
+INSERT INTO "reservations" VALUES(1006,7,21,'2026-09-18','2026-09-24',2,0,'confirmed',NULL,'2026-09-18T12:00:00');
+INSERT INTO "reservations" VALUES(1007,8,27,'2026-09-17','2026-09-19',2,0,'checked_in',NULL,'2026-09-17T12:00:00');
 INSERT INTO "restaurant_order_items" VALUES(1,5001,2,1,360.0);
 INSERT INTO "restaurant_order_items" VALUES(2,5001,10,2,140.0);
 INSERT INTO "restaurant_order_items" VALUES(3,5002,4,1,520.0);

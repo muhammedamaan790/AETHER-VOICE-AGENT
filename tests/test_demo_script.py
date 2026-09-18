@@ -94,7 +94,7 @@ def _spoken(said: str) -> str:
 
 def test_the_script_was_found_and_is_not_empty():
     """A parser that silently matches nothing would make every test below vacuously pass."""
-    assert len(SCRIPT_TURNS) == 8, f"expected the eight-turn call, parsed {len(SCRIPT_TURNS)}"
+    assert len(SCRIPT_TURNS) == 14, f"expected the fourteen-turn call, parsed {len(SCRIPT_TURNS)}"
     assert len(BANK_TURNS) >= 12, f"the fallback bank looks truncated: {len(BANK_TURNS)} rows"
     assert len(HINDI_TURNS) >= 5, f"the language beat looks truncated: {len(HINDI_TURNS)} rows"
     codes = {code for code, _said, _quoted in HINDI_TURNS}
@@ -165,7 +165,12 @@ def _run_the_call() -> list[tuple[str | None, str | None]]:
     heard: list[tuple[str | None, str | None]] = []
     try:
         for number, (said, _quoted) in enumerate(SCRIPT_TURNS, 1):
-            decision = route(said, subject)
+            # `ordering` exactly as `Day1Spike` computes it: mid-order, a bare dish name is another
+            # item rather than a price question. Turn 10 on the sheet is "And two masala chai",
+            # which carries no verb at all and only routes correctly because turn 9 opened an order.
+            ordering = bool(store._bookings is not None
+                            and store.bookings.current_order() is not None)
+            decision = route(said, subject, ordering=ordering)
             if decision is None:
                 heard.append((None, None))
                 continue

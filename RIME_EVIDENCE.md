@@ -40,7 +40,7 @@ python scripts/measure_audio_kill.py                       # interrupt -> silenc
 | | |
 |---|---|
 | Full-duplex acceptance (the brief's example) | **9/9 pass** |
-| Whole suite | **1528 passed, 2 skipped** (both skips are unbuilt features, not failures) |
+| Whole suite | **1761 passed, 2 skipped** (both skips are unbuilt features, not failures) |
 | `ResultLeaked` across **84** trace files | **0** |
 | Committed real phone call | 16 turns; **11 answered with `llm_ms = 0`**; 2 generations fenced; 0 leaks |
 | Turn latency, that call | median **1262 ms** |
@@ -583,8 +583,8 @@ measure under a millisecond, so they round away — the offline run of the same 
 | | n | avg | median | min | max |
 |---|---|---|---|---|---|
 | **Heard — answered from the database** | 75 | 344.7 | **337.2** | 320.3 | 448.5 |
-| **Heard — answered by the model** | 6 | 1368.8 | **1344.9** | 1282.6 | 1551.7 |
-| Heard — every turn | 81 | 420.5 | 337.6 | 320.3 | 1551.7 |
+| **Heard — answered by the model** | 6 | 1368.8 | **1344.9** | 1282.6 | 1557.7 |
+| Heard — every turn | 81 | 420.5 | 337.6 | 320.3 | 1557.7 |
 | Rime alone, to first audio | 81 | 343.8 | 336.9 | 320.0 | 448.5 |
 | Model alone, when it was used | 6 | 1036.1 | 1016.3 | 944.9 | 1231.7 |
 | Whole turn, including streaming the complete reply | 81 | 1383.6 | 1208.1 | 363.6 | 4057.4 |

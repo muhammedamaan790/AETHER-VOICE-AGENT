@@ -727,3 +727,47 @@ def test_a_policy_the_hotel_does_not_offer_is_not_also_priced():
     finally:
         db.close()
     assert not bad, bad
+
+
+# --- naming two policies is ambiguity, not a longer keyword ------------------------------------
+
+def test_a_question_naming_two_policies_is_not_guessed_at():
+    """REGRESSION. "Is the gym open to children?" matched both `gym` and `children`; `_find_pair`
+    returns the LONGEST keyword, so `children` won on eight letters against three, and the caller
+    was told that children stay at no extra charge -- a confident answer to a question nobody asked.
+
+    Naming two topics is the same ambiguity a dish shorthand claimed by two dishes has, and it gets
+    the same treatment: decline, and let the model answer from the hotel's own facts. Measured, it
+    answers better -- "children are welcome in the gym when accompanied by an adult" addresses both
+    subjects, which no single policy row can.
+    """
+    from aether.hotel.router import route
+
+    for said in ("Is the gym open to children?", "Are children allowed in the gym?",
+                 "Is there wifi in the gym?", "Is the pool open to children?"):
+        assert route(said) is None, f"{said!r} names two policies and must not be guessed"
+
+
+def test_several_words_for_the_SAME_policy_are_not_ambiguity():
+    """"wifi", "wi-fi" and "internet" all mean one topic. Treating synonyms as a clash would send
+    ordinary questions to the model for no reason."""
+    from aether.hotel.router import route
+
+    for said in ("Is there wifi?", "Do you have wi-fi?", "Is there internet?"):
+        decision = route(said)
+        assert decision is not None, said
+        assert decision.params["topic"] == "wifi", said
+
+
+def test_a_single_policy_question_still_answers_from_the_database():
+    """The decline must be narrow. These name exactly one topic and must not have become slower."""
+    from aether.hotel.router import route
+
+    for said, topic in (("Do you have parking?", "parking"),
+                        ("Can I bring my dog?", "pets"),
+                        ("Is breakfast included?", "breakfast"),
+                        ("Do you have a gym?", "gym"),
+                        ("Can I have a late check out?", "late_check_out")):
+        decision = route(said)
+        assert decision is not None and decision.tool == "hotel_policy", said
+        assert decision.params["topic"] == topic, said

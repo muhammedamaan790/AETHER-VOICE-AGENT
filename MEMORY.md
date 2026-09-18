@@ -3,12 +3,18 @@
 Authoritative state of the project. Read this first after any context loss. If this file disagrees
 with anyone's recollection, this file wins until it is updated with evidence.
 
-**Last updated:** 2026-09-10 — hotel SQLite database as the single source of truth, **23 tools
-(20 read, 3 book)**, three languages (English, Hindi, Spanish) that AETHER both *understands* and
+**Last updated:** 2026-09-18 — hotel SQLite database as the single source of truth, **30 tools
+(23 read, 7 write)**, three languages (English, Hindi, Spanish) that AETHER both *understands* and
 *answers* in from that one database, caller-chosen language before the hotel greeting, 27
-`hotel_policies` topics, a suggestion-and-repeat path for what the recogniser mangles, and real
-room and table bookings behind an authorizer that keeps every hotel FACT unwritable. The realtime voice path and the continuity engine are both built and tested; salvage and the
+`hotel_policies` topics, a suggestion-and-repeat path for what the recogniser mangles, real
+room and table bookings behind an authorizer that keeps every hotel FACT unwritable, **food orders
+taken and read back**, and **what this call has already done** answerable without the model. The
+realtime voice path and the continuity engine are both built and tested; salvage and the
 unsafe-mode control path remain deliberately unbuilt.
+
+**Understanding, measured 2026-09-18:** 31 sentences per language through the router —
+**eng 31/31, hin 31/31, spa 31/31**. Deterministic path end to end (route, run, render) is a
+**2.3 ms median**. `scripts/measure_understanding.py`; `tests/test_understanding.py` enforces it.
 
 ---
 
@@ -37,8 +43,26 @@ Do not reopen these without evidence. Reopening one is a recorded decision, not 
     a deterministic route never reaches the LLM. One absent from the database does, and the
     model is expected to answer plausibly rather than refuse — reversing an earlier rule
     (RULES.md R8b). Allergens and dietary status are the one thing never guessed.
+7d. **The line is the hotel and the stay, not the database** (2026-09-18, RULES.md R8b.7). The
+    duty manager answers anything a duty manager would: rooms, food, services, policies, the
+    building, getting here, the local area, courtesy. Everything else — history, science, the news,
+    a joke, arithmetic — is declined in one warm sentence. *This reverses the earlier decision that
+    the model could answer general knowledge freely; live, "Who was Albert Einstein?" got a
+    paragraph on relativity on the hotel's phone line.* 7c and 7d pull opposite ways on purpose and
+    both ends are pinned by tests: over-correcting here rebuilds the "not in my records" agent 7c
+    exists to prevent.
+7e. **A model answer to a hotel question is remembered, and stays a guess** (RULES.md R8b.8).
+    Written to `learned_answers` once the caller has heard it, replayed verbatim to the next caller
+    asking the same question with no model call. This buys **consistency, not truth**: stored
+    `confirmed = 0`, never outranking a route, reviewed by `scripts/review_learned.py`. Matching is
+    exact, not fuzzy. Kept in **its own database file** (`data/aether_learned.db`), not in
+    `aether_hotel.db` — sharing the file both contended for the SQLite lock with bookings (7.5 s
+    teardowns and a `database is locked` failure in the suite; seconds of silence on a live call)
+    and blurred the line 7e exists to draw. This does **not** reopen decision 7b: that is about
+    hotel *facts*, and a guess is not one.
 8. **General Q&A stays supported** as a capability and a test surface, and must not turn the
-   architecture into a generic assistant platform.
+   architecture into a generic assistant platform. *Narrowed by 7d: the capability is exercised in
+   tests and by the classifier; on the hotel's line it is bounded to the hotel and the stay.*
 9. **The hotel is the product**, backed by `data/aether_hotel.db` (read-only). The warehouse
    fixture survives only as the *mutable* store that keeps fenced-mutation under test -- the
    read-only hotel structurally cannot exercise "the mutation never landed".
@@ -105,7 +129,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1528 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1761 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -505,7 +529,7 @@ Still `<from_run>` and must not be quoted:
   passes either way and is labelled in its docstring as the baseline, not as the proof.
 
 - **AETHER can take a booking, and the read-only guarantee survived it.** Room bookings, restaurant
-  table bookings, table availability and cancellation -- 23 tools now, 3 of which write. The facts
+  table bookings, table availability and cancellation -- 30 tools now, 7 of which write (orders added 2026-09-18). The facts
   stay unwritable and SQLite still says so: the one read-write connection sits behind an authorizer
   permitting `reservations`, `table_bookings`, `guests` and the single column `rooms.status`, and
   refusing everything else at the driver. `mode=ro` narrowed, not abandoned.

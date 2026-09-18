@@ -72,6 +72,7 @@ from .interruption import BargeInCoordinator
 from .llm import build_llm, supports_streaming
 from .tools import ToolRunner
 from .stt import WhisperSTT
+from .stt_groq import build_stt
 from .supervisor.generations import GenerationRegistry
 from .timing import TurnTiming
 from .trace import Trace, now_ms
@@ -164,7 +165,17 @@ class Day1Spike:
         self.mic = MicVAD(
             trace, aggressiveness=vad_aggressiveness, device=input_device, **mic_kwargs
         )
-        self.stt = WhisperSTT(trace, model_size=stt_model)
+        # The recogniser is chosen by STT_PROVIDER, and the DEFAULT PATH IS UNCHANGED -- it still
+        # constructs `WhisperSTT` by that name, in this module, so the twenty-five test files that
+        # monkeypatch `aether.spike.WhisperSTT` keep working and the local behaviour is identical.
+        # Only an explicit STT_PROVIDER=groq takes the other branch.
+        #
+        # `stt_model` is not forwarded to a hosted provider: every CLI defaults it to "base.en",
+        # which is a local model name and means nothing to Groq.
+        if (os.environ.get("STT_PROVIDER") or "").strip().lower() in ("groq", "groq-whisper"):
+            self.stt = build_stt(trace, model_size=None if stt_model == "base.en" else stt_model)
+        else:
+            self.stt = WhisperSTT(trace, model_size=stt_model)
         self.llm = build_llm()
         # Streaming /ws3 by default, HTTP fallback via RIME_TRANSPORT=http. Still Rime either way.
         #
@@ -479,6 +490,7 @@ class Day1Spike:
             # still say the wrong number. The router answers only when confident and returns None
             # otherwise, so anything ambiguous still reaches Gemini.
             self._last_stream_metrics = {}
+            used_model = False
             # Asked for another language? Switch first, then answer in it. Deliberately here rather
             # than before `begin_turn`: this way the switch is an ordinary turn with a generation,
             # a transcript line and a `ResponseSpoken`, so it is fenceable and observable like any
@@ -486,12 +498,18 @@ class Day1Spike:
             spoken = self._language_answer(text)
             if spoken is None:
                 spoken = self._menu_answer(text, gen)
+            if spoken is None:
+                # Something the model already answered once. Reused so the hotel does not give two
+                # callers two different plausible answers to the same question -- and it costs no
+                # model call, so the second caller is answered faster than the first.
+                spoken = self._recall_learned(text)
             if spoken is not None:
                 # No model was consulted, so the LLM stage took no time. Recording it as a zero
                 # span rather than leaving it None keeps the turn's arithmetic honest.
                 timing.llm_start = timing.llm_end = now_ms()
                 outcome = self._speak_answer(spoken, gen, timing)
             else:
+                used_model = True
                 timing.llm_start = now_ms()
                 if self._streaming_enabled and supports_streaming(self.llm):
                     outcome = self._streaming_turn(text, gen, timing)
@@ -543,6 +561,13 @@ class Day1Spike:
             # pollute history -- the existing fencing stays the authority and history just rides
             # behind it. Level 1: a turn is remembered whole or not at all (MEMORY.md section 4).
             self.history.commit_turn(text, reply)
+            # WRITTEN DOWN ONLY ONCE THE CALLER HAS HEARD IT, and only when the model composed it.
+            # Deliberately on this line rather than earlier: an answer that was fenced, refused by
+            # the gate or talked over was never heard, and must not become the hotel's position on
+            # anything. Every discarded path returned above, so putting it here inherits that
+            # authority instead of re-deciding it with a second, subtly different condition.
+            if used_model:
+                self._remember_learned(text, reply)
             # What "it" will mean on the next turn. Committed HERE and nowhere else, for the same
             # reason history is: a fenced turn was never heard, so it cannot be referred back to.
             if self._pending_subject is not None:
@@ -694,6 +719,57 @@ class Day1Spike:
     # -- the completed/spoken boundary, history, ResponseSpoken -- is shared, so streaming cannot
     # acquire different history or fencing semantics by accident.
 
+    @property
+    def learned(self):
+        """Answers the model has given before, opened on first use.
+
+        Lazy because most turns never reach it -- a database question is answered without ever
+        touching this -- and because opening it creates the working copy, which a test that only
+        routes has no business doing.
+        """
+        store = getattr(self, "_learned", None)
+        if store is None:
+            from .hotel.learned import LearnedAnswers
+
+            try:
+                store = LearnedAnswers()
+            except Exception as exc:                                # noqa: BLE001
+                # Remembering is a convenience, not a guarantee. A store that will not open must
+                # cost a slower answer, never the call.
+                print(f"  (learned answers unavailable: {type(exc).__name__})")
+                store = False
+            self._learned = store
+        return store or None
+
+    def _recall_learned(self, text: str) -> str | None:
+        """What the model said last time this exact question was asked, if anything."""
+        store = self.learned
+        if store is None:
+            return None
+        try:
+            answer = store.recall(text, self.language.code)
+        except Exception:                                           # noqa: BLE001
+            return None
+        if answer:
+            print(f"  LEARNED: {answer}")
+        return answer
+
+    def _remember_learned(self, text: str, answer: str) -> None:
+        """Write down a model answer so the next caller hears the same thing.
+
+        **Consistency, not truth.** The row is stored unconfirmed and is reported as a guess by
+        `scripts/review_learned.py` until a human agrees with it. Nothing here decides the hotel
+        actually has a rooftop terrace -- only that it should stop changing its mind about one.
+        """
+        store = self.learned
+        if store is None or not answer:
+            return
+        try:
+            if store.remember(text, answer, self.language.code):
+                print("  (remembered, unconfirmed -- review with scripts/review_learned.py)")
+        except Exception:                                           # noqa: BLE001
+            pass
+
     def _menu_answer(self, text: str, gen) -> str | None:
         """Answer from the hotel menu, or None to let the model handle it.
 
@@ -708,7 +784,13 @@ class Day1Spike:
         # AETHER's question, not asking a new one. `confirms` returns None for anything that is
         # neither yes nor no, which means they moved on -- so the offer is dropped rather than
         # argued with.
-        decision = route_menu(text, self.subject)
+        # Whether this caller has an order open. It changes how a bare dish name is read -- see
+        # `route`. Read through `_bookings` rather than `store.bookings` on purpose: the property
+        # OPENS a read-write connection on first use, and asking "is there an order" must not be
+        # what gives a caller who only browsed the menu a writable database.
+        ordering = bool(getattr(self.menu, "_bookings", None)
+                        and self.menu.bookings.current_order() is not None)
+        decision = route_menu(text, self.subject, ordering=ordering)
         if decision is None and self.suggestion is not None:
             answer = confirms(text)
             offered, self.suggestion = self.suggestion, None
@@ -785,6 +867,19 @@ class Day1Spike:
         # the call site does not change and every existing test double keeps working. Set with
         # setattr semantics rather than a method so a stub STT is unaffected either way.
         self.stt.language = language
+        # A LOUD WARNING RATHER THAN A SILENT DEGRADATION.
+        #
+        # The local multilingual `base` cannot really do Hindi. Round-tripped through Rime and back
+        # it scored 21.7% against the hosted recogniser's 89.2%, returning Urdu script for one
+        # answer and romanised transliteration for two more. A caller who switches to Hindi on the
+        # local recogniser gets nonsense, and nothing in the logs would say why -- so this says why.
+        if (language.code != "eng"
+                and type(self.stt).__name__ == "WhisperSTT"
+                and not getattr(self, "_warned_local_multilingual", False)):
+            self._warned_local_multilingual = True
+            print(f"  [stt] WARNING: {language.name} on the LOCAL recogniser. Hindi in particular "
+                  f"transcribes poorly (measured 21.7% vs 89.2%). Set STT_PROVIDER=groq for the "
+                  f"multilingual demo.")
         # And the model, for the turns the router does not catch. Without this it answers a Hindi
         # question in whichever language it feels like, and in whichever gender -- measured, not
         # assumed: three Hindi questions came back as one Hindi reply and two English ones.

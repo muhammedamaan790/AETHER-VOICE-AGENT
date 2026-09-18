@@ -15,6 +15,7 @@ as a real conversation. If the test suite passes, this is what will happen.
 | 2 | The normal end-to-end flow | 0:20 |
 | 3 | The selected hard voice problem | 1:25 |
 | 4 | One deliberate stress or failure case | 1:40 |
+| 4b | Memory across turns — an order built up, and a booking recalled | 2:20 |
 | 5 | The result or measurement | 2:55 |
 | 6 | Which speech provider is active | 3:15 — and it changes voice for Hindi, then Spanish |
 
@@ -131,7 +132,7 @@ AETHER answered the question I actually ended up asking."
 
 **YOU:** Book it for two nights.
 
-**AETHER:** Done. I have reserved the Executive Suite, room three zero one, for two nights at twelve thousand five hundred rupees a night. Your reference is one zero zero four.
+**AETHER:** Done. I have reserved the Executive Suite, room three zero one, for two nights at twelve thousand five hundred rupees a night. Your reference is one zero zero eight.
 
 **YOU (to camera):** "I said 'book it'. It booked the suite — the thing I heard about — not the
 vegetarian list I interrupted. Its memory follows what was actually heard, and that's a real booking
@@ -142,6 +143,48 @@ in the hotel's database."
 **AETHER:** We do not have a room nine nine nine. Our rooms are numbered one zero one to five one zero.
 
 **YOU (to camera):** "And it won't invent a room."
+
+### 4b · Memory across turns: an order, and what you already booked — 2:20
+
+**YOU (to camera):** "One question at a time is the easy case. A real call builds something up."
+
+**YOU:** I'll have the chicken kebab.
+
+**AETHER:** I have added Chicken Kebab. That is Chicken Kebab, four hundred and twenty rupees so far.
+
+**YOU:** And two masala chai.
+
+**AETHER:** I have added two Masala Chai. That is Chicken Kebab and two Masala Chai, seven hundred rupees so far.
+
+*[Point at the evidence strip: still no model call.]*
+
+**YOU (to camera):** "I didn't say 'order' that time. I didn't even use a verb. 'And two masala chai'
+is a price question if you're reading the menu and a second item if you're ordering — nothing in the
+sentence tells you which. It knew because the order was open."
+
+**YOU:** Repeat my order.
+
+**AETHER:** Your order is Chicken Kebab and two Masala Chai. That comes to seven hundred rupees.
+
+**YOU (to camera):** "That's a database row, not the model's memory of the conversation. Ask it ten
+times and you get the same seven hundred rupees ten times."
+
+**YOU:** That's all, place the order.
+
+**AETHER:** That is with the kitchen: Chicken Kebab and two Masala Chai, seven hundred rupees. Your order number is five zero zero three.
+
+**YOU:** What was my booking reference?
+
+**AETHER:** You have the Executive Suite, room three zero one, for two nights, reference one zero zero eight.
+
+**YOU (to camera):** "I booked that four turns ago, before the food. I never gave a name or a number —
+on a phone line there's nothing to look a booking up *by* — so it remembers what this call did."
+
+**YOU:** When will room three zero five be available?
+
+**AETHER:** Room three zero five is booked until the nineteenth of September.
+
+**YOU (to camera):** "A date. Not 'that room is occupied' — which is true, and not what I asked."
 
 ### 5 · The result — 2:55
 
@@ -200,7 +243,7 @@ language model. One more language."
 
 **YOU:** Spanish.
 
-**AETHER:** Ha llamado a AETHER, la gerente del hotel. ¿En qué puedo ayudarle?
+**AETHER:** Ha llamado a AETHER. Soy la gerente del hotel. ¿En qué puedo ayudarle?
 
 *[Means: "You've reached AETHER, the hotel's manager. How can I help you?" The Voice line changes to
 "isa · mistv3" — Rime's Spanish voice.]*
@@ -244,11 +287,15 @@ languages, from one database. And the repository reproduces every claim with one
 | It asks for a language twice, then *"Let's continue in English…"* | Carry on in English; switch later with *"Can we switch language?"*. |
 | The booking reads a different room or reference | You didn't reset first. The booking is still right — keep going, or reset and re-record. |
 | The vegetarian answer doesn't stop when you talk | Start earlier, at *"Paneer Tikka, Paneer"*, at normal volume. |
+| *"And two masala chai"* comes back with a price instead of joining the order | The previous turn didn't land, so no order is open. Say *"Order two masala chai"* and carry on. |
+| *"What was my booking reference"* says you haven't booked | The booking on turn 7 was fenced or didn't land. Re-book, then ask again. |
 | A turn shows `llm_ms` in the evidence strip | The recogniser misheard and the language model answered. Carry on; don't point at the strip on that turn. |
 
 **If it runs long, cut in this order:** the second Spanish question, the second Hindi question, room
-nine nine nine, the swimming pool. **Never cut 1:40–2:55** — the interruption, the recovery and the
-booking are one beat.
+nine nine nine, the swimming pool, then "when will room three zero five be available". **Never cut
+1:40–2:20** — the interruption, the recovery and the booking are one beat. **And never cut turns 9
+and 10 as a pair**: turn 10 only makes sense because turn 9 opened the order, and it is the single
+most interesting line in the call.
 
 **If nobody on camera speaks Hindi or Spanish,** keep the Rime line and one question in each
 language: the voice change on the console is the point, not fluency.
@@ -270,13 +317,26 @@ what [`tests/test_demo_script.py`](tests/test_demo_script.py) replays.
 | 4 | Do you have a swimming pool? | Yes, we offer a swimming pool free of charge from six in the morning until eight in the evening. |
 | 5 | Do you have anything vegetarian? | Yes. For vegetarian we have Paneer Tikka, Paneer Butter Masala, Vegetable Biryani, Chocolate Brownie, Fresh Fruit Bowl and Fresh Lime Soda, plus two more. |
 | 6 | Actually, how much is an executive suite? | The Executive Suite is twelve thousand five hundred rupees a night, and sleeps up to three. |
-| 7 | Book it for two nights. | Done. I have reserved the Executive Suite, room three zero one, for two nights at twelve thousand five hundred rupees a night. Your reference is one zero zero four. |
+| 7 | Book it for two nights. | Done. I have reserved the Executive Suite, room three zero one, for two nights at twelve thousand five hundred rupees a night. Your reference is one zero zero eight. |
 | 8 | Is room nine nine nine free? | We do not have a room nine nine nine. Our rooms are numbered one zero one to five one zero. |
+| 9 | I'll have the chicken kebab. | I have added Chicken Kebab. That is Chicken Kebab, four hundred and twenty rupees so far. |
+| 10 | And two masala chai. | I have added two Masala Chai. That is Chicken Kebab and two Masala Chai, seven hundred rupees so far. |
+| 11 | Repeat my order. | Your order is Chicken Kebab and two Masala Chai. That comes to seven hundred rupees. |
+| 12 | That's all, place the order. | That is with the kitchen: Chicken Kebab and two Masala Chai, seven hundred rupees. Your order number is five zero zero three. |
+| 13 | What was my booking reference? | You have the Executive Suite, room three zero one, for two nights, reference one zero zero eight. |
+| 14 | When will room three zero five be available? | Room three zero five is booked until the nineteenth of September. |
 
 <!-- SCRIPT:END -->
 
 Turn 5 is talked over, so it's never heard in full. That's why turn 7's "it" means the suite from turn
 6: turn 5 was never heard, so it never became the subject.
+
+Turns 9-14 are the part that cannot be faked with a lookup table. **Turn 10 carries no verb and no
+dish-ordering word at all** — "And two masala chai" is a price question to somebody browsing the menu
+and a second item to somebody mid-order, and only the open order tells the two apart. **Turn 13 names
+nothing**: the reference it reads back was created on turn 7, three turns and an entire food order
+earlier. **Turn 14 answers with a date**, because a caller asking *when* a room frees up does not want
+to hear that it is occupied.
 
 <!-- LANGUAGES:BEGIN -->
 

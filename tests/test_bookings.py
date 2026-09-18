@@ -99,6 +99,7 @@ def test_the_interrupted_caller_gets_the_booking_they_actually_asked_for(monkeyp
     from tests.test_menu_routing import AUDIO, build
 
     spike, trace, rime, _llm = build(monkeypatch, "book me a deluxe king")
+    before = _count(spike.menu, "reservations")
 
     def caller_interrupts(_seconds):
         spike.barge.on_speech_onset()
@@ -109,7 +110,7 @@ def test_the_interrupted_caller_gets_the_booking_they_actually_asked_for(monkeyp
     spike.handle_utterance(AUDIO, 0.0)
 
     assert trace.all(EventType.RESULT_LEAKED) == []
-    assert _count(spike.menu, "reservations") == 3, "the abandoned booking was written anyway"
+    assert _count(spike.menu, "reservations") == before, "the abandoned booking was written anyway"
 
 
 # --- 2. the facts are still unwritable ------------------------------------------------------------
@@ -184,10 +185,15 @@ def test_cancelling_puts_the_room_back(hotel, runner) -> None:
 
 
 def test_a_room_that_is_not_free_is_refused_rather_than_double_booked(hotel, runner) -> None:
+    before = _count(hotel, "reservations")
     _speak(runner, "reserve_room", room="101")
     said = _speak(runner, "reserve_room", room="101")
     assert "not free" in said
-    assert _count(hotel, "reservations") == 4, "the same room was booked twice"
+    # ONE more than before, not a literal total. These read `== 4` while the shipped database held
+    # exactly three reservations; it now holds nine, because every occupied room gained the booking
+    # that must exist behind it. The claim was always about the delta -- two attempts, one room --
+    # and writing it that way is what stops the next data change breaking a test about locking.
+    assert _count(hotel, "reservations") == before + 1, "the same room was booked twice"
 
 
 # --- what the caller hears -------------------------------------------------------------------------
@@ -304,6 +310,7 @@ def test_two_callers_cannot_both_book_the_same_room(hotel) -> None:
     two connections on one file is the shape every real pair of calls has. The test that proves the
     race fix is the next one.
     """
+    before = _count(hotel, "reservations")
     other = Bookings(hotel.path)
     try:
         hotel.bookings.reserve_room(room="101")
@@ -312,7 +319,7 @@ def test_two_callers_cannot_both_book_the_same_room(hotel) -> None:
         assert refused.value.code == "room_not_free"
     finally:
         other.close()
-    assert _count(hotel, "reservations") == 4
+    assert _count(hotel, "reservations") == before + 1
 
 
 def test_a_rush_on_one_room_type_books_each_room_exactly_once(hotel) -> None:
@@ -325,6 +332,7 @@ def test_a_rush_on_one_room_type_books_each_room_exactly_once(hotel) -> None:
     """
     import threading
 
+    before = _count(hotel, "reservations")
     free = [r for r in hotel.available_rooms() if r.room_type == "Deluxe King"]
     assert free, "the fixture hotel has no free Deluxe King to fight over"
     callers = len(free) + 3
@@ -360,7 +368,7 @@ def test_a_rush_on_one_room_type_books_each_room_exactly_once(hotel) -> None:
     assert len(booked) == len(free), f"{len(booked)} bookings for {len(free)} free rooms"
     assert len(set(booked)) == len(booked), f"a room was booked twice: {sorted(booked)}"
     assert len(refused) == 3 and set(refused) == {"none_of_that_type_free"}
-    assert _count(hotel, "reservations") == 3 + len(free)
+    assert _count(hotel, "reservations") == before + len(free)
 
 
 # --- helpers ----------------------------------------------------------------------------------------

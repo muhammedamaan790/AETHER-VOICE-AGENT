@@ -160,12 +160,58 @@ _PAIRS: list[tuple[str, str]] = [
     ("डीलक्स किंग", "deluxe king"), ("डिलक्स किंग", "deluxe king"),
     ("एक्जीक्यूटिव सुइट", "executive suite"), ("एग्जीक्यूटिव सुइट", "executive suite"),
     ("फैमिली सुइट", "family suite"),
+
+    # --- gaps found by measurement, 2026-09-18 -------------------------------------------------
+    #
+    # `scripts/measure_understanding.py` routes a fixed set of sentences per language and reports
+    # what reached which tool. English scored 31/31 and Hindi 23/31, and every one of the Hindi
+    # misses was a missing WORD rather than a missing rule -- the sentence was translated into
+    # something the router could almost read. Added here rather than as router entries, because
+    # the router's tables are English and this file is where the other two languages are met.
+    ("एलर्जी", "allergy"), ("मेवे", "nuts"), ("मेवा", "nuts"),
+    ("खा सकता", "eat"), ("खा सकती", "eat"), ("खा सकते", "eat"),
+    ("कहाँ", "where are you"), ("कहां", "where are you"),
+    ("किस तरह के", "what kind of"), ("कैसे", "what kind of"), ("किस प्रकार के", "what kind of"),
+    ("एग्जीक्यूटिव सूट", "executive suite"), ("एक्जीक्यूटिव सूट", "executive suite"),
+    ("डीलक्स सूट", "deluxe king"),
+    ("मैंने", "i"), ("किया था", "did"), ("किया", "did"),
+
+    ("opciones", "options"), ("veganas", "vegan"), ("vegana", "vegan"),
+    ("vegetarianas", "vegetarian"), ("vegetariana", "vegetarian"),
+    ("ubicados", "located"), ("ubicado", "located"), ("ubicacion", "location of the hotel"),
+    ("ubicación", "location of the hotel"),
+    ("donde estan", "where are you"), ("donde están", "where are you"),
+    ("donde esta", "where are you"), ("donde está", "where are you"),
+    ("he pedido", "did i order"), ("pedi", "did i order"), ("pedí", "did i order"),
+
+    # Phrases, not words, because both languages put "about" and "ordered" where English does not.
+    # Hindi is verb-final, so "ऑर्डर किया था" is *ordered did* and no word-by-word mapping produces
+    # "did i order"; Spanish wraps the noun ("hábleme DEL paneer tikka").
+    ("के बारे में बताइए", "tell me about"), ("के बारे में बताओ", "tell me about"),
+    ("के बारे में", "about"), ("बताइए", "tell me"), ("बताओ", "tell me"),
+    ("ऑर्डर किया था", "did i order"), ("ऑर्डर किया", "did i order"),
+    ("hableme del", "tell me about"), ("háblame del", "tell me about"),
+    ("hableme de", "tell me about"), ("háblame de", "tell me about"),
+    ("cuenteme del", "tell me about"), ("cuénteme del", "tell me about"),
 ]
 
 # Longest source phrase first. Sorting here rather than trusting the order above means a new entry
 # can be added anywhere in the list without quietly shadowing an existing one.
+# THE BOUNDARY HAS TO KNOW ABOUT DEVANAGARI, and `\w` does not.
+#
+# A Devanagari matra -- the vowel sign written onto a consonant -- is a combining mark, and
+# `str.isalnum()` is False for it, so `\w` does not match it and `(?!\w)` happily reports a word
+# boundary in the MIDDLE of a word. "बारे" ("about") therefore matched the entry `बार` ("bar") and
+# was rewritten to "barे", an English word welded to an orphan matra. The router then found "bar"
+# and answered "tell me about the paneer tikka" with the bar's opening hours.
+#
+# This is the third time the same fact has caused a bug in this codebase -- it broke `normalise`
+# twice and `_find_party_size` once -- so the boundary is spelled out rather than borrowed: any
+# character in the Devanagari block, letter or mark, means we are still inside a word.
+_INSIDE_A_WORD = r"[\wऀ-ॿ]"
+
 _SUBSTITUTIONS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(rf"(?<!\w){re.escape(src)}(?!\w)"), dst)
+    (re.compile(rf"(?<!{_INSIDE_A_WORD}){re.escape(src)}(?!{_INSIDE_A_WORD})"), dst)
     for src, dst in sorted(_PAIRS, key=lambda pair: -len(pair[0]))
 )
 
@@ -177,10 +223,9 @@ def to_router_language(spoken: str) -> str:
     English sentence leaves it unchanged apart from the handful of words that are spelled the same
     in Spanish ("taxi", "spa"), which map to themselves.
 
-    `(?<!\\w)`/`(?!\\w)` rather than `\\b`: the boundary has to hold between a Devanagari character
-    and a space, and `\\b` is defined in terms of word characters, which Devanagari letters are --
-    so `\\b` would behave correctly here but silently stop doing so beside punctuation that
-    `normalise` has already stripped. Lookarounds say what is meant.
+    The word boundary is spelled out in `_INSIDE_A_WORD` rather than borrowed from the regex
+    engine's own, and the comment there says why: neither `\\b` nor `\\w` knows that a Devanagari
+    matra belongs to the word it is written on, so both report a boundary in the middle of one.
     """
     for pattern, replacement in _SUBSTITUTIONS:
         spoken = pattern.sub(replacement, spoken)

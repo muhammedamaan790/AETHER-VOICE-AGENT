@@ -6,13 +6,19 @@ read-only agent cannot ruin anyone's day. Taking a booking means giving that up,
 thing is to give up as little as possible rather than to open the file and rely on care.
 
 WHAT IS STILL UNWRITABLE, and enforced the same way the old guarantee was. This connection installs
-a `sqlite3` authorizer that DENIES any write outside four places:
+a `sqlite3` authorizer that DENIES any write outside six places:
 
-    reservations      a room booking
-    table_bookings    a restaurant booking
-    guests            the caller, so a booking has someone to belong to
-    rooms.status      the one column a booking changes, so "is room three zero five free"
-                      keeps telling the truth afterwards
+    reservations              a room booking
+    table_bookings            a restaurant booking
+    guests                    the caller, so a booking has someone to belong to
+    restaurant_orders         an order being taken, and then sent to the kitchen
+    restaurant_order_items    the dishes on it, at the price they were ordered at
+    rooms.status              the one column a booking changes, so "is room three zero five free"
+                              keeps telling the truth afterwards
+
+It was four until 2026-09-18, when AETHER learned to take an order. Widening a guarantee this
+project states out loud is worth stating: two tables were NAMED rather than the authorizer relaxed,
+and the facts protected are exactly the facts protected before.
 
 Every price, every allergen, every policy, every room rate, every menu item is refused **by the
 driver**, mid-statement, whatever the code asks for. A tool with a bug cannot reprice the menu; nor
@@ -30,6 +36,10 @@ FENCING. Booking tools are declared mutating in `HOTEL_TOOLS`, and `ToolRunner` 
 is in flight leaves no row behind. That is not a new mechanism; it is the one the warehouse tools
 have always used, and it is the strongest form of the project's central claim: not merely that a
 stale answer is never spoken, but that a stale intention never lands.
+
+STILL THE ONLY CONNECTION THAT MAY CHANGE THE HOTEL. `learned.py` also writes, but to a database of
+its own -- deliberately, so that what the model made up about the hotel is not in the same file as
+what the hotel actually charges.
 """
 
 from __future__ import annotations
@@ -44,7 +54,15 @@ from .db import UnknownRecord, default_db_path
 
 # Exactly what may be written, and nothing else. Tables here are writable in full; `rooms` is
 # writable only in the `status` column, which the authorizer checks separately.
-_WRITABLE_TABLES = frozenset({"reservations", "table_bookings", "guests"})
+#
+# `restaurant_orders` and `restaurant_order_items` were added on 2026-09-18, when AETHER learned to
+# take an order. That is a deliberate widening of a guarantee this project states out loud, so it is
+# stated here too: taking an order means writing an order, and the honest way to do that is to name
+# the two tables rather than to relax the authorizer. Every price, allergen, policy, rate and room
+# number is refused exactly as before -- `unit_price_inr` is COPIED from `menu_items` at the moment
+# of ordering and the menu row itself is never touched.
+_WRITABLE_TABLES = frozenset({"reservations", "table_bookings", "guests",
+                              "restaurant_orders", "restaurant_order_items"})
 _WRITABLE_COLUMNS = frozenset({("rooms", "status")})
 
 # A caller on the telephone has not given a name. Inventing one would put a fabricated person in a
@@ -52,6 +70,19 @@ _WRITABLE_COLUMNS = frozenset({("rooms", "status")})
 # booking, named for what it is, is the honest option -- and nothing ever speaks a guest name
 # (`tests/test_language.py` enforces that), so it is never heard.
 _TELEPHONE_GUEST = "Telephone booking"
+
+# A caller cannot order thirty of one dish over the telephone by accident, and if they mean to, a
+# human should hear about it. Same shape as `_MAX_PARTY` on table bookings: a refusal that names the
+# limit, rather than a silent acceptance nobody can fulfil.
+_MAX_PER_DISH = 20
+
+# THE KITCHEN'S OWN VOCABULARY, not a new one. `restaurant_orders.status` is a CHECK constraint over
+# exactly these four, so an order being built is `pending` -- not yet with anyone -- and becomes
+# `preparing` when the caller says to send it. Inventing a fifth word ("open") was refused by SQLite
+# on the first order ever taken, which is the schema doing its job.
+_ORDER_OPEN = "pending"
+_ORDER_PLACED = "preparing"
+_ORDER_CANCELLED = "cancelled"
 
 
 class BookingRefused(RuntimeError):
@@ -88,6 +119,41 @@ class TableBooking:
     booked_for: str
 
 
+@dataclass(frozen=True)
+class OrderLine:
+    """One dish on an order, at the price it was ordered at."""
+
+    name: str
+    quantity: int
+    unit_price: float
+
+    @property
+    def line_total(self) -> float:
+        return self.unit_price * self.quantity
+
+
+@dataclass(frozen=True)
+class Order:
+    """An order as it stands: what is on it, and what it comes to.
+
+    `placed` is what separates "reading the order back" from "it is with the kitchen". A caller can
+    keep adding until they say so, and `repeat_order` is answerable at any point in between -- which
+    is the whole reason this exists rather than a list held in the model's context.
+    """
+
+    reference: str
+    lines: tuple[OrderLine, ...]
+    placed: bool
+
+    @property
+    def total(self) -> float:
+        return sum(line.line_total for line in self.lines)
+
+    @property
+    def items(self) -> int:
+        return sum(line.quantity for line in self.lines)
+
+
 def _authorizer(action: int, arg1: str | None, arg2: str | None,
                 _db: str | None, _trigger: str | None) -> int:
     """Refuse every write outside the booking tables, at the driver.
@@ -107,10 +173,18 @@ def _authorizer(action: int, arg1: str | None, arg2: str | None,
 
 
 class Bookings:
-    """Takes bookings. Holds the only read-write connection in the process."""
+    """Takes bookings and orders. Holds the only connection that may change the hotel."""
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path is not None else default_db_path()
+        # WHAT THIS CALL HAS DONE. Both are per-call, because every call builds its own store and so
+        # its own `Bookings` -- two callers cannot see each other's order or reference.
+        #
+        # They are the difference between an agent that takes a booking and one a caller can then
+        # TALK to about it. "What was my reference?" and "repeat my order" are the questions people
+        # actually ask next, and without this they reached the model, which knows neither.
+        self._order_id: int | None = None
+        self.last_booking: RoomBooking | TableBooking | None = None
         self._lock = threading.Lock()
         self._con = sqlite3.connect(str(self.path), check_same_thread=False)
         self._con.row_factory = sqlite3.Row
@@ -170,7 +244,7 @@ class Bookings:
             except BaseException:
                 self._con.rollback()
                 raise
-            return RoomBooking(
+            made = RoomBooking(
                 reference=str(cur.lastrowid),
                 room_number=str(row["room_number"]),
                 room_type=str(row["type_name"]),
@@ -179,6 +253,8 @@ class Bookings:
                 check_in=check_in,
                 check_out=check_out,
             )
+            self.last_booking = made
+            return made
 
     def _pick_room(self, *, room: str | None, room_type: str | None) -> sqlite3.Row:
         sql = ("SELECT r.room_id, r.room_number, r.status, t.name AS type_name, t.base_rate_inr AS base_rate"
@@ -235,8 +311,10 @@ class Bookings:
                  datetime.now(timezone.utc).isoformat(timespec="seconds")),
             )
             self._con.commit()
-            return TableBooking(reference=str(cur.lastrowid), party_size=party_size,
+            made = TableBooking(reference=str(cur.lastrowid), party_size=party_size,
                                 sitting=sitting, booked_for=booked_for)
+            self.last_booking = made
+            return made
 
     def _restaurant_hours(self) -> tuple[str, str]:
         row = self._con.execute(
@@ -253,6 +331,150 @@ class Bookings:
             "SELECT COUNT(*) AS n FROM table_bookings WHERE booked_for = ? AND sitting = ?"
             " AND status = 'confirmed'", (booked_for, sitting)).fetchone()
         return max(0, _TABLES - int(row["n"]))
+
+    # --- taking an order -----------------------------------------------------------------------
+    #
+    # AN ORDER IS BUILT UP ACROSS TURNS, which makes it different from every other tool here. A
+    # booking is one sentence and one row; an order is "the chicken kebab", then "and a mango
+    # lassi", then "that's all" -- three turns that have to add up to one thing.
+    #
+    # It lives in the DATABASE, not in the model's context, and that is the point. A list carried in
+    # the conversation is re-read by the model every turn and can come back one dish longer; a row
+    # cannot. "Repeat my order" is then a lookup with `llm_ms = 0`, and it is the same answer every
+    # time it is asked, which is what a caller reading back an order actually needs.
+    #
+    # `self._order_id` ties the open order to THIS call. Every call builds its own store and so its
+    # own `Bookings`, so two callers cannot add to each other's order even though both are writing
+    # to one database.
+
+    def _open_order(self, *, create: bool = False) -> int | None:
+        """The order this call is building, if there is one."""
+        if self._order_id is not None:
+            return self._order_id
+        if not create:
+            return None
+        with self._lock:
+            guest_id = self._new_guest()
+            # `restaurant`, not `room_service`, and the schema settles it: `order_source` is a
+            # CHECK constraint over exactly those two, and the existing room-service rows all carry
+            # a `room_id`. A caller on the telephone has not told us their room, so claiming room
+            # service would put an order in the kitchen's queue with nowhere to take it.
+            cur = self._con.execute(
+                "INSERT INTO restaurant_orders (guest_id, room_id, order_source, status,"
+                " created_at) VALUES (?,?,?,?,?)",
+                (guest_id, None, "restaurant", _ORDER_OPEN,
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+            self._con.commit()
+            self._order_id = int(cur.lastrowid)
+        return self._order_id
+
+    def add_to_order(self, *, dish: str, quantity: int = 1) -> Order:
+        """Put a dish on the order. Returns the WHOLE order, not just the line added.
+
+        Returning everything is deliberate: the renderer can then confirm the new item and say what
+        the order now comes to in one breath, which is what stops a caller having to ask.
+
+        The price is read from `menu_items` and COPIED onto the order line. That is how a price
+        stays correct: if the kitchen reprices a dish overnight, an order taken today still totals
+        what the caller was told, and nothing here can write back to the menu.
+        """
+        if quantity < 1:
+            raise BookingRefused("min_one_item")
+        if quantity > _MAX_PER_DISH:
+            raise BookingRefused("too_many_of_one_dish", most=_MAX_PER_DISH)
+
+        row = self._con.execute(
+            "SELECT item_id, name, price_inr, available FROM menu_items"
+            " WHERE lower(name) = lower(?)", (str(dish).strip(),)).fetchone()
+        if row is None:
+            raise UnknownRecord(f"no such dish: {dish!r}")
+        # A dish the kitchen has run out of is refused rather than ordered and disappointed later.
+        # `check_availability` already answers this question; an order must not quietly disagree.
+        if not row["available"]:
+            raise BookingRefused("dish_unavailable", dish=row["name"])
+
+        order_id = self._open_order(create=True)
+        with self._lock:
+            # One line per dish, so "two kebabs" and "a kebab, and another kebab" read back the
+            # same. A caller who says the second thing does not expect to hear two lines.
+            existing = self._con.execute(
+                "SELECT order_item_id, quantity FROM restaurant_order_items"
+                " WHERE order_id = ? AND item_id = ?", (order_id, row["item_id"])).fetchone()
+            if existing is None:
+                self._con.execute(
+                    "INSERT INTO restaurant_order_items (order_id, item_id, quantity,"
+                    " unit_price_inr) VALUES (?,?,?,?)",
+                    (order_id, row["item_id"], quantity, float(row["price_inr"])))
+            else:
+                total = int(existing["quantity"]) + quantity
+                if total > _MAX_PER_DISH:
+                    raise BookingRefused("too_many_of_one_dish", most=_MAX_PER_DISH)
+                self._con.execute(
+                    "UPDATE restaurant_order_items SET quantity = ? WHERE order_item_id = ?",
+                    (total, existing["order_item_id"]))
+            self._con.commit()
+        return self.current_order()
+
+    def current_order(self) -> Order | None:
+        """What is on the order right now, or None if nothing has been ordered.
+
+        None is a real answer and the renderer speaks it as one -- "you have not ordered anything
+        yet" is correct, and is what "repeat my order" used to answer with the entire menu.
+        """
+        order_id = self._open_order()
+        if order_id is None:
+            return None
+        rows = self._con.execute(
+            "SELECT m.name AS name, i.quantity AS quantity, i.unit_price_inr AS unit_price"
+            " FROM restaurant_order_items i JOIN menu_items m USING(item_id)"
+            " WHERE i.order_id = ? ORDER BY i.order_item_id", (order_id,)).fetchall()
+        if not rows:
+            return None
+        status = self._con.execute(
+            "SELECT status FROM restaurant_orders WHERE order_id = ?", (order_id,)).fetchone()
+        return Order(
+            reference=str(order_id),
+            lines=tuple(OrderLine(r["name"], int(r["quantity"]), float(r["unit_price"]))
+                        for r in rows),
+            placed=bool(status and status["status"] != _ORDER_OPEN),
+        )
+
+    def place_order(self) -> Order:
+        """Send it to the kitchen. After this the caller is told it is being prepared."""
+        order = self.current_order()
+        if order is None:
+            raise BookingRefused("nothing_ordered")
+        if order.placed:
+            raise BookingRefused("already_placed", reference=order.reference)
+        with self._lock:
+            self._con.execute("UPDATE restaurant_orders SET status = ? WHERE order_id = ?",
+                              (_ORDER_PLACED, int(order.reference)))
+            self._con.commit()
+        # The call may go on to order again; a placed order is finished, so the next dish starts a
+        # new one rather than reopening this.
+        self._order_id = None
+        return Order(reference=order.reference, lines=order.lines, placed=True)
+
+    def cancel_order(self) -> Order:
+        """Drop the order the caller was building.
+
+        Marked `cancelled` rather than deleted. The kitchen's own vocabulary has a word for this
+        and an order that was taken and then dropped is something a hotel keeps a record of; the
+        caller cannot read it back either way, because `_order_id` is cleared and a cancelled row
+        is never reopened.
+        """
+        order = self.current_order()
+        if order is None:
+            raise BookingRefused("nothing_ordered")
+        if order.placed:
+            raise BookingRefused("already_placed", reference=order.reference)
+        with self._lock:
+            self._con.execute("UPDATE restaurant_orders SET status = ? WHERE order_id = ?",
+                              (_ORDER_CANCELLED, int(order.reference)))
+            self._con.commit()
+        self._order_id = None
+        return order
 
     # --- cancelling --------------------------------------------------------------------------
 

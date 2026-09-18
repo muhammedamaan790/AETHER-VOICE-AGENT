@@ -23,8 +23,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# The presentation documents are in this list for the same reason everything else is: they quote
+# test counts and measured figures, they are read by judges rather than by us, and prose has no
+# compiler. They are the LAST place a stale number should survive.
 DOCS = ["README.md", "DEMO.md", "MEMORY.md", "PHASES.md", "RIME_EVIDENCE.md", "JUDGING.md",
-        "PRD.md", "DEMO_SCRIPT.md", "evidence/README.md", "SETUP.md"]
+        "PRD.md", "DEMO_SCRIPT.md", "evidence/README.md", "SETUP.md",
+        "PRESENT_EXPLAINER.md", "PRESENT_SCRIPT.md", "PRESENT_FEATURES.md"]
 
 
 def _text(name: str) -> str:

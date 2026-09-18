@@ -441,6 +441,15 @@ def _refusal(summary) -> str:
         return "¿Para cuántas personas reservo la mesa?"
     if why == "min_one_night":
         return "La estancia mínima es de una noche. ¿Cuántas noches desea?"
+    if why == "dish_unavailable":
+        return f"Lo siento, hoy no tenemos {summary['dish']}. ¿Le traigo otra cosa?"
+    if why == "no_such_dish":
+        return f"Lo siento, no tenemos {summary['dish']} en la carta."
+    if why == "too_many_of_one_dish":
+        return (f"Puedo poner hasta {say_number(summary['most'])} de un mismo plato. "
+                f"Para más, le paso con el restaurante.")
+    if why in ("min_one_item", "quantity_not_understood"):
+        return "¿Cuántos desea?"
     return "Lo siento, no he podido hacer esa reserva."
 
 
@@ -480,6 +489,107 @@ def _speak_cancel_booking(result) -> str:
     return "Queda cancelada. Su reserva ya no está retenida."
 
 
+# --- tomar un pedido / taking an order ----------------------------------------------------------
+#
+# Los nombres de los platos se quedan como están: son los de la carta del hotel y los que la cocina
+# reconoce, igual que en el resto de este fichero.
+
+
+def _say_order_lines(items) -> str:
+    parts = []
+    for item in items:
+        qty = int(item["quantity"])
+        parts.append(item["name"] if qty == 1 else f"{say_number(qty)} {item['name']}")
+    return say_list(parts)
+
+
+def _speak_add_to_order(result) -> str:
+    s = result.summary
+    if not s.get("ordered"):
+        return _refusal(s)
+    added = s["added"] if s["added_quantity"] == 1 else         f"{say_number(s['added_quantity'])} {s['added']}"
+    return (f"He añadido {added}. Por ahora lleva {_say_order_lines(s['items'])}, "
+            f"{say_price(s['total'])}.")
+
+
+def _speak_repeat_order(result) -> str:
+    s = result.summary
+    if s.get("empty"):
+        return "Todavía no ha pedido nada. ¿Qué le apetece?"
+    return (f"Su pedido es {_say_order_lines(s['items'])}. "
+            f"Son {say_price(s['total'])}.")
+
+
+def _speak_place_order(result) -> str:
+    s = result.summary
+    if s.get("placed") is False and s.get("why"):
+        if s["why"] == "nothing_ordered":
+            return "Todavía no ha pedido nada. ¿Qué le apetece?"
+        if s["why"] == "already_placed":
+            return "Ese pedido ya está en la cocina."
+        return "Lo siento, no he podido enviar ese pedido."
+    return (f"Ya está en la cocina: {_say_order_lines(s['items'])}, "
+            f"{say_price(s['total'])}. Su número de pedido es "
+            f"{say_room_number(s['reference'])}.")
+
+
+def _speak_cancel_order(result) -> str:
+    s = result.summary
+    if not s.get("cancelled"):
+        if s.get("why") == "nothing_ordered":
+            return "No hay nada en su pedido que cancelar."
+        if s.get("why") == "already_placed":
+            return "Ese pedido ya está en la cocina, se lo comunico."
+        return "Lo siento, no he podido cancelar ese pedido."
+    return "Cancelado. No se ha enviado nada a la cocina."
+
+
+def _speak_my_booking(result) -> str:
+    s = result.summary
+    if not s.get("any"):
+        return "Todavía no ha hecho ninguna reserva en esta llamada."
+    if s["kind"] == "table":
+        return (f"Su mesa es para {say_number(s['party_size'])} a {say_time(s['sitting'])}, "
+                f"con el número {say_room_number(s['reference'])}.")
+    noches = "noche" if s["nights"] == 1 else "noches"
+    return (f"Tiene la {s['room_type']}, habitación {say_room_number(s['room_number'])}, "
+            f"para {say_number(s['nights'])} {noches}, con el número "
+            f"{say_room_number(s['reference'])}.")
+
+
+def _speak_cancel_my_booking(result) -> str:
+    s = result.summary
+    if not s.get("cancelled"):
+        if s.get("why") == "nothing_booked_here":
+            return ("No ha hecho ninguna reserva en esta llamada. Si tiene un número de reserva, "
+                    "se la cancelo.")
+        return "Lo siento, no he podido cancelar esa reserva."
+    what = "habitación" if s.get("kind") == "room" else "mesa"
+    return (f"Cancelada. Su reserva de {what}, número "
+            f"{say_room_number(s['reference'])}, ya no está.")
+
+
+# Por qué no está disponible, con las mismas palabras que `_speak_room_status`. Una habitación en
+# reparación y una cuyo huésped no se ha ido no son la misma respuesta.
+_OUT_OF_SERVICE = {
+    "housekeeping": "está en limpieza",
+    "maintenance": "está en mantenimiento",
+    "occupied": "está ocupada",
+    "reserved": "ya está reservada",
+}
+
+
+def _speak_room_free_from(result) -> str:
+    s = result.summary
+    room = say_room_number(s["room_number"])
+    if s.get("free_now"):
+        return f"La habitación {room} está libre ahora."
+    if not s.get("until"):
+        why = _OUT_OF_SERVICE.get(s.get("status", ""), "no está libre")
+        return f"La habitación {room} {why}, y no tengo la fecha de cuándo queda libre."
+    return f"La habitación {room} está reservada hasta {say_date(s['until'])}."
+
+
 SPEAK: dict[str, Callable[..., str]] = {
     "menu_overview": _speak_menu_overview,
     "list_category": _speak_list_category,
@@ -504,4 +614,11 @@ SPEAK: dict[str, Callable[..., str]] = {
     "table_availability": _speak_table_availability,
     "cancel_booking": _speak_cancel_booking,
     "hotel_info": _speak_hotel_info,
+    "add_to_order": _speak_add_to_order,
+    "repeat_order": _speak_repeat_order,
+    "place_order": _speak_place_order,
+    "cancel_order": _speak_cancel_order,
+    "my_booking": _speak_my_booking,
+    "cancel_my_booking": _speak_cancel_my_booking,
+    "room_free_from": _speak_room_free_from,
 }

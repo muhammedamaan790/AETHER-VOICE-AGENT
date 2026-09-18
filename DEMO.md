@@ -15,7 +15,7 @@ covers setup, the console and the failure paths; that one covers what to say.
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 1528 passed, 2 skipped
+python -m pytest -q                 # expect 1761 passed, 2 skipped
 python scripts/reset_hotel_db.py    # start from the shipped hotel: no rehearsal bookings on camera
 python -m aether.prewarm            # warms the process; prints what it cost
 ```
@@ -120,7 +120,7 @@ got, and prints a diagnosis when the call ends.
 | 15 | Hang up | Orb returns to "waiting for a call". The page stays connected; nothing reloads |
 | 16 | **Scroll the conversation back up** | The panel scrolls on its own, with a visible bar. The orb and both controls stay put — the console is a fixed frame and only the conversation moves |
 | 16b | Say **"can we switch language"** | It offers the list *in the language being spoken* rather than guessing. Then name one and everything switches |
-| 16c | Ask something the hotel has no record of — *"do you have a rooftop pool?"* | Gemini answers naturally as the duty manager. Point out `llm_ms` is non-zero here and zero on every database answer |
+| 16c | Ask something the hotel has no record of — *"do you have a rooftop terrace?"* | Gemini answers naturally as the duty manager. Point out `llm_ms` is non-zero here and zero on every database answer |
 | 17 | Open the trace file named in the recording strip | The whole conversation, on disk |
 
 If the screen looks small, reset the browser zoom to 100% (Ctrl+0) before recording — the console

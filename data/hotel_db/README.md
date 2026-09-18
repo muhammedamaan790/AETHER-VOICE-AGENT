@@ -36,10 +36,16 @@ Thirteen tables and three views. Synthetic data only — no real person appears 
 
 Views: `available_rooms`, `available_menu`, `current_reservations`.
 
-"Written by AETHER" is enforced by SQLite, not by convention: the only read-write connection sits
-behind an authorizer that refuses every other write (`aether/hotel/bookings.py`). And the running
-system never writes this committed file at all — it works on `data/aether_hotel.live.db`, a
+"Written by AETHER" is enforced by SQLite, not by convention: the only connection that may change the
+hotel sits behind an authorizer that refuses every other write (`aether/hotel/bookings.py`). And the
+running system never writes this committed file at all — it works on `data/aether_hotel.live.db`, a
 gitignored copy made on first use.
+
+**What the model has made up is not in this database at all.** When a caller asks something no row
+covers, the answer is kept in a separate file, `data/aether_learned.db` (gitignored), so a guess
+about a rooftop terrace can never be joined to a price or picked up by a dump of the hotel. Every row
+there is a guess until a human confirms it — see `scripts/review_learned.py` and R8b.8 in
+`RULES.md`.
 
 ## Room types
 

@@ -35,6 +35,7 @@ from accepting calls, because a slow call is better than no call.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 logger = logging.getLogger("aether.prewarm")
@@ -99,9 +100,21 @@ def prewarm(*, stt_model: str = "base.en", warm_weights: bool = True) -> dict[st
     """
     results: dict[str, float] = {}
     _timed("import_audio", _import_audio, results)
-    _timed("import_stt", _import_stt, results)
+
+    # NOTHING LOCAL IS WARMED WHEN THE RECOGNISER IS HOSTED, and the saving is not small: measured
+    # here, importing faster-whisper and loading both sets of weights was 2335 ms of a 3491 ms
+    # prewarm -- two thirds of it, for models that would never be asked a question. On a machine
+    # that does not already have them it is far worse: the multilingual download was timed at 331
+    # seconds.
+    #
+    # `warm_weights` still governs the weights; this governs whether the local recogniser is
+    # involved at all.
+    local = (os.environ.get("STT_PROVIDER") or "faster-whisper").strip().lower() not in (
+        "groq", "groq-whisper")
+    if local:
+        _timed("import_stt", _import_stt, results)
     _timed("import_llm", _import_llm, results)
-    if warm_weights:
+    if warm_weights and local:
         _timed("whisper_weights", lambda: _warm_weights(stt_model), results)
         # And every OTHER recogniser a call could reach, because the greeting offers Hindi and
         # Spanish and the multilingual model is a DIFFERENT set of weights -- `base.en` cannot

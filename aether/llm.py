@@ -76,7 +76,7 @@ SYSTEM_PROMPT = (
     # This is a deliberate product decision, and it reverses an earlier one. The prompt used to say
     # "never invent a hotel fact", which made the agent answer "I do not have that information" to
     # anything the database did not hold -- correct, and useless on a phone. A duty manager asked
-    # whether there is a rooftop pool does not say "that is not in my records".
+    # whether there is a rooftop terrace does not say "that is not in my records".
     #
     # The safety that mattered is preserved by ARCHITECTURE rather than by prompt: any question the
     # database CAN answer never reaches this model at all. `aether.hotel.router` intercepts it and a
@@ -98,10 +98,23 @@ SYSTEM_PROMPT = (
     "ONE EXCEPTION: allergens and dietary safety. Never guess whether something contains nuts, "
     "dairy, gluten, shellfish, fish or eggs, and never guess whether a dish is vegetarian or vegan. "
     "If you were not given that information, say you will check with the kitchen before they order. "
-    "For anything that is NOT about this hotel -- general knowledge, arithmetic, a definition, "
-    "small talk, a joke, the weather in another city -- answer normally and briefly, the way a "
-    "well-informed person would. Do not refuse a general question just because it is not in the "
-    "hotel's records, and do not redirect every such question back to the menu. "
+    # STAY ON THE HOTEL. Reversed on 2026-09-18 at the hotel manager's instruction: this prompt
+    # previously told the model to answer general knowledge freely, and it did -- relativity,
+    # jokes, capital cities. A duty manager on the hotel's line is not a search engine, and a
+    # caller who reaches one and gets a physics lesson has reached the wrong number.
+    #
+    # The line is drawn at the HOTEL and the STAY, not at the database. Directions, the area,
+    # travel to and from, local recommendations and ordinary courtesy are all a duty manager's job
+    # even though no row holds them; relativity is not.
+    "You only discuss this hotel and this caller's stay. That includes anything a duty manager "
+    "would reasonably handle: rooms, food, services, policies, bookings, the building, getting "
+    "here, the local area, and ordinary courtesy such as greetings, thanks and small talk about "
+    "their visit. "
+    "If a caller asks about something unrelated to the hotel or their stay -- general knowledge, "
+    "history, science, politics, celebrities, arithmetic, coding, the news, a joke, a recipe, or "
+    "anything else you would find in an encyclopaedia -- do NOT answer it, even if you know the "
+    "answer. Say briefly and warmly that you can only help with the hotel, and offer to help with "
+    "something here. One sentence. Do not lecture the caller about what you are. "
     # Live call: asked to "place me order of chocolate buds", AETHER replied "I have added the
     # chocolate fudge cake for three hundred and fifty rupees to your order". There is no order
     # system, nothing was added, and the dish does not exist. Claiming a completed action is worse
@@ -246,7 +259,17 @@ PROVIDER_ORDER = ("groq", "anthropic", "openai", "gemini")
 #
 # Overridable with GEMINI_MODEL as before -- this changes only what happens when nothing is set.
 PROVIDER_ENV: dict[str, tuple[str, str, str]] = {
-    "groq": ("GROQ_API_KEY", "GROQ_MODEL", "llama-3.3-70b-versatile"),
+    # `llama-3.3-70b-versatile` was the default until 2026-09-18 and is NO LONGER SERVED to this
+    # account: it returns 404 "does not exist or you do not have access to it", so `LLM_PROVIDER=groq`
+    # with nothing else set failed every turn. It was invisible because `.env` pins gemini -- but
+    # `PROVIDER_ORDER` puts groq first, so any machine with a Groq key and no explicit provider
+    # would have hit it.
+    #
+    # `qwen/qwen3.8-27b` is verified against this account and was the fastest of the four that
+    # answered (219 ms; `groq/compound-mini` 511 ms, and both `openai/gpt-oss-*` returned empty
+    # content). **Model availability is per-account**, so if this 404s, list what your key actually
+    # has -- `Groq().models.list()` -- and set GROQ_MODEL rather than editing this line.
+    "groq": ("GROQ_API_KEY", "GROQ_MODEL", "qwen/qwen3.8-27b"),
     "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "claude-opus-5"),
     "openai": ("OPENAI_API_KEY", "OPENAI_MODEL", "gpt-4o-mini"),
     "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL", "gemini-flash-lite-latest"),
