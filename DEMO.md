@@ -15,7 +15,7 @@ covers setup, the console and the failure paths; that one covers what to say.
 ## Before anything
 
 ```bash
-python -m pytest -q                 # expect 1761 passed, 2 skipped
+python -m pytest -q                 # expect 1804 passed, 2 skipped
 python scripts/reset_hotel_db.py    # start from the shipped hotel: no rehearsal bookings on camera
 python -m aether.prewarm            # warms the process; prints what it cost
 ```

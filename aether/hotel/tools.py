@@ -29,6 +29,7 @@ from . import (
     say_list,
     say_number,
     say_price,
+    say_reference,
     say_room_number,
     say_time,
 )
@@ -435,25 +436,104 @@ def _order_summary(order) -> dict:
     }
 
 
-def _add_to_order(store: HotelStore, *, dish: str, quantity: int = 1) -> tuple[list, dict]:
-    """"I'd like the chicken kebab." Mutating, for the same reasons as `_reserve_table`."""
+def _add_to_order(store: HotelStore, *, dish: str | None = None, quantity: int = 1,
+                  dishes: list | None = None) -> tuple[list, dict]:
+    """"I'd like the chicken kebab." Mutating, for the same reasons as `_reserve_table`.
+
+    `dishes` carries MORE THAN ONE, because callers order in lists. "I need biryani naan and paneer
+    butter masala" added the paneer alone and said nothing about the rest -- the caller asked for
+    three things and heard one read back. A dish the hotel does not have (naan) is invisible to the
+    router; the read-back is where a caller notices it is missing.
+    """
     from .bookings import BookingRefused
     from .db import UnknownRecord
 
-    try:
-        order = store.bookings.add_to_order(dish=dish, quantity=int(quantity))
-    except UnknownRecord:
-        return [], {"ordered": False, "why": "no_such_dish", "dish": str(dish)}
-    except BookingRefused as refused:
-        return [], {"ordered": False, "why": refused.code, **refused.detail}
-    except (TypeError, ValueError):
-        return [], {"ordered": False, "why": "quantity_not_understood"}
+    wanted = list(dishes) if dishes else [{"dish": dish, "quantity": quantity}]
+    order, added, turned_down = None, [], []
+    for item in wanted:
+        try:
+            order = store.bookings.add_to_order(dish=item["dish"],
+                                                quantity=int(item.get("quantity", 1)))
+        except UnknownRecord:
+            turned_down.append({"dish": str(item["dish"]), "why": "no_such_dish"})
+            continue
+        except BookingRefused as refused:
+            turned_down.append({"dish": str(item["dish"]), "why": refused.code, **refused.detail})
+            continue
+        except (TypeError, ValueError):
+            turned_down.append({"dish": str(item["dish"]), "why": "quantity_not_understood"})
+            continue
+        line = next(line for line in order.lines
+                    if line.name.lower() == str(item["dish"]).strip().lower())
+        added.append({"name": line.name, "quantity": int(item.get("quantity", 1))})
+
+    # Nothing landed at all: report the FIRST refusal, so one sold-out dish still names itself and
+    # the caller is told why rather than hearing a generic failure.
+    if not added:
+        first = turned_down[0] if turned_down else {"why": "no_such_dish", "dish": str(dish)}
+        return [], {"ordered": False, **first}
 
     store.record_change()
-    added = next((line for line in order.lines if line.name.lower() == str(dish).strip().lower()),
-                 order.lines[-1])
-    return [{"name": added.name}], {"ordered": True, "added": added.name,
-                                    "added_quantity": added.quantity, **_order_summary(order)}
+    return [{"name": a["name"]} for a in added], {
+        "ordered": True,
+        "added": added[0]["name"], "added_quantity": added[0]["quantity"],
+        "added_all": added, "refused": turned_down,
+        **_order_summary(order),
+    }
+
+
+def _remove_from_order(store: HotelStore, *, dish: str, quantity: int | None = None,
+                       then_add: list | None = None) -> tuple[list, dict]:
+    """"Take the paneer butter masala off." Mutating.
+
+    Reported by a caller, and it is the reason this tool exists: with no removal rule, "remove
+    paneer butter masala" matched the dish, found no reason not to, and ADDED one. They tried twice
+    more with a count and went from one to two to four of the dish they were removing.
+    """
+    from .bookings import BookingRefused
+
+    # THE TWO HALVES ARE INDEPENDENT, and that is the whole point of doing them here rather than in
+    # two turns. "Remove the paneer and add a butter chicken" when the paneer is already off is a
+    # caller repeating themselves -- the removal has nothing to do, and the butter chicken must
+    # still go on. Failing the whole sentence because one half was already true is how an agent
+    # makes somebody ask three times.
+    removal_failed, name, went = None, None, 0
+    try:
+        order, name, went = store.bookings.remove_from_order(
+            dish=dish, quantity=None if quantity is None else int(quantity))
+    except BookingRefused as refused:
+        if not then_add:
+            return [], {"removed": False, "why": refused.code, **refused.detail}
+        removal_failed = {"why": refused.code, **refused.detail}
+        order = store.bookings.current_order()
+
+    swapped_in, swap_refused = [], []
+    for item in then_add or []:
+        try:
+            order = store.bookings.add_to_order(dish=item["dish"],
+                                                quantity=int(item.get("quantity", 1)))
+            line = next(line for line in order.lines
+                        if line.name.lower() == str(item["dish"]).strip().lower())
+            swapped_in.append({"name": line.name, "quantity": int(item.get("quantity", 1))})
+        except UnknownRecord:
+            swap_refused.append({"dish": str(item["dish"]), "why": "no_such_dish"})
+        except Exception as refused:                                # noqa: BLE001
+            swap_refused.append({"dish": str(item["dish"]),
+                                 "why": getattr(refused, "code", "could_not_add"),
+                                 **getattr(refused, "detail", {})})
+
+    store.record_change()
+    summary = {"removed": removal_failed is None, "dish": name or str(dish), "quantity": went,
+               "added_all": swapped_in, "refused": swap_refused,
+               "removal_failed": removal_failed}
+    # An order emptied by its last removal has no rows left to summarise. Built from an empty list
+    # rather than written out, so the totals still come from the same arithmetic as every other
+    # order -- and so no number is hardcoded in this file, which `test_hotel_db.py` enforces.
+    summary.update(_order_summary(order) if order is not None else {
+        "reference": "", "items": [], "count": len([]),
+        "total": sum([]), "placed": False,
+    })
+    return [{"name": name}], summary
 
 
 def _repeat_order(store: HotelStore) -> tuple[list, dict]:
@@ -519,6 +599,21 @@ def _my_booking(store: HotelStore) -> tuple[list, dict]:
         "room_number": booking.room_number, "room_type": booking.room_type,
         "nights": booking.nights, "check_in": booking.check_in, "check_out": booking.check_out,
     }
+
+
+def _booking_status(store: HotelStore, *, reference: str) -> tuple[list, dict]:
+    """"Can you check my booking with reference one zero zero nine?"
+
+    Distinct from `my_booking`, which answers about THIS call. A caller who rings back the next day
+    and gives the number was told "you have not made a booking on this call yet" -- while the room
+    they had booked was still, correctly, reserved. The hotel knew the booking and denied it.
+    """
+    try:
+        found = store.bookings.find(reference)
+    except UnknownRecord:
+        return [], {"found": False, "reference": "".join(
+            ch for ch in str(reference) if ch.isdigit()) or str(reference)}
+    return [{"reference": found["reference"]}], {"found": True, **found}
 
 
 def _cancel_my_booking(store: HotelStore) -> tuple[list, dict]:
@@ -622,11 +717,13 @@ HOTEL_TOOLS: dict[str, tuple[Callable[..., tuple[list, dict]], bool]] = {
     # Orders. Three write and one reads, and the read is the one callers use most: "repeat my
     # order" has to be answerable at any point without changing what it answers about.
     "add_to_order": (_add_to_order, True),
+    "remove_from_order": (_remove_from_order, True),
     "repeat_order": (_repeat_order, False),
     "place_order": (_place_order, True),
     "cancel_order": (_cancel_order, True),
     # What this call has already done -- the questions a caller asks straight after booking.
     "my_booking": (_my_booking, False),
+    "booking_status": (_booking_status, False),
     "cancel_my_booking": (_cancel_my_booking, True),
     "room_free_from": (_room_free_from, False),
 }
@@ -974,7 +1071,7 @@ def _speak_reserve_room(result) -> str:
     return (f"Done. I have reserved the {s['room_type']}, room {say_room_number(s['room'])}, "
             f"for {say_number(s['nights'])} {'night' if s['nights'] == 1 else 'nights'} "
             f"at {say_price(s['rate'])} a night. "
-            f"Your reference is {say_room_number(s['reference'])}.")
+            f"Your reference is {say_reference(s['reference'])}.")
 
 
 def _speak_reserve_table(result) -> str:
@@ -982,7 +1079,7 @@ def _speak_reserve_table(result) -> str:
     if not s.get("booked"):
         return _refusal(s)
     return (f"Done. A table for {say_number(s['party_size'])} at {say_time(s['sitting'])}. "
-            f"Your reference is {say_room_number(s['reference'])}.")
+            f"Your reference is {say_reference(s['reference'])}.")
 
 
 def _speak_table_availability(result) -> str:
@@ -998,7 +1095,7 @@ def _speak_cancel_booking(result) -> str:
     s = result.summary
     if not s.get("cancelled"):
         return (f"I could not find a booking with reference "
-                f"{say_room_number(s['reference'])}. Could you check it for me?")
+                f"{say_reference(s['reference'])}. Could you check it for me?")
     what = "room" if s.get("kind") == "room" else "table"
     return f"That is cancelled. Your {what} booking is no longer held."
 
@@ -1016,12 +1113,61 @@ def _speak_add_to_order(result) -> str:
     s = result.summary
     if not s.get("ordered"):
         return _refusal(s)
-    added = s["added"] if s["added_quantity"] == 1 else \
-        f"{say_number(s['added_quantity'])} {s['added']}"
+    # Name EVERY dish that went on, not just the first. A caller who listed three dishes and hears
+    # one named back has no way to tell whether the others landed.
+    parts = [a["name"] if a["quantity"] == 1 else f"{say_number(a['quantity'])} {a['name']}"
+             for a in (s.get("added_all")
+                       or [{"name": s["added"], "quantity": s["added_quantity"]}])]
+    lead = f"I have added {say_list(parts)}."
+    # Something in the middle of a list that could not go on is SAID, rather than dropped.
+    for item in s.get("refused") or []:
+        if item.get("why") == "dish_unavailable":
+            lead += f" The {item.get('dish')} is off today."
+        elif item.get("why") == "no_such_dish":
+            lead += f" We do not have {item.get('dish')} on the menu."
     # The running total every time, because a caller adding dishes over the phone is keeping count
     # in their head and should not have to.
-    return (f"I have added {added}. That is {_say_order_lines(s['items'])}, "
-            f"{say_price(s['total'])} so far.")
+    return f"{lead} That is {_say_order_lines(s['items'])}, {say_price(s['total'])} so far."
+
+
+def _speak_remove_from_order(result) -> str:
+    s = result.summary
+    # Half a swap: the removal had nothing to do, but the dish the caller asked for went on. Say
+    # both, in that order, because "it was already off" is the answer to the half they will ask
+    # about if it is left out.
+    if not s.get("removed") and s.get("added_all"):
+        why = (s.get("removal_failed") or {}).get("why")
+        lead = (f"The {s['dish']} was not on your order"
+                if why == "not_on_the_order" else "I could not take that off")
+        coming = say_list([a["name"] if a["quantity"] == 1
+                           else f"{say_number(a['quantity'])} {a['name']}"
+                           for a in s["added_all"]])
+        return (f"{lead}, but I have added {coming}. That is "
+                f"{_say_order_lines(s['items'])}, {say_price(s['total'])}.")
+    if not s.get("removed"):
+        if s.get("why") == "not_on_the_order":
+            return (f"The {s['dish']} is not on your order. Would you like me to take something "
+                    f"else off?")
+        if s.get("why") == "nothing_ordered":
+            return "You have not ordered anything yet, so there is nothing to take off."
+        return "I am sorry, I could not take that off your order."
+    went = s["dish"] if s["quantity"] == 1 else f"{say_number(s['quantity'])} {s['dish']}"
+    lead = f"I have taken off {went}"
+    # Both halves of a swap in one breath, which is how the caller said it.
+    swapped = s.get("added_all") or []
+    if swapped:
+        lead += " and added " + say_list(
+            [a["name"] if a["quantity"] == 1 else f"{say_number(a['quantity'])} {a['name']}"
+             for a in swapped])
+    lead += "."
+    for item in s.get("refused") or []:
+        if item.get("why") == "dish_unavailable":
+            lead += f" The {item.get('dish')} is off today."
+        elif item.get("why") == "no_such_dish":
+            lead += f" We do not have {item.get('dish')} on the menu."
+    if not s["items"]:
+        return f"{lead} Your order is empty now."
+    return f"{lead} That leaves {_say_order_lines(s['items'])}, {say_price(s['total'])}."
 
 
 def _speak_repeat_order(result) -> str:
@@ -1043,7 +1189,7 @@ def _speak_place_order(result) -> str:
         return "I am sorry, I could not place that order."
     return (f"That is with the kitchen: {_say_order_lines(s['items'])}, "
             f"{say_price(s['total'])}. Your order number is "
-            f"{say_room_number(s['reference'])}.")
+            f"{say_reference(s['reference'])}.")
 
 
 def _speak_cancel_order(result) -> str:
@@ -1063,11 +1209,37 @@ def _speak_my_booking(result) -> str:
         return "You have not made a booking on this call yet."
     if s["kind"] == "table":
         return (f"Your table is for {say_number(s['party_size'])} at {say_time(s['sitting'])}, "
-                f"reference {say_room_number(s['reference'])}.")
+                f"reference {say_reference(s['reference'])}.")
     return (f"You have the {s['room_type']}, room {say_room_number(s['room_number'])}, "
             f"for {say_number(s['nights'])} "
             f"{'night' if s['nights'] == 1 else 'nights'}, "
-            f"reference {say_room_number(s['reference'])}.")
+            f"reference {say_reference(s['reference'])}.")
+
+
+def _speak_booking_status(result) -> str:
+    s = result.summary
+    if not s.get("found"):
+        return (f"I have no booking with reference {say_reference(s['reference'])}. "
+                f"Could you check the number for me?")
+    ref = say_reference(s["reference"])
+    # The status in the caller's words, not the column's. `checked_in` and `confirmed` mean quite
+    # different things to somebody ringing to check: one is "you are in the room", the other is
+    # "it is held for you".
+    if s["kind"] == "table":
+        state = {"confirmed": "confirmed", "seated": "seated",
+                 "cancelled": "cancelled"}.get(s["status"], s["status"])
+        if state == "cancelled":
+            return f"Booking {ref} was a table for {say_number(s['party_size'])}, and it is cancelled."
+        return (f"Booking {ref} is {state}: a table for {say_number(s['party_size'])} at "
+                f"{say_time(s['sitting'])} on {say_date(s['booked_for'])}.")
+    if s["status"] == "cancelled":
+        return (f"Booking {ref} was the {s['room_type']}, room "
+                f"{say_room_number(s['room_number'])}, and it is cancelled.")
+    state = ("checked in" if s["status"] == "checked_in"
+             else "confirmed" if s["status"] == "confirmed" else s["status"])
+    return (f"Booking {ref} is {state}: the {s['room_type']}, room "
+            f"{say_room_number(s['room_number'])}, from {say_date(s['check_in'])} to "
+            f"{say_date(s['check_out'])}.")
 
 
 def _speak_cancel_my_booking(result) -> str:
@@ -1079,7 +1251,7 @@ def _speak_cancel_my_booking(result) -> str:
         return "I am sorry, I could not cancel that booking."
     what = "room" if s.get("kind") == "room" else "table"
     return (f"That is cancelled. Your {what} booking, reference "
-            f"{say_room_number(s['reference'])}, is no longer held.")
+            f"{say_reference(s['reference'])}, is no longer held.")
 
 
 # Why a room is unavailable, said the way a person would. `room_status` already has these sentences;
@@ -1132,10 +1304,12 @@ SPEAK: dict[str, Callable[..., str]] = {
     "cancel_booking": _speak_cancel_booking,
     "hotel_info": _speak_hotel_info,
     "add_to_order": _speak_add_to_order,
+    "remove_from_order": _speak_remove_from_order,
     "repeat_order": _speak_repeat_order,
     "place_order": _speak_place_order,
     "cancel_order": _speak_cancel_order,
     "my_booking": _speak_my_booking,
+    "booking_status": _speak_booking_status,
     "cancel_my_booking": _speak_cancel_my_booking,
     "room_free_from": _speak_room_free_from,
 }
@@ -1160,8 +1334,9 @@ _EMPTY_IS_AN_ANSWER = frozenset({
     # is the right answer to "repeat my order" before anything is ordered -- and it is precisely
     # the answer that used to be the whole menu.
     "repeat_order", "place_order", "cancel_order", "add_to_order",
+    "remove_from_order",
     # "You have not booked anything on this call" is likewise an answer, not a mishearing.
-    "my_booking", "cancel_my_booking",
+    "my_booking", "cancel_my_booking", "booking_status",
 })
 
 

@@ -26,23 +26,35 @@ from aether.hotel.db import LIVE_DB_PATH  # noqa: E402
 from aether.hotel.learned import default_learned_path  # noqa: E402
 
 
-def _remove(path, what: str) -> bool:
+def _remove(path, what: str, stuck: list) -> bool:
+    """Delete one file. A locked file is REPORTED, not raised.
+
+    Raising killed the whole reset on the second file and left the first already gone, so a
+    presenter who had the worker running got half a reset and an error. Each file is independent:
+    clearing the bookings is still worth doing when the learned answers are locked, and the exit
+    code at the end says whether anything was missed.
+    """
     if not path.exists():
         return False
     try:
         path.unlink()
     except PermissionError:
         # Windows will not delete a file another process has open.
-        raise SystemExit(f"{path.name} is in use -- stop the worker and the console "
-                         "first, then run this again") from None
+        stuck.append(path.name)
+        return False
     print(f"removed {path.name} -- {what}")
     return True
 
 
 def main() -> None:
-    removed = _remove(LIVE_DB_PATH, "the next run starts from the shipped database")
+    stuck: list[str] = []
+    removed = _remove(LIVE_DB_PATH, "the next run starts from the shipped database", stuck)
     removed |= _remove(default_learned_path(),
-                       "the next unanswerable question is answered afresh")
+                       "the next unanswerable question is answered afresh", stuck)
+    if stuck:
+        raise SystemExit(
+            f"{', '.join(stuck)} {'is' if len(stuck) == 1 else 'are'} in use -- stop the worker "
+            f"and the console, then run this again")
     if not removed:
         print("nothing to reset -- no rehearsal data exists yet")
 

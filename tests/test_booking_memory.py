@@ -321,3 +321,86 @@ def test_a_booking_the_caller_abandoned_is_not_remembered_either(monkeypatch, tm
     assert "not made a booking" in said.lower(), (
         f"the caller was told about a booking that never happened: {said!r}"
     )
+
+
+# ============================ a reference the caller gives ============================
+#
+# REPORTED FROM A REAL CALL. A room was booked on one call and read back as reference 1009. On the
+# NEXT call, "can you check my room booking status with the reference ID 1009" was answered "you
+# have not made a booking on this call yet" -- while "is room one zero three free" correctly
+# answered that it was reserved. The hotel knew the booking and denied it.
+#
+# `my_booking` answers about THIS call, which is right for a caller who has just booked and has
+# nothing else to be looked up by. A caller who GIVES the number is asking a different question.
+
+def test_a_reference_the_caller_gives_is_looked_up_not_denied():
+    for said in ("can you check my room booking status with the reference ID 1009",
+                 "what is the status of booking one zero zero nine",
+                 "is booking 1009 confirmed",
+                 "check booking one zero zero nine"):
+        decision = route(said)
+        assert decision is not None, f"{said!r} reached the model"
+        assert decision.tool == "booking_status", f"{said!r} went to {decision.tool}"
+        assert decision.params["reference"] == "1009", decision.params
+
+
+def test_a_four_digit_reference_is_not_read_as_a_three_digit_room():
+    """"Booking one zero zero nine" contains "one zero zero", and the room finder took it -- so a
+    question about booking 1009 was answered about ROOM 100: a different room, a different guest."""
+    from aether.hotel.router import _find_room_number, normalise
+
+    assert _find_room_number(normalise("booking one zero zero nine")) is None
+    assert _find_room_number(normalise("room one zero three")) == "103"
+
+
+def test_naming_a_room_is_still_about_the_room():
+    """The guard on the rule above: three digits after the word "room" are a room, not a
+    reference."""
+    decision = route("is there a booking on room three zero five")
+    assert decision.tool == "reservation_for_room"
+    assert decision.params["room"] == "305"
+
+
+def test_a_booking_made_on_an_earlier_call_can_be_read_back(tmp_path):
+    """End to end: book on one session, look it up by reference on a completely separate one."""
+    import shutil
+
+    from aether.hotel.bookings import Bookings
+    from aether.hotel.db import default_db_path
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    copy = tmp_path / "hotel.db"
+    shutil.copy(default_db_path(), copy)
+
+    first_call = Bookings(copy)
+    try:
+        booked = first_call.reserve_room(room_type="Deluxe King", nights=2)
+    finally:
+        first_call.close()
+
+    later = HotelStore.__class__ and __import__("aether.hotel", fromlist=["HotelStore"])
+    store = later.HotelStore(path=copy)
+    try:
+        assert store.bookings.last_booking is None, "a new call must remember nothing"
+        result = ToolRunner(Trace(), store, tools=HOTEL_TOOLS).run(
+            "booking_status", gen="g", turn_id=1, is_valid=lambda: True,
+            reference=booked.reference)
+        said = render(result)
+        assert "no booking" not in said.lower(), said
+        assert booked.room_number.lstrip("0")[0] in said or "room" in said.lower()
+        assert "confirmed" in said or "checked in" in said, said
+    finally:
+        store.bookings.close()
+
+
+def test_an_unknown_reference_says_so_rather_than_guessing():
+    from aether.hotel.tools import HOTEL_TOOLS, render
+    from aether.tools import ToolRunner
+    from aether.trace import Trace
+
+    result = ToolRunner(Trace(), STORE, tools=HOTEL_TOOLS).run(
+        "booking_status", gen="g", turn_id=1, is_valid=lambda: True, reference="8888")
+    said = render(result)
+    assert "no booking" in said.lower() and "eight eight eight eight" in said, said

@@ -393,3 +393,138 @@ def test_every_order_tool_that_writes_is_declared_mutating():
     # declaration would make a plain question fenceable for no reason.
     _fn, mutating = HOTEL_TOOLS["repeat_order"]
     assert mutating is False
+
+
+# ============================ taking things off ============================
+#
+# REPORTED FROM A REAL CALL, and the worst defect this project has had. There was no removal rule
+# at all, so "remove paneer butter masala" matched the dish, found no reason not to, and ADDED one.
+# The caller tried twice more, each time with a count, and watched their order go:
+#
+#     "I need biryani naan and paneer butter masala"          -> 1 paneer  (and biryani dropped)
+#     "remove paneer butter masala and add chicken butter"    -> 2 paneer
+#     "remove the two paneer butter masala, add butter chicken" -> 4 paneer
+#
+# A removal that adds is worse than no removal at all: the caller is actively correcting it and
+# every attempt makes it worse.
+
+@pytest.mark.parametrize("said", [
+    "remove the paneer butter masala",
+    "take the paneer butter masala off my order",
+    "take off the paneer butter masala",
+    "get rid of the paneer butter masala",
+    "cancel the paneer butter masala from my order",
+    "leave out the paneer butter masala",
+])
+def test_removing_a_dish_never_adds_it(said):
+    decision = route(said, ordering=True)
+    assert decision is not None, f"{said!r} reached the model"
+    assert decision.tool == "remove_from_order", (
+        f"{said!r} went to {decision.tool} -- a removal that adds is the reported bug"
+    )
+
+
+def test_a_count_on_a_removal_says_how_many_come_off_not_how_many_go_on():
+    """"Remove the TWO paneer butter masala" read the count as how many to ADD. That is what
+    turned each correction into a doubling."""
+    decision = route("remove the two paneer butter masala", ordering=True)
+    assert decision.tool == "remove_from_order"
+    assert decision.params["quantity"] == 2
+
+
+def test_naming_a_dish_does_not_cancel_the_whole_order():
+    """"Cancel the chicken kebab from my order" wiped everything. Naming a dish makes it a
+    removal; cancelling the lot has to be said without one."""
+    assert route("cancel the chicken kebab from my order", ordering=True).tool \
+        == "remove_from_order"
+    assert route("cancel my order", ordering=True).tool == "cancel_order"
+
+
+def test_every_dish_in_one_sentence_goes_on_the_order():
+    """The caller said three things and one was added. "Naan" is not on the menu and is invisible
+    to the router; the other two must both land."""
+    decision = route("I need biryani and paneer butter masala", ordering=True)
+    assert decision.tool == "add_to_order"
+    ordered = {d["dish"] for d in decision.params["dishes"]}
+    assert ordered == {"vegetable biryani", "paneer butter masala"}
+
+
+def test_remove_this_and_add_that_does_both():
+    """A swap is one sentence and two intentions. Doing only the removal leaves the caller to ask
+    again for the dish they just asked for."""
+    decision = route("remove the paneer butter masala and add a butter chicken", ordering=True)
+    assert decision.tool == "remove_from_order"
+    assert decision.params["dish"] == "paneer butter masala"
+    assert [d["dish"] for d in decision.params["then_add"]] == ["butter chicken"]
+
+
+def test_removing_takes_the_dish_off_and_leaves_the_rest(orders):
+    kebab, chai = _dish(name="Chicken Kebab"), _dish(name="Masala Chai")
+    orders.add_to_order(dish=kebab.name)
+    orders.add_to_order(dish=chai.name, quantity=2)
+
+    order, name, went = orders.remove_from_order(dish=kebab.name)
+    assert name == kebab.name and went == 1
+    assert [line.name for line in order.lines] == [chai.name]
+    assert order.total == 2 * chai.price
+
+
+def test_removing_some_of_a_line_leaves_the_others(orders):
+    chai = _dish(name="Masala Chai")
+    orders.add_to_order(dish=chai.name, quantity=3)
+    order, _name, went = orders.remove_from_order(dish=chai.name, quantity=1)
+    assert went == 1
+    assert order.lines[0].quantity == 2
+
+
+def test_removing_the_last_dish_empties_the_order(orders):
+    kebab = _dish(name="Chicken Kebab")
+    orders.add_to_order(dish=kebab.name)
+    order, _name, _went = orders.remove_from_order(dish=kebab.name)
+    assert order is None
+
+
+def test_removing_something_that_is_not_on_the_order_says_so(orders):
+    orders.add_to_order(dish=_dish(name="Chicken Kebab").name)
+    with pytest.raises(BookingRefused) as refused:
+        orders.remove_from_order(dish=_dish(name="Masala Chai").name)
+    assert refused.value.code == "not_on_the_order"
+    assert orders.current_order().lines[0].name == _dish(name="Chicken Kebab").name
+
+
+def test_a_fenced_removal_leaves_the_dish_on_the_order(tmp_path):
+    """Removing is a write, so it inherits the invariant: a caller who changes their mind while it
+    is in flight leaves the order exactly as it was."""
+    store = _hotel(tmp_path)
+    kebab = _dish(name="Chicken Kebab")
+    store.bookings.add_to_order(dish=kebab.name)
+
+    result = _fenced_runner(store).run(
+        "remove_from_order", gen="g", turn_id=1, is_valid=lambda: False, dish=kebab.name)
+
+    assert not result.may_speak
+    assert [line.name for line in store.bookings.current_order().lines] == [kebab.name]
+
+
+def test_the_reported_call_no_longer_makes_it_worse(monkeypatch, tmp_path):
+    """The conversation exactly as it happened, end to end."""
+    from tests.test_menu_routing import build
+
+    spike, _t, rime, llm = build(monkeypatch, "")
+    private = _hotel(tmp_path)
+    spike.menu = private
+    spike.tools.store = private
+
+    for said in ("Can you write my dinner order down? I need biryani naan and paneer butter"
+                 " masala.",
+                 "Can you remove paneer butter masala and add chicken butter?",
+                 "Remove the two paneer butter masala. I need you to add a butter chicken."):
+        spike.stt.text = said
+        spike.handle_utterance(AUDIO, 0.0)
+
+    on_it = {line.name: line.quantity for line in private.bookings.current_order().lines}
+    assert "Paneer Butter Masala" not in on_it, (
+        f"the dish the caller removed twice is still on the order: {on_it}"
+    )
+    assert on_it == {"Vegetable Biryani": 1, "Butter Chicken": 1}, on_it
+    assert llm.calls == [], "an order must never reach the model"

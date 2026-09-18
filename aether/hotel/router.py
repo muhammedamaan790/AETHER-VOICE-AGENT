@@ -218,6 +218,24 @@ _ORDER_VERBS = ("order", "orders", "ordering", "i ll have", "ill have", "i will 
                 "मंगवा", "ऑर्डर", "भेज दीजिए", "le quiero", "quiero pedir", "pedir", "traiga")
 _ORDER_NOUNS = ("order", "orders", "ऑर्डर", "pedido", "pedidos")
 
+# TAKING SOMETHING OFF. Its own table, tested BEFORE the add rules, because every one of these
+# sentences also names a dish -- and with no rule for the word, "remove paneer butter masala" was
+# read as an order FOR paneer butter masala. A caller hit this for real: they said it twice, each
+# time with a count, and their order went one, two, four of the dish they were removing.
+#
+# `no` and `without` are absent on purpose: "no onions", "without ice" are preparation notes, not
+# removals, and reading them as removals would delete a dish the caller still wants.
+# SPLIT PHRASAL VERBS. English puts the object in the middle -- "take the paneer butter masala
+# OFF" -- so "take off" as one keyword matches "take off the paneer" and misses the commoner
+# phrasing entirely. `off my order` and friends are listed whole because a bare "off" is not a
+# removal: "is the fish curry off today" asks whether it is available.
+_REMOVE_WORDS = ("off my order", "off the order", "off my bill", "off that order",
+                 "remove", "removes", "remove the", "take off", "take out", "take away",
+                 "delete", "drop the", "drop that", "get rid of", "scratch the", "scratch that",
+                 "cancel the", "leave out", "leave off", "forget the", "not the", "instead of",
+                 "हटा*", "निकाल*", "रद्द कर*",
+                 "quit*", "quite*", "elimin*", "saca*", "sin el", "sin la", "borra*")
+
 # "Say it back to me." A read, and it must never be confused with placing one.
 # `दोहरा*` and `repit*` are STEMS, and they have to be. Hindi inflects the verb -- दोहराइए,
 # दोहराओ, दोहरा दीजिए -- and a whole-word entry matched none of them, so "मेरा ऑर्डर दोहराइए"
@@ -324,7 +342,11 @@ _HOTEL_INFO_WORDS = ("where are you", "where is the hotel", "your address", "hot
                      "where are you located", "location of the hotel")
 
 _PRICE_WORDS = ("how much", "price of", "price for", "cost of", "what does", "how expensive")
-_AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today")
+# `off today` and `off the menu` are here, not in `_REMOVE_WORDS`: "is the fish curry off today?"
+# asks whether a dish is available. Mid-order, with no availability cue, a bare dish name is read
+# as another item -- so without this the question would have ORDERED the dish it was asking about.
+_AVAILABLE_WORDS = ("available", "do you still have", "in stock", "sold out", "on today",
+                    "off today", "off the menu", "run out", "ran out")
 # `allerg*` and `contain*` are STEMS: allergy/allergic/allergen, contains/containing. Everything
 # else is a whole word, so "nuts" cannot fire on "doughnuts".
 _ALLERGEN_WORDS = ("allerg*", "contain*", "nuts", "dairy", "gluten", "shellfish", "eggs", "lactose")
@@ -435,6 +457,68 @@ def _find_dish(spoken: str) -> str | None:
         if re.search(rf"\b{re.escape(word)}\b", spoken):
             return name.lower()
     return None
+
+
+def _find_dishes(spoken: str) -> list[str]:
+    """EVERY menu name in the sentence, in the order the caller said them.
+
+    `_find_dish` returns one, which is right for "how much is the chicken kebab" and wrong for an
+    order: a caller asked for "biryani naan and paneer butter masala" and had one dish added. They
+    were not told the other two were missed -- the order was simply shorter than what they said.
+
+    Longest-first and then blanked out, so "paneer butter masala" is matched whole and cannot then
+    also match "paneer tikka" through the word they share. Anything not on the menu -- "naan" -- is
+    invisible here by design; the renderer reads the whole order back, which is where a caller
+    notices something they asked for is missing.
+    """
+    left, found = spoken, []
+    for name in _DISH_NAMES:                      # already sorted longest-first
+        at = left.find(name)
+        if at != -1:
+            found.append((at, name))
+            left = left[:at] + (" " * len(name)) + left[at + len(name):]
+    for word, name in _DISH_SHORTHAND:
+        match = re.search(rf"\b{re.escape(word)}\b", left)
+        if match and name.lower() not in [n for _pos, n in found]:
+            found.append((match.start(), name.lower()))
+            left = left[:match.start()] + (" " * len(word)) + left[match.end():]
+    return [name for _position, name in sorted(found)]
+
+
+def _cue_at(spoken: str, entries: tuple[str, ...]) -> list[int]:
+    """Where each of these keywords appears, in order."""
+    found = []
+    for entry in entries:
+        for match in _compile(entry).finditer(spoken):
+            found.append(match.start())
+    return sorted(found)
+
+
+def _split_remove_and_add(spoken: str, dishes: list[str]) -> tuple[str | None, list[str]]:
+    """"Remove X and add Y" -- which dish goes off, and which come on.
+
+    A SWAP is one sentence and two intentions, and it is how people actually correct an order:
+    "can you remove the paneer butter masala and add a butter chicken". Handling only the removal
+    leaves the caller to ask again for something they already asked for.
+
+    Each dish belongs to whichever cue -- a removal word or an order verb -- sits closest BEFORE it.
+    Position, not keyword order, because "add a butter chicken instead of the paneer" reverses them.
+    """
+    removes = _cue_at(spoken, _REMOVE_WORDS)
+    adds = _cue_at(spoken, _ORDER_VERBS)
+    going, coming = None, []
+    for name in dishes:
+        at = spoken.find(name)
+        if at == -1:
+            continue
+        last_remove = max([p for p in removes if p < at], default=None)
+        last_add = max([p for p in adds if p < at], default=None)
+        if last_remove is not None and (last_add is None or last_remove > last_add):
+            if going is None:
+                going = name
+        elif last_add is not None:
+            coming.append(name)
+    return going, coming
 
 
 def _find_category(spoken: str) -> Category | None:
@@ -711,8 +795,16 @@ def _find_room_number(spoken: str) -> str | None:
     words = spoken.split()
     for i in range(len(words) - 2):
         trio = [digits.get(w) for w in words[i:i + 3]]
-        if all(trio):
-            return "".join(trio)
+        if not all(trio):
+            continue
+        # A trio that is part of a LONGER run of digits is not a room number. "Booking one zero
+        # zero nine" is four digits; reading the first three of them gave room "100" -- a different
+        # room, a different guest, and a confident answer about neither.
+        before = digits.get(words[i - 1]) if i else None
+        after = digits.get(words[i + 3]) if i + 3 < len(words) else None
+        if before is not None or after is not None:
+            continue
+        return "".join(trio)
     # And as a CARDINAL, which is how Hindi and Spanish say a room number: "एक सौ एक",
     # "ciento uno". Longest first, so "ciento uno" is not matched as "ciento" inside a longer form.
     for spoken_form, value in _CARDINAL_ROOM_NUMBERS:
@@ -840,7 +932,35 @@ def route(text: str, subject: Subject | None = None, *, ordering: bool = False) 
     #      Reading the order back is first within the block: "repeat my order" contains "order",
     #      and an order rule that tested for the noun alone would place it.
     says_order = _says(spoken, _ORDER_NOUNS)
-    if says_order and _says(spoken, _CANCEL_WORDS) and not _find_reference(spoken):
+    says_remove = _says(spoken, _REMOVE_WORDS)
+    dishes = _find_dishes(spoken)
+
+    #  TAKING SOMETHING OFF COMES FIRST, before every add rule and before cancelling the lot.
+    #
+    #  Reported by a real caller. "Can you remove paneer butter masala and add chicken butter?"
+    #  named a dish, matched no removal rule because there was none, and was read as an ORDER for
+    #  paneer butter masala. They said it twice more, each time with a count, and watched the order
+    #  go one, two, four of the dish they were trying to get rid of. A removal that adds is worse
+    #  than no removal at all: the caller is actively correcting it and every attempt makes it
+    #  worse.
+    if says_remove and dish is not None and not _says(spoken, _PRICE_WORDS):
+        going, coming = _split_remove_and_add(spoken, dishes)
+        going = going or dish
+        #  "Remove the TWO paneer butter masala" -- the count says how many to take off, and it was
+        #  being read as how many to add. That is what turned each correction into a doubling.
+        count = _find_quantity(spoken, going)
+        params = {"dish": going, "quantity": count if count > 1 else None}
+        #  A SWAP is one sentence and two intentions. Doing only the removal leaves the caller to
+        #  ask again for the dish they just asked for.
+        if coming:
+            params["then_add"] = [{"dish": name, "quantity": _find_quantity(spoken, name)}
+                                  for name in coming]
+        return Route("remove_from_order", params,
+                     "swap on order" if coming else "remove from order")
+
+    #  `not dishes`: "cancel the chicken kebab from my order" wiped the WHOLE order. Naming a dish
+    #  makes it a removal, which the rule above already took.
+    if says_order and _says(spoken, _CANCEL_WORDS) and not _find_reference(spoken) and not dishes:
         return Route("cancel_order", {}, "cancel order")
     if says_order and _says(spoken, _REPEAT_WORDS):
         return Route("repeat_order", {}, "repeat order")
@@ -853,13 +973,43 @@ def route(text: str, subject: Subject | None = None, *, ordering: bool = False) 
         # Mid-order, a dish name on its own is another item. "And two masala chai" carries no verb
         # at all, and answering it with a price is how a waiter who is not listening behaves.
         # Off-order it still needs an explicit order verb, so browsing the menu is unaffected.
+        #
+        # EVERY dish the caller named, not just the longest match. "I need biryani naan and paneer
+        # butter masala" added the paneer and silently dropped the biryani; the caller asked for
+        # three things and was read back one.
+        adding = None
         if _says(spoken, _ORDER_VERBS):
+            adding = "add to order"
+        elif ordering and not _says(spoken, _DESCRIBE_WORDS + _AVAILABLE_WORDS + _LIST_WORDS):
+            adding = "add to open order"
+        if adding and len(dishes) > 1:
             return Route("add_to_order",
-                         {"dish": dish, "quantity": _find_quantity(spoken, dish)}, "add to order")
-        if ordering and not _says(spoken, _DESCRIBE_WORDS + _AVAILABLE_WORDS + _LIST_WORDS):
+                         {"dishes": [{"dish": name, "quantity": _find_quantity(spoken, name)}
+                                     for name in dishes]}, adding)
+        if adding:
             return Route("add_to_order",
-                         {"dish": dish, "quantity": _find_quantity(spoken, dish)},
-                         "add to open order")
+                         {"dish": dish, "quantity": _find_quantity(spoken, dish)}, adding)
+
+    # A REFERENCE THE CALLER ACTUALLY GAVE beats anything the session remembers, and beats reading
+    # its first three digits as a room number.
+    #
+    # Reported: "can you check my room booking status with the reference ID one zero zero nine" was
+    # answered "you have not made a booking on this call yet" -- while the room it had booked was
+    # still correctly reserved. And "what is the status of booking one zero zero nine" found "100"
+    # inside the reference and answered about ROOM one zero zero, which is a different room, a
+    # different guest, and a confident answer to a question nobody asked.
+    #
+    # Placed before the room rules so the digits are read as what the caller called them: a
+    # reference. `_find_reference` wants three to five digits, so a bare room number cannot be
+    # mistaken for one -- and a reservation word has to be present, so "room one zero zero nine"
+    # is still a room.
+    # `not room_number`: "is there a booking on room three zero five" names a ROOM, and its three
+    # digits are a room number that `_find_reference` would happily read as a reference. A sentence
+    # that says "room" is asking about that room.
+    if (_says(spoken, _RESERVATION_NOUNS + _RESERVATION_WORDS) and not room_number
+            and not _says(spoken, _CANCEL_WORDS) and not _says(spoken, _BOOK_VERBS)):
+        if reference := _find_reference(spoken):
+            return Route("booking_status", {"reference": reference}, "booking by reference")
 
     # A0a. ASKING WHETHER A NAMED ROOM IS BOOKED, before the booking rules can take it as an order.
     #

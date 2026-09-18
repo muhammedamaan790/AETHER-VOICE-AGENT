@@ -160,3 +160,26 @@ def say_a(phrase: str) -> str:
     agreement, the Hindi side needs nothing, and neither renderer has to know which it is.
     """
     return str(phrase).strip()
+
+
+def say_reference(number: str | int) -> str:
+    """`1008` -> `एक शून्य शून्य आठ`. Digit by digit, and deliberately NOT like a room number.
+
+    `say_room_number` is a cardinal because that is how Hindi says a door: "कमरा एक सौ एक". A
+    BOOKING REFERENCE is the other kind of number entirely -- an identifier, like a phone number or
+    a PIN -- and its own docstring says the digit form "reads as a phone number", which is exactly
+    what a reference is.
+
+    The two were the same function until 2026-09-18, so AETHER read reference 1008 back as
+    "एक हज़ार आठ" (one thousand eight). A caller looking at "1008" cannot match that to what they
+    heard, and a caller who heard it cannot say it back in a form the router will parse.
+    """
+    digits = str(number).strip()
+    if not digits.isdigit():
+        return str(number)
+    return " ".join(_DIGITS[int(ch)] for ch in digits)
+
+
+# The bare digits, for reading an identifier out. `_ONES` starts at एक because it is a counting
+# table; a reference containing a zero needs शून्य, which never appears in a count.
+_DIGITS = ("शून्य", "एक", "दो", "तीन", "चार", "पाँच", "छह", "सात", "आठ", "नौ")

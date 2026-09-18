@@ -36,6 +36,7 @@ from .speech_hi import (
     say_list,
     say_number,
     say_price,
+    say_reference,
     say_room_number,
     say_time,
 )
@@ -188,7 +189,11 @@ def _speak_find_by_diet(result) -> str:
         scope = _diet(diet_raw)
     if not rows:
         return f"माफ़ कीजिए, आज {scope} विकल्प उपलब्ध नहीं हैं।"
-    return f"जी हाँ। {scope} में हमारे पास {_say_names([r['name'] for r in rows])} हैं।"
+    # `विकल्पों में` -- "among the ... options". Bare "{scope} में" reads as "inside
+    # vegetarian", which is not a place. A category scope already names one, so it
+    # keeps its own phrasing.
+    among = scope if category_raw else f"{scope} विकल्पों"
+    return f"जी हाँ। {among} में हमारे पास {_say_names([r['name'] for r in rows])} हैं।"
 
 
 def _speak_check_availability(result) -> str:
@@ -224,7 +229,7 @@ def _speak_safe_for(result) -> str:
             picks.append(row["name"])
         if len(picks) == 3:
             break
-    lead = f"अगर आप {allergen} से बच रहे हैं, तो मैं {say_list(picks)} सुझाऊँगी।"
+    lead = f"अगर आप {allergen} से परहेज़ कर रहे हैं, तो मैं {say_list(picks)} सुझाऊँगी।"
     avoid = result.summary.get("avoid") or []
     if not avoid:
         return f"{lead} आज मेन्यू में और कहीं {allergen} नहीं है।"
@@ -245,8 +250,13 @@ def _speak_describe_item(result) -> str:
         return f"माफ़ कीजिए, {dish['name']} का विवरण मेरे पास नहीं है।"
     # The description is the hotel's own English prose, read back as written -- inventing a Hindi
     # paraphrase would be exactly the fabrication this whole layer exists to prevent.
+    #
+    # But it is FRAMED in Hindi, and that is not cosmetic. Returned bare, this was the only answer
+    # in the whole renderer with no Hindi in it at all: a caller asked about a dish and heard one
+    # unannounced English sentence, as though the agent had changed language mid-call. The frame
+    # says whose words these are and which dish they describe, and the quoted prose stays untouched.
     tail = "" if dish["available"] else " हालाँकि यह आज उपलब्ध नहीं है।"
-    return f"{description}{tail}"
+    return f"{dish['name']} के बारे में मेन्यू में लिखा है: {description}{tail}"
 
 
 def _speak_room_status(result) -> str:
@@ -412,19 +422,26 @@ def _speak_hotel_policy(result) -> str:
     # oblique case before की/के ("नाश्ता" -> "नाश्ते की सुविधा"), which would need a second form of
     # every policy name; following the name with "उपलब्ध है" needs no inflection and reads better
     # aloud than three clauses strung together with commas.
-    parts = [f"जी हाँ, {name} उपलब्ध है।"]
+    # ONE SENTENCE, not three. The first version said "जी हाँ, पार्किंग उपलब्ध है। यह मुफ़्त है।
+    # यह चौबीसों घंटे उपलब्ध है।" -- उपलब्ध twice in three clauses, each opening with यह, which on
+    # a telephone reads as three separate announcements about the same thing. Hindi joins these
+    # naturally with commas and a final और.
+    clauses = []
     if row["fee"]:
-        parts.append(f"इसका शुल्क {say_price(row['fee'])} है।")
+        clauses.append(f"शुल्क {say_price(row['fee'])} है")
     else:
-        parts.append("यह मुफ़्त है।")
+        clauses.append("मुफ़्त है")
     if row["hours"]:
         hours = str(row["hours"])
         if "24" in hours:
-            parts.append("यह चौबीसों घंटे उपलब्ध है।")
+            clauses.append("चौबीसों घंटे मिलती है")
         else:
             opens, _, closes = hours.partition("-")
-            parts.append(f"समय {say_time(opens)} से {say_time(closes)} तक है।")
-    return " ".join(parts)
+            clauses.append(f"{say_time(opens)} से {say_time(closes)} तक मिलती है")
+    if not clauses:
+        return f"जी हाँ, {name} उपलब्ध है।"
+    joined = clauses[0] if len(clauses) == 1 else f"{clauses[0]}, और {clauses[1]}"
+    return f"जी हाँ, {name} उपलब्ध है — {joined}।"
 
 
 def _speak_hotel_info(result) -> str:
@@ -469,7 +486,7 @@ def _speak_reserve_room(result) -> str:
     return (f"हो गया। मैंने {s['room_type']} बुक कर दिया है, कमरा "
             f"{say_room_number(s['room'])}, {say_number(s['nights'])} रात के लिए, "
             f"{say_price(s['rate'])} प्रति रात। आपका बुकिंग नंबर "
-            f"{say_room_number(s['reference'])} है।")
+            f"{say_reference(s['reference'])} है।")
 
 
 def _speak_reserve_table(result) -> str:
@@ -477,22 +494,22 @@ def _speak_reserve_table(result) -> str:
     if not s.get("booked"):
         return _refusal(s)
     return (f"हो गया। {say_number(s['party_size'])} लोगों के लिए "
-            f"{say_time(s['sitting'])} पर टेबल बुक है। आपका बुकिंग नंबर "
-            f"{say_room_number(s['reference'])} है।")
+            f"{say_time(s['sitting'])} टेबल बुक है। आपका बुकिंग नंबर "
+            f"{say_reference(s['reference'])} है।")
 
 
 def _speak_table_availability(result) -> str:
     s = result.summary
     free = s["free"]
     if not free:
-        return f"माफ़ कीजिए, {say_time(s['sitting'])} पर सारी टेबल बुक हैं।"
-    return f"जी हाँ, {say_time(s['sitting'])} पर {say_number(free)} टेबल खाली हैं।"
+        return f"माफ़ कीजिए, {say_time(s['sitting'])} सारी टेबल बुक हैं।"
+    return f"जी हाँ, {say_time(s['sitting'])} {say_number(free)} टेबल खाली हैं।"
 
 
 def _speak_cancel_booking(result) -> str:
     s = result.summary
     if not s.get("cancelled"):
-        return (f"मुझे {say_room_number(s['reference'])} नंबर की कोई बुकिंग नहीं मिली। "
+        return (f"मुझे {say_reference(s['reference'])} नंबर की कोई बुकिंग नहीं मिली। "
                 f"क्या आप एक बार जाँच लेंगे?")
     return "आपकी बुकिंग रद्द कर दी गई है।"
 
@@ -502,6 +519,29 @@ def _speak_cancel_booking(result) -> str:
 # Dish names stay in their own script. They are the names printed on the hotel's menu and on the
 # kitchen's ticket, and transliterating them would leave a caller asking for something the
 # restaurant does not recognise -- the same rule the rest of this file already follows.
+
+
+def _done(count: int, stem: str) -> str:
+    """`जोड़ दिया है` for one, `जोड़ दिए हैं` for more.
+
+    BOTH HALVES AGREE, which is the part that is easy to half-fix. Hindi marks number on the
+    participle as well as the auxiliary, so correcting only the auxiliary gives "जोड़ दिया हैं" --
+    which is not the singular and not the plural, and is more obviously wrong than the original.
+    """
+    return f"{stem} {'दिया है' if count == 1 else 'दिए हैं'}"
+
+
+def _order_verb(items) -> str:
+    """`है` for one thing on the order, `हैं` for more.
+
+    Hindi marks number on the verb, and this file already does it for `list_category` -- the order
+    templates did not, so "Chicken Kebab और दो Masala Chai है" read back two dishes with the
+    singular. A native speaker hears that immediately; an English speaker checking the output does
+    not, which is exactly the class of error these templates are most exposed to.
+
+    Counted over QUANTITY, not over lines: "दो Masala Chai" alone is already plural.
+    """
+    return "है" if sum(int(i["quantity"]) for i in items) == 1 else "हैं"
 
 
 def _say_order_lines(items) -> str:
@@ -516,17 +556,66 @@ def _speak_add_to_order(result) -> str:
     s = result.summary
     if not s.get("ordered"):
         return _refusal(s)
-    added = s["added"] if s["added_quantity"] == 1 else \
-        f"{say_number(s['added_quantity'])} {s['added']}"
-    return (f"{added} जोड़ दिया है। अभी तक आपके ऑर्डर में {_say_order_lines(s['items'])} है, "
-            f"कुल {say_price(s['total'])}।")
+    # हर चीज़ का नाम, सिर्फ़ पहली का नहीं -- a caller who listed three dishes and hears one named
+    # back has no way to tell whether the others landed.
+    parts = [a["name"] if a["quantity"] == 1 else f"{say_number(a['quantity'])} {a['name']}"
+             for a in (s.get("added_all")
+                       or [{"name": s["added"], "quantity": s["added_quantity"]}])]
+    put_on = sum(int(a["quantity"]) for a in (s.get("added_all") or [])) or 1
+    lead = f"{say_list(parts)} {_done(put_on, 'जोड़')}।"
+    for item in s.get("refused") or []:
+        if item.get("why") == "dish_unavailable":
+            lead += f" {item.get('dish')} आज उपलब्ध नहीं है।"
+        elif item.get("why") == "no_such_dish":
+            lead += f" {item.get('dish')} हमारे मेन्यू में नहीं है।"
+    return (f"{lead} अभी तक आपके ऑर्डर में {_say_order_lines(s['items'])} "
+            f"{_order_verb(s['items'])}, कुल {say_price(s['total'])}।")
+
+
+def _speak_remove_from_order(result) -> str:
+    s = result.summary
+    if not s.get("removed") and s.get("added_all"):
+        why = (s.get("removal_failed") or {}).get("why")
+        lead = (f"{s['dish']} आपके ऑर्डर में नहीं था"
+                if why == "not_on_the_order" else "वह हटा नहीं सकी")
+        coming = say_list([a["name"] if a["quantity"] == 1
+                           else f"{say_number(a['quantity'])} {a['name']}"
+                           for a in s["added_all"]])
+        return (f"{lead}, लेकिन {coming} जोड़ दिया है। अब आपके ऑर्डर में "
+                f"{_say_order_lines(s['items'])} है, कुल {say_price(s['total'])}।")
+    if not s.get("removed"):
+        if s.get("why") == "not_on_the_order":
+            return f"{s['dish']} आपके ऑर्डर में नहीं है। कुछ और हटाना है क्या?"
+        if s.get("why") == "nothing_ordered":
+            return "आपने अभी तक कुछ ऑर्डर नहीं किया है, तो हटाने के लिए कुछ नहीं है।"
+        return "माफ़ कीजिए, मैं वह ऑर्डर से नहीं हटा सकी।"
+    went = s["dish"] if s["quantity"] == 1 else f"{say_number(s['quantity'])} {s['dish']}"
+    swapped = s.get("added_all") or []
+    if swapped:
+        coming = say_list(
+            [a["name"] if a["quantity"] == 1 else f"{say_number(a['quantity'])} {a['name']}"
+             for a in swapped])
+        taken = int(s["quantity"])
+        put_on = sum(int(a["quantity"]) for a in swapped) or 1
+        lead = f"{went} {_done(taken, 'हटा')} और {coming} {_done(put_on, 'जोड़')}।"
+    else:
+        lead = f"{went} {_done(int(s['quantity']), 'हटा')}।"
+    for item in s.get("refused") or []:
+        if item.get("why") == "dish_unavailable":
+            lead += f" {item.get('dish')} आज उपलब्ध नहीं है।"
+        elif item.get("why") == "no_such_dish":
+            lead += f" {item.get('dish')} हमारे मेन्यू में नहीं है।"
+    if not s["items"]:
+        return f"{lead} अब आपका ऑर्डर खाली है।"
+    return (f"{lead} अब आपके ऑर्डर में {_say_order_lines(s['items'])} "
+            f"{_order_verb(s['items'])}, कुल {say_price(s['total'])}।")
 
 
 def _speak_repeat_order(result) -> str:
     s = result.summary
     if s.get("empty"):
         return "आपने अभी तक कुछ ऑर्डर नहीं किया है। क्या लेना चाहेंगे?"
-    return (f"आपके ऑर्डर में {_say_order_lines(s['items'])} है। "
+    return (f"आपके ऑर्डर में {_say_order_lines(s['items'])} {_order_verb(s['items'])}। "
             f"कुल {say_price(s['total'])} होते हैं।")
 
 
@@ -540,7 +629,7 @@ def _speak_place_order(result) -> str:
         return "माफ़ कीजिए, मैं यह ऑर्डर नहीं भेज सकी।"
     return (f"ऑर्डर रसोई में भेज दिया है: {_say_order_lines(s['items'])}, "
             f"कुल {say_price(s['total'])}। आपका ऑर्डर नंबर "
-            f"{say_room_number(s['reference'])} है।")
+            f"{say_reference(s['reference'])} है।")
 
 
 def _speak_cancel_order(result) -> str:
@@ -560,11 +649,33 @@ def _speak_my_booking(result) -> str:
         return "आपने इस कॉल में अभी तक कोई बुकिंग नहीं की है।"
     if s["kind"] == "table":
         return (f"आपकी टेबल {say_number(s['party_size'])} लोगों के लिए "
-                f"{say_time(s['sitting'])} पर बुक है, बुकिंग नंबर "
-                f"{say_room_number(s['reference'])}।")
+                f"{say_time(s['sitting'])} बुक है, बुकिंग नंबर "
+                f"{say_reference(s['reference'])}।")
     return (f"आपके पास {s['room_type']}, कमरा {say_room_number(s['room_number'])}, "
             f"{say_number(s['nights'])} रात के लिए है, बुकिंग नंबर "
-            f"{say_room_number(s['reference'])}।")
+            f"{say_reference(s['reference'])}।")
+
+
+def _speak_booking_status(result) -> str:
+    s = result.summary
+    if not s.get("found"):
+        return (f"{say_reference(s['reference'])} नंबर की कोई बुकिंग नहीं मिली। "
+                f"क्या आप नंबर एक बार जाँच लेंगे?")
+    ref = say_reference(s["reference"])
+    if s["kind"] == "table":
+        if s["status"] == "cancelled":
+            return (f"बुकिंग {ref} {say_number(s['party_size'])} लोगों की टेबल थी, "
+                    f"जो रद्द हो चुकी है।")
+        return (f"बुकिंग {ref} पक्की है: {say_date(s['booked_for'])} को "
+                f"{say_time(s['sitting'])} {say_number(s['party_size'])} लोगों की टेबल।")
+    if s["status"] == "cancelled":
+        return (f"बुकिंग {ref} {s['room_type']}, कमरा {say_room_number(s['room_number'])} थी, "
+                f"जो रद्द हो चुकी है।")
+    return (f"बुकिंग {ref}: {s['room_type']}, कमरा "
+            f"{say_room_number(s['room_number'])}, {say_date(s['check_in'])} से "
+            f"{say_date(s['check_out'])} तक। "
+            + ("मेहमान चेक-इन कर चुके हैं।" if s["status"] == "checked_in"
+               else "बुकिंग पक्की है।"))
 
 
 def _speak_cancel_my_booking(result) -> str:
@@ -576,7 +687,7 @@ def _speak_cancel_my_booking(result) -> str:
         return "माफ़ कीजिए, मैं यह बुकिंग रद्द नहीं कर सकी।"
     what = "कमरे" if s.get("kind") == "room" else "टेबल"
     return (f"रद्द कर दिया है। आपकी {what} की बुकिंग, नंबर "
-            f"{say_room_number(s['reference'])}, अब नहीं है।")
+            f"{say_reference(s['reference'])}, अब नहीं है।")
 
 
 # Why a room is unavailable, in the same words `_speak_room_status` already uses. A room out for
@@ -625,10 +736,12 @@ SPEAK: dict[str, Callable[..., str]] = {
     "cancel_booking": _speak_cancel_booking,
     "hotel_info": _speak_hotel_info,
     "add_to_order": _speak_add_to_order,
+    "remove_from_order": _speak_remove_from_order,
     "repeat_order": _speak_repeat_order,
     "place_order": _speak_place_order,
     "cancel_order": _speak_cancel_order,
     "my_booking": _speak_my_booking,
+    "booking_status": _speak_booking_status,
     "cancel_my_booking": _speak_cancel_my_booking,
     "room_free_from": _speak_room_free_from,
 }

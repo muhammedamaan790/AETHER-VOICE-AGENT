@@ -178,3 +178,23 @@ def say_a(phrase: str) -> str:
     wrong half the time.
     """
     return str(phrase).strip()
+
+
+def say_reference(number: str | int) -> str:
+    """`1008` -> `uno cero cero ocho`. Digit by digit, and deliberately NOT like a room number.
+
+    `say_room_number` is a cardinal because that is how Spanish says a door: "la habitación ciento
+    uno". A BOOKING REFERENCE is the other kind of number -- an identifier, like a phone number --
+    and its own docstring names that form as the one used for a phone number, which is what a
+    reference is.
+
+    The two were the same function until 2026-09-18, so reference 1008 was read back as "mil ocho".
+    A caller looking at "1008" cannot match that to what they heard.
+    """
+    digits = str(number).strip()
+    if not digits.isdigit():
+        return str(number)
+    return " ".join(_DIGITS[int(ch)] for ch in digits)
+
+
+_DIGITS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")

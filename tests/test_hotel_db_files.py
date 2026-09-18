@@ -62,6 +62,11 @@ def isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(db, "SHIPPED_DB_PATH", shipped)
     monkeypatch.setattr(db, "LIVE_DB_PATH", live)
     monkeypatch.delenv("AETHER_HOTEL_DB", raising=False)
+    # The learned-answers file too, since `scripts/reset_hotel_db.py` now clears rehearsal guesses
+    # alongside rehearsal bookings. Without this the script reached for the suite's shared learned
+    # database, which another test still had open -- and on Windows an open file cannot be deleted,
+    # so this test failed in a full run and passed on its own.
+    monkeypatch.setenv("AETHER_LEARNED_DB", str(tmp_path / "aether_learned.db"))
     return shipped, live
 
 

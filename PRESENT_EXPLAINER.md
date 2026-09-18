@@ -43,7 +43,7 @@ against it, takes food orders into it, and never lets a language model near a pr
 | | |
 |---|---|
 | Tools | **30** — 23 read, 7 write |
-| Tests | **1761 passing, 2 skipped**, one command |
+| Tests | **1804 passing, 2 skipped**, one command |
 | Routing accuracy | **31/31 in each of three languages** |
 | Deterministic answer | **~1 ms** median (route + lookup + render) |
 | First audio, real phone call | **280 ms** median |
@@ -421,7 +421,7 @@ real phone calls. That is the golden invariant holding on real audio.
 
 ## 12. Testing, and how we know
 
-**1761 passing, 2 skipped**, across 49 test files, in one command:
+**1804 passing, 2 skipped**, across 49 test files, in one command:
 
 ```bash
 python -m pytest -q

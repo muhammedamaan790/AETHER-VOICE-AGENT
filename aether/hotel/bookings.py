@@ -456,6 +456,45 @@ class Bookings:
         self._order_id = None
         return Order(reference=order.reference, lines=order.lines, placed=True)
 
+    def remove_from_order(self, *, dish: str, quantity: int | None = None) -> tuple[Order | None,
+                                                                                   str, int]:
+        """Take a dish off the order. Returns (the order after, the dish's real name, how many went).
+
+        WHY THIS EXISTS, and it is not a nice-to-have. Until 2026-09-18 there was no way to remove
+        anything, and the router had no rule for the word -- so "remove paneer butter masala" was
+        read as an ORDER for paneer butter masala. A real caller said it twice, each time with a
+        count, and watched their order go from one to two to four of the dish they were trying to
+        get rid of. **A removal that adds is worse than no removal at all**, because the caller is
+        actively trying to correct it and every attempt makes it worse.
+
+        `quantity=None` means the whole line, which is what "remove the paneer butter masala"
+        means. A number removes that many and leaves the rest.
+        """
+        order_id = self._open_order()
+        if order_id is None:
+            raise BookingRefused("nothing_ordered")
+
+        row = self._con.execute(
+            "SELECT i.order_item_id, i.quantity, m.name FROM restaurant_order_items i"
+            " JOIN menu_items m USING(item_id)"
+            " WHERE i.order_id = ? AND lower(m.name) = lower(?)",
+            (order_id, str(dish).strip())).fetchone()
+        if row is None:
+            raise BookingRefused("not_on_the_order", dish=str(dish).strip())
+
+        on_it = int(row["quantity"])
+        going = on_it if quantity is None else min(int(quantity), on_it)
+        with self._lock:
+            if going >= on_it:
+                self._con.execute("DELETE FROM restaurant_order_items WHERE order_item_id = ?",
+                                  (row["order_item_id"],))
+            else:
+                self._con.execute(
+                    "UPDATE restaurant_order_items SET quantity = ? WHERE order_item_id = ?",
+                    (on_it - going, row["order_item_id"]))
+            self._con.commit()
+        return self.current_order(), str(row["name"]), going
+
     def cancel_order(self) -> Order:
         """Drop the order the caller was building.
 
@@ -475,6 +514,44 @@ class Bookings:
             self._con.commit()
         self._order_id = None
         return order
+
+    def find(self, reference: str) -> dict:
+        """Look a booking up by the number AETHER read out when it made it.
+
+        WHY THIS EXISTS. `my_booking` remembers what THIS call booked, which is the right answer to
+        "what was my reference?" -- a caller who has just booked has nothing else to be looked up
+        by. But a caller who rings back the next day and *gives* the number was told "you have not
+        made a booking on this call yet", while the room they had booked was still correctly
+        reserved. The hotel knew the booking and denied it, which is the worst of both.
+
+        Rooms and tables share one numbering space in the caller's mind -- it is "your reference" in
+        both cases -- so both tables are searched and the row says which it was.
+        """
+        digits = "".join(ch for ch in str(reference) if ch.isdigit())
+        if not digits:
+            raise UnknownRecord(f"not a booking reference: {reference!r}")
+
+        row = self._con.execute(
+            "SELECT rs.reservation_id, rs.check_in, rs.check_out, rs.status, rs.adults,"
+            " rm.room_number, t.name AS room_type"
+            " FROM reservations rs JOIN rooms rm USING(room_id)"
+            " JOIN room_types t ON t.room_type_id = rm.room_type_id"
+            " WHERE rs.reservation_id = ?", (digits,)).fetchone()
+        if row is not None:
+            return {"kind": "room", "reference": str(row["reservation_id"]),
+                    "room_number": str(row["room_number"]), "room_type": str(row["room_type"]),
+                    "check_in": row["check_in"], "check_out": row["check_out"],
+                    "status": row["status"], "guests": row["adults"]}
+
+        row = self._con.execute(
+            "SELECT booking_id, party_size, sitting, booked_for, status"
+            " FROM table_bookings WHERE booking_id = ?", (digits,)).fetchone()
+        if row is not None:
+            return {"kind": "table", "reference": str(row["booking_id"]),
+                    "party_size": row["party_size"], "sitting": row["sitting"],
+                    "booked_for": row["booked_for"], "status": row["status"]}
+
+        raise UnknownRecord(f"no booking with reference {digits}")
 
     # --- cancelling --------------------------------------------------------------------------
 

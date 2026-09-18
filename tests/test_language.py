@@ -951,3 +951,76 @@ def test_no_language_module_hardcodes_a_hotel_price():
         code = "\n".join(line.split("#")[0] for line in text.splitlines())
         for number in re.findall(r"\d{3,5}", code):
             assert int(number) not in facts, f"{module} hardcodes the hotel fact {number}"
+
+
+# ============================ switching, in every direction ============================
+#
+# REPORTED FROM A REAL CALL: "I am unable to switch from Hindi to English or Spanish but vice versa
+# is being done." Switching worked in exactly one direction, and the reason was two bugs stacked.
+#
+# `_SWITCH_WORDS` held only English spellings, so a caller already speaking Hindi -- whose
+# recogniser is returning Devanagari -- said "अंग्रेज़ी" and matched nothing. And this module kept
+# its own `re.sub(r"[^\w\s]", " ", ...)`, the expression `aether/hotel/_text.py` exists to replace:
+# a matra is not a `\w` character, so "अंग्रेज़ी" normalised to "अ ग र ज" and no Hindi word could
+# ever have matched even if it had been in the table.
+
+@pytest.mark.parametrize(("from_code", "said", "want"), [
+    # out of Hindi -- the direction that did not work
+    ("hin", "अंग्रेज़ी में बात कीजिए", "eng"),
+    ("hin", "अंग्रेजी", "eng"),
+    ("hin", "इंग्लिश में बोलिए", "eng"),
+    ("hin", "स्पेनिश में बात कीजिए", "spa"),
+    ("hin", "english please", "eng"),
+    # out of Spanish
+    ("spa", "hable en inglés", "eng"),
+    ("spa", "ingles por favor", "eng"),
+    ("spa", "hindi por favor", "hin"),
+    # into the others, which already worked and must keep working
+    ("eng", "speak hindi", "hin"),
+    ("eng", "हिन्दी", "hin"),
+    ("eng", "spanish please", "spa"),
+    ("eng", "español", "spa"),
+])
+def test_a_caller_can_switch_out_of_any_language(from_code, said, want):
+    from aether.lang import by_code, detect_switch
+
+    got = detect_switch(said, by_code(from_code))
+    assert got is not None, f"{said!r} from {from_code} matched no language"
+    assert got.code == want, f"{said!r} from {from_code} gave {got.code}, wanted {want}"
+
+
+@pytest.mark.parametrize(("code", "said"), [
+    ("hin", "हिन्दी"), ("hin", "hindi"),
+    ("spa", "español"), ("spa", "spanish"),
+    ("eng", "english"), ("eng", "अंग्रेज़ी"),
+])
+def test_naming_the_language_already_being_spoken_is_not_a_switch(code, said):
+    """Repeating "Hindi" mid-Hindi conversation is an ordinary utterance, not a re-switch."""
+    from aether.lang import by_code, detect_switch
+
+    assert detect_switch(said, by_code(code)) is None
+
+
+def test_asking_which_languages_works_in_each_language():
+    from aether.lang import asks_for_options
+
+    for said in ("switch language", "भाषा बदलिए", "कौन सी भाषा", "cambiar de idioma",
+                 "qué idiomas hablan"):
+        assert asks_for_options(said), f"{said!r} was not read as asking for the list"
+
+
+def test_the_language_module_normalises_devanagari_without_destroying_it():
+    r"""The bug was a COPY of an expression this project had already replaced once.
+
+    `aether/hotel/_text.py` exists because `[^\w\s]` deletes every Devanagari vowel mark, and
+    `aether/lang` kept its own copy of exactly that. Tested by BEHAVIOUR rather than by grepping
+    the source, because the source now legitimately mentions the expression in a comment explaining
+    why it is gone.
+    """
+    from aether.lang import names_language
+
+    for said in ("अंग्रेज़ी", "अंग्रेजी", "हिन्दी", "स्पेनिश", "इंग्लिश"):
+        assert names_language(said) is not None, (
+            f"{said!r} names a language and was not recognised -- the normaliser has eaten its "
+            f"vowel marks again"
+        )

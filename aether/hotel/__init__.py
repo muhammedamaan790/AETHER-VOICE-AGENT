@@ -54,7 +54,7 @@ __all__ = [
     "CURRENCY", "DEFAULT_DB_PATH", "HotelDB", "HotelDataUnavailable", "HotelInfo", "HotelStore",
     "MenuItem", "MenuStore", "Reservation", "Room", "RoomType", "Service", "UnknownDish",
     "UnknownRecord", "menu_for_prompt", "say_a", "say_date", "say_list", "say_number",
-    "say_price", "say_room_number", "say_time",
+    "say_price", "say_reference", "say_room_number", "say_time",
 ]
 
 
@@ -169,6 +169,21 @@ _MONTHS = ("January", "February", "March", "April", "May", "June",
 _ORDINALS = {1: "first", 2: "second", 3: "third", 5: "fifth", 8: "eighth", 9: "ninth",
              12: "twelfth", 20: "twentieth", 21: "twenty first", 22: "twenty second",
              23: "twenty third", 30: "thirtieth", 31: "thirty first"}
+
+
+def say_reference(number: str | int) -> str:
+    """`1008` -> `one zero zero eight`. A booking reference, said digit by digit.
+
+    Identical to `say_room_number` in English, and a SEPARATE function on purpose. In Hindi and
+    Spanish a room number is a cardinal ("कमरा एक सौ एक", "la habitación ciento uno") and a
+    reference is not -- it is an identifier, read out like a phone number. Sharing one helper made
+    Hindi read reference 1008 back as "एक हज़ार आठ", one thousand eight, which a caller looking at
+    their confirmation cannot match to anything.
+
+    English hides the distinction, which is exactly why it has to be named here: the renderers that
+    need it are the two where getting it wrong is hardest for us to hear.
+    """
+    return say_room_number(number)
 
 
 def say_room_number(number: str | int) -> str:

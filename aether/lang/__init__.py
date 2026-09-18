@@ -44,6 +44,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# THE SAME NORMALISER THE ROUTER USES, not a second copy. This module had its own
+# `re.sub(r"[^\w\s]", " ", ...)`, which is the expression `aether/hotel/_text.py` exists to replace:
+# a Devanagari matra is not a `\w` character, so it was deleted along with the punctuation and
+# "अंग्रेज़ी" normalised to "अ ग र ज". No Hindi language name could ever match, which is why a caller
+# could switch INTO Hindi -- by saying the English word -- and never out of it again.
+from ..hotel._text import normalise as _normalise
+
 
 @dataclass(frozen=True)
 class Language:
@@ -240,16 +247,44 @@ NEVER_MIND = {
 # call has asked for Hindi yet. They are the obvious renderings, and the greeting deliberately tells
 # the caller to say the single word "Hindi" so the common case is the easiest one to hear. When real
 # calls produce real mishearings, they belong here, and the ones here that never occur can go.
+# EVERY LANGUAGE'S NAME, IN EVERY LANGUAGE. This table was English-only until 2026-09-18, and the
+# consequence was that switching worked in exactly one direction: a caller could say "Hindi" and get
+# Hindi, and then had no way out, because once they were speaking Hindi they said "अंग्रेज़ी" and
+# nothing matched. Reported from a real call -- "I am unable to switch from Hindi to English or
+# Spanish but vice versa is being done."
+#
+# The recogniser is running the caller's OWN language by then, so it returns Devanagari for a Hindi
+# speaker and accented Spanish for a Spanish one. Asking for English in English is the one phrasing
+# that was already covered and the one a caller stuck in Hindi is least likely to reach for.
 _SWITCH_WORDS: tuple[tuple[str, str], ...] = (
+    # English
     (r"hindi", "hin"),
     (r"hindhi", "hin"),
     (r"hindee", "hin"),
     (r"english", "eng"),
     (r"angrezi", "eng"),
+    (r"angreji", "eng"),
+    (r"inglis", "eng"),
     (r"spanish", "spa"),
     (r"espanol", "spa"),
     (r"español", "spa"),
     (r"castellano", "spa"),
+    # Spanish. `inglés` and `ingles` both, because the accent survives some recognisers and not
+    # others, and a caller cut off from English by a missing acute is stuck.
+    (r"ingl[eé]s", "eng"),
+    (r"hind[ií]", "hin"),
+    # Hindi, in Devanagari. Written as prefixes rather than whole words: `\b` does not fire after a
+    # matra -- a combining mark is not a `\w` character -- so a whole-word pattern for `अंग्रेज़ी`
+    # matches nothing at all. The same fact has caused three separate bugs in this codebase.
+    # Written as a stem followed by "any more Devanagari", because the endings vary with case and
+    # with how the recogniser spells them -- अंग्रेजी, अंग्रेज़ी (with a nukta), अंग्रेज़ी में. Trying to
+    # enumerate the endings is how the nukta was missed the first time.
+    (r"अंग्रे[ऀ-ॿ]*", "eng"),
+    (r"इंग्लि[ऀ-ॿ]*", "eng"),
+    (r"हिन्द[ऀ-ॿ]*", "hin"),
+    (r"हिंद[ऀ-ॿ]*", "hin"),
+    (r"स्पेन[ऀ-ॿ]*", "spa"),
+    (r"स्पैन[ऀ-ॿ]*", "spa"),
 )
 
 # "I don't speak Hindi" and "no Hindi please" are refusals, not requests. Without this, naming the
@@ -264,6 +299,12 @@ _ASKS_FOR_OPTIONS = (
     "switch language", "switch the language", "change language", "change the language",
     "switch languages", "change languages", "other language", "another language",
     "languages do you", "languages can you", "language options",
+    # Hindi and Spanish, for the same reason the switch words are: a caller already speaking one of
+    # them asks in that language, not in English.
+    "भाषा बदल", "भाषा बदलिए", "कौन सी भाषा", "कौन कौन सी भाषा", "और कौन सी भाषा",
+    "दूसरी भाषा", "भाषा बदलनी", "bhasha badal", "kaun si bhasha",
+    "cambiar de idioma", "cambiar el idioma", "cambiar idioma", "otro idioma",
+    "qué idiomas", "que idiomas", "cuáles idiomas", "cuales idiomas", "opciones de idioma",
 )
 
 
@@ -310,7 +351,7 @@ def language_offer(language: Language | None = None) -> str:
 
 def asks_for_options(text: str) -> bool:
     """Is this asking WHICH languages exist, rather than asking for one of them?"""
-    spoken = " ".join(re.sub(r"[^\w\s]", " ", str(text).lower()).split())
+    spoken = _normalise(text)
     return any(phrase in spoken for phrase in _ASKS_FOR_OPTIONS)
 
 
@@ -325,11 +366,14 @@ def names_language(text: str) -> Language | None:
 
     A sentence that names a language only to refuse it is still not a request for it.
     """
-    spoken = " ".join(re.sub(r"[^\w\s]", " ", str(text).lower()).split())
+    spoken = _normalise(text)
     if not spoken or any(neg in spoken for neg in _NEGATIONS):
         return None
     for pattern, code in _SWITCH_WORDS:
-        if re.search(rf"\b{pattern}\b", spoken):
+        # The boundary has to know about Devanagari, and `\b` does not: it is defined in terms of
+        # `\w`, and a matra is a combining mark for which `isalnum()` is False. `\bहिन्दी\b` matches
+        # nothing at all, because the string ends on a matra. Same fact, fourth bug.
+        if re.search(rf"(?<![\wऀ-ॿ]){pattern}(?![\wऀ-ॿ])", spoken):
             return LANGUAGES[code]
     return None
 

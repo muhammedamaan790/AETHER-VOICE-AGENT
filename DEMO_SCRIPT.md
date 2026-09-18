@@ -344,7 +344,7 @@ to hear that it is occupied.
 |---|---|---|
 | hin | मेन्यू में क्या है | हमारे पास स्टार्टर, मेन कोर्स, शाकाहारी मेन कोर्स, मिठाई और पेय हैं, और शाकाहारी, वीगन और मांसाहारी विकल्प भी हैं। |
 | hin | चिकन कबाब कितने का है | Chicken Kebab की कीमत चार सौ बीस रुपये है। |
-| hin | क्या आपके पास स्विमिंग पूल है | जी हाँ, स्विमिंग पूल उपलब्ध है। यह मुफ़्त है। समय सुबह छह बजे से रात आठ बजे तक है। |
+| hin | क्या आपके पास स्विमिंग पूल है | जी हाँ, स्विमिंग पूल उपलब्ध है — मुफ़्त है, और सुबह छह बजे से रात आठ बजे तक मिलती है। |
 | spa | ¿Qué hay en el menú? | Tenemos entrantes, platos principales, platos principales vegetarianos, postres y bebidas, con opciones vegetarianas, veganas y no vegetarianas. |
 | spa | ¿Tienen piscina? | Sí, ofrecemos una piscina sin coste desde las seis de la mañana hasta las ocho de la noche. |
 
