@@ -19,7 +19,8 @@ true.
 | **Judge it** | [JUDGING.md](JUDGING.md) maps each criterion to the file, test or trace behind it |
 | **Check it** | [RIME_EVIDENCE.md](RIME_EVIDENCE.md): the claim, the acceptance test, the procedure, the result and the limits |
 
-**Contents** — [What it does](#what-it-does) · [Quick start](#quick-start) ·
+**Contents** — [Executive summary](#executive-summary) · [Architecture](#architecture) ·
+[What it does](#what-it-does) · [Quick start](#quick-start) ·
 [The hard problem](#the-hard-problem-interruption-and-recovery) · [How it works](#how-it-works) ·
 [Three languages](#one-hotel-three-languages) ·
 [Orders and bookings](#orders-bookings-and-remembering-what-the-caller-just-did) ·
@@ -29,6 +30,36 @@ true.
 [Known limitations](#known-limitations) · [Repository](#repository-map)
 
 ---
+
+## Executive summary
+
+AETHER is a multilingual telephone voice agent that answers a hotel's phone in **English, Hindi and
+Spanish**, handling menu, room, policy, booking and food-ordering calls end to end over a real PSTN
+line. Hotel facts never come from a language model: a deterministic router matches the caller's
+sentence to one of **33 tools**, the tool reads a row from SQLite, and a per-language template speaks
+it — a path that resolves in a median of **0.90 ms** and reports `llm_ms = 0` in the trace, with
+Gemini reached only for hotel questions no tool can answer. The problem we set out to solve is
+interruption: on a phone, audio cannot be un-spoken, so every turn is given a generation id and
+*fencing* discards an abandoned turn's work at **five independent checkpoints** — including one
+*before* a mutating tool's body runs, so a booking the caller changed their mind about never writes a
+row. We verified this rather than asserted it: **1903 tests pass**, routing is correct on **93 of 93**
+sentences across the three languages, and across **106 recorded runs** — including a real phone call
+at **1262 ms** median turn latency — **zero stale results have ever reached a caller**. What we have
+*not* measured is stated just as plainly: STT word accuracy on narrowband telephony audio, and two
+simultaneous callers.
+
+## Architecture
+
+![AETHER system architecture: left-to-right flow from the PSTN caller through LiveKit SIP, speech
+detection, Whisper STT, the interruption classifier and generation supervisor, into a deterministic
+router that splits into a dominant SQLite tool path and a small Gemini fallback, then into a
+per-language renderer, Rime TTS and back to the caller — overlaid with the five generation-fencing
+checkpoints.](docs/architecture.svg)
+
+The deterministic path is drawn heavy and the LLM fallback light on purpose: that is their real
+proportion. The dashed red overlay is the differentiator — the five places an abandoned generation is
+stopped, and the sequence an interruption actually runs through on the phone. Full detail:
+[AETHER_FAST_REFERENCE.md](AETHER_FAST_REFERENCE.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## What it does
 

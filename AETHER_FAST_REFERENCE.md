@@ -305,7 +305,7 @@ Defined once in `aether/lang/__init__.py`; nothing else decides what a language 
 | Skip 2 | `ResultSalvaged` not implemented and deliberately not faked | `tests/test_acceptance.py:319` |
 | Full-duplex acceptance | **9/9 pass** | `tests/test_full_duplex_acceptance.py` |
 | Committed trace files | **106** `.jsonl` | `traces/` (directory also holds a README) |
-| **Stale outputs spoken (`ResultLeaked`)** | **0**, across all 106 traces | Re-counted 2026-09-19. *(RIME_EVIDENCE.md still says "84 trace files" — stale count, same result)* |
+| **Stale outputs spoken (`ResultLeaked`)** | **0**, across all 106 traces | Re-counted 2026-09-19; RIME_EVIDENCE.md updated to match |
 | `ResultDiscarded` events | **4136** | 106 traces |
 | `ResponseSpoken` events | **319** | 106 traces |
 | Hotel tools | **33** (25 read-only, 8 mutating) | `aether.hotel.tools.HOTEL_TOOLS` |
@@ -679,4 +679,4 @@ What we don't claim: word accuracy on narrowband audio is unmeasured, Hindi and 
 
 ---
 
-*Verified against the working tree on 2026-09-19. Test counts, tool counts, trace counts, routing accuracy and route latency were re-run rather than copied. Where a repository document disagrees (RIME_EVIDENCE.md still says 84 trace files; the current count is 106, same zero-leak result), the re-run value is used and the discrepancy is noted.*
+*Verified against the working tree on 2026-09-19. Test counts, tool counts, trace counts, routing accuracy and route latency were re-run rather than copied. One disagreement was found and corrected at the source: RIME_EVIDENCE.md said 84 trace files against a current 106 — same zero-leak result — and now says 106.*
