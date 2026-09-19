@@ -436,6 +436,7 @@ says which: the unsafe-mode control condition, and salvage.
 
 | File | What it's for |
 |---|---|
+| [AETHER_FAST_REFERENCE.md](AETHER_FAST_REFERENCE.md) | Every verified fact in one sheet: architecture, metrics, limitations, claim-to-evidence map. Start here to answer a question quickly |
 | [SETUP.md](SETUP.md) | Every step to install and run AETHER on a new computer, and to record with Phone Link |
 | [DEMO_SCRIPT.md](DEMO_SCRIPT.md) | The recorded demo, word for word, in all three languages |
 | [DEMO.md](DEMO.md) | The demo runbook: flow, commands, and what to do when something fails |

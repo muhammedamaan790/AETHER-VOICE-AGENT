@@ -52,3 +52,9 @@ data/*.live.db.partial
 # What the model has said about things the hotel has no row for. Never committed: it is one
 # deployment's guesses, not part of the hotel -- see aether/hotel/learned.py.
 data/aether_learned.db
+
+# Locally installed Claude Code skills (nextlevelbuilder/ui-ux-pro-max-skill and friends): 263
+# files and ~11 MB of somebody else's repository. It is tooling for writing the frontend, not part
+# of AETHER, and redistributing it inside a competition entry is not ours to do. Removing it after
+# a push would mean rewriting history, so it is kept out from the start.
+.claude/
