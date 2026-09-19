@@ -20,8 +20,8 @@
    records on screen during a judged demo -- the same failure as the invented menu, better dressed.
    The card keeps the reference's exact shape and fills it with what is true.
 
-   ACCESSIBILITY PASS, 2026-09-19. Contrast was already fine everywhere (measured, not assumed --
-   every --ink*/--panel pair clears 6:1). What was missing: nothing here told a screen reader
+   ACCESSIBILITY PASS, 2026-09-19. Contrast was already fine everywhere (measured, not assumed:
+   every ink colour clears 6:1 on its panel). What was missing: nothing here told a screen reader
    anything was happening during a live call. Added, without touching the websocket contract, the
    layout, or the palette: a landmark (<main>), decorative glyphs marked aria-hidden (they duplicate
    adjacent text), a single delta-announcer for new transcript turns (NOT aria-live on #transcript
@@ -515,6 +515,7 @@ const els = {
   callerSub:  document.getElementById("callerSub"),
   callerBadge: document.getElementById("callerBadge"),
   factVoice:  document.getElementById("factVoice"),
+  factLang:   document.getElementById("factLang"),
   factTurns:  document.getElementById("factTurns"),
   factLeaks:  document.getElementById("factLeaks"),
 };
