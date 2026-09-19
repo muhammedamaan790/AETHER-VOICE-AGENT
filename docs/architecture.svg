@@ -57,8 +57,9 @@
 <rect x="782" y="222" width="116" height="58" rx="7" fill="#FFFFFF" stroke="#0B6B58" stroke-width="1.8" stroke-dasharray="6 3"/>
 <text x="840.0" y="257.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="15" fill="#06483A" font-weight="bold" text-anchor="middle">Authorizer</text>
 <text x="840.0" y="276.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="12.5" fill="#3C7A6C" font-weight="normal" text-anchor="middle">5 tables only</text>
-<rect x="652" y="300" width="246" height="50" rx="7" fill="#FFFFFF" stroke="#0B6B58" stroke-width="1.8" stroke-dasharray="6 3"/>
-<text x="775.0" y="339.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="15" fill="#06483A" font-weight="bold" text-anchor="middle">BEGIN IMMEDIATE — no double booking</text>
+<rect x="652" y="296" width="246" height="60" rx="7" fill="#FFFFFF" stroke="#0B6B58" stroke-width="1.8" stroke-dasharray="6 3"/>
+<text x="775.0" y="332.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="15" fill="#06483A" font-weight="bold" text-anchor="middle">BEGIN IMMEDIATE</text>
+<text x="775.0" y="351.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="12.5" fill="#3C7A6C" font-weight="normal" text-anchor="middle">no double booking</text>
 <rect x="652" y="398" width="110" height="60" rx="7" fill="#FAF2E3" stroke="#8A5A1F" stroke-width="1.5"/>
 <text x="707.0" y="434.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="15" fill="#66410F" font-weight="bold" text-anchor="middle">Gemini</text>
 <text x="707.0" y="453.0" font-family="Segoe UI,Helvetica Neue,Helvetica,Arial,sans-serif" font-size="12.5" fill="#8A6A3A" font-weight="normal" text-anchor="middle">fallback only</text>
