@@ -1,20 +1,53 @@
+<div align="center">
+
 # AETHER
 
-**A hotel's telephone line where interrupting is safe.**
+### A hotel's telephone line where interrupting is safe.
 
-AETHER answers a hotel's phone as its duty manager, in **English, Hindi or Spanish**. Callers ask
-about the menu, the rooms and the hotel's policies in ordinary speech, and can book a room or a
-table. They can also do what people on the phone always do: interrupt, change their mind halfway
-through an answer, or say *stop*. AETHER keeps up — and never says something that has stopped being
-true.
+**English  ·  हिन्दी  ·  Español**
 
-> **A stale result must never become spoken output.**
+![tests](https://img.shields.io/badge/tests-1903%20passing-0B6B58?style=flat-square)
+![stale outputs](https://img.shields.io/badge/stale%20outputs%20spoken-0%20in%20106%20runs-B3261E?style=flat-square)
+![routing](https://img.shields.io/badge/multilingual%20routing-93%2F93-0B6B58?style=flat-square)
+![turn latency](https://img.shields.io/badge/turn%20latency-1262%20ms%20median-454C57?style=flat-square)
+![hotel facts](https://img.shields.io/badge/hotel%20facts-SQLite%2C%20not%20an%20LLM-0B6B58?style=flat-square)
+![python](https://img.shields.io/badge/python-3.12-454C57?style=flat-square)
+
+</div>
+
+> ### A stale result must never become spoken output.
 >
-> The one rule the whole system is built around.
+> The one rule the whole system is built around — and the thing that is hardest to get right on a
+> telephone, because audio cannot be un-spoken.
+
+AETHER answers a hotel's phone as its duty manager. Callers ask about the menu, the rooms and the
+hotel's policies in ordinary speech, and can book a room, book a table or order food. They can also
+do what people on the phone always do: interrupt, change their mind halfway through an answer, or
+say *stop*. AETHER keeps up — and never says something that has stopped being true.
+
+<div align="center">
+
+<img src="docs/architecture.svg" width="100%"
+     alt="AETHER system architecture, left to right: a PSTN caller through LiveKit SIP, turn
+     detection and Whisper STT, an interruption classifier and generation supervisor, into a
+     deterministic router that splits into a dominant SQLite tool path and a small Gemini fallback,
+     then a per-language renderer, Rime TTS and back to the caller, overlaid with the five
+     generation-fencing checkpoints.">
+
+<sub><b>Click to enlarge.</b> The deterministic path is drawn heavy and the LLM fallback light
+because that is their real proportion. The dashed red overlay is the differentiator.</sub>
+
+</div>
+
+| | | | |
+|:--|:--|:--|:--|
+| **33** hotel tools | **0.90 ms** median deterministic answer | **5** independent fence checkpoints | **3** languages, one database |
+| 25 read · 8 write | vs 0.9–1.8 s to reach Gemini | a stale turn is stopped at every one | a Hindi price cannot drift from English |
 
 | | |
 |---|---|
 | **See it** | The recorded demo, and its word-for-word script: [DEMO_SCRIPT.md](DEMO_SCRIPT.md) |
+| **Answer a question fast** | [AETHER_FAST_REFERENCE.md](AETHER_FAST_REFERENCE.md) — every verified fact on one sheet |
 | **Run it** | [Quick start](#quick-start) below · every step for a new machine: [SETUP.md](SETUP.md) |
 | **Judge it** | [JUDGING.md](JUDGING.md) maps each criterion to the file, test or trace behind it |
 | **Check it** | [RIME_EVIDENCE.md](RIME_EVIDENCE.md): the claim, the acceptance test, the procedure, the result and the limits |
@@ -50,16 +83,19 @@ simultaneous callers.
 
 ## Architecture
 
-![AETHER system architecture: left-to-right flow from the PSTN caller through LiveKit SIP, speech
-detection, Whisper STT, the interruption classifier and generation supervisor, into a deterministic
-router that splits into a dominant SQLite tool path and a small Gemini fallback, then into a
-per-language renderer, Rime TTS and back to the caller — overlaid with the five generation-fencing
-checkpoints.](docs/architecture.svg)
+The diagram is [at the top of this page](#aether). Three details in it are worth calling out,
+because each is where this system differs from how a voice agent is usually drawn:
 
-The deterministic path is drawn heavy and the LLM fallback light on purpose: that is their real
-proportion. The dashed red overlay is the differentiator — the five places an abandoned generation is
-stopped, and the sequence an interruption actually runs through on the phone. Full detail:
-[AETHER_FAST_REFERENCE.md](AETHER_FAST_REFERENCE.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+- **The deterministic path is fenced too.** Most designs fence only the model. A hotel answer that
+  was resolved from a row and then abandoned is discarded as well — checkpoint 2, `stale_generation_menu`.
+- **The Rime `clear` is a courtesy, not the guarantee.** It stops Rime doing unnecessary work. The
+  audio gate is the authority and refuses any chunk from a non-active generation, always.
+- **The phone path never ducks.** It runs hands-free, so the fence lands at end-of-utterance rather
+  than mid-word. Ducking exists, but only in the laptop `OPEN_MIC` mode.
+
+Deeper: [AETHER_FAST_REFERENCE.md](AETHER_FAST_REFERENCE.md) for every verified figure,
+[ARCHITECTURE.md](ARCHITECTURE.md) for the components and event vocabulary,
+[RULES.md](RULES.md) for the invariants themselves.
 
 ## What it does
 
@@ -460,8 +496,16 @@ evidence/        a real phone call's trace and worker log
 
 ## Status
 
-**1903 tests pass, 2 are skipped.** Both skips are features that genuinely don't exist, and each test
-says which: the unsafe-mode control condition, and salvage.
+| | |
+|---|---|
+| **1903 tests pass, 2 are skipped** | Both skips are features that genuinely don't exist, and each test says which: the unsafe-mode control condition, and salvage. Neither is faked to look like evidence. |
+| **0 stale outputs, 106 recorded runs** | `ResultLeaked` has never fired. 4136 `ResultDiscarded` events say the fence is doing work, not that the path is untravelled. |
+| **93 / 93 multilingual routing** | 31 sentences per language. A test also enforces that all three are tested *equally*, so English cannot be propped up by coverage. |
+| **A real phone call, committed** | 16 turns, 11 at `llm_ms = 0`, median 1262 ms. The trace and the worker log are asserted to describe the same call. |
+
+**What is not measured** is listed just as plainly in
+[Known limitations](#known-limitations) — STT word accuracy on narrowband audio, Hindi and Spanish
+over a real phone line, and two simultaneous callers.
 
 ## Documents
 
