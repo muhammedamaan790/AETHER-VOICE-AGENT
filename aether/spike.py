@@ -868,10 +868,7 @@ class Day1Spike:
         """
         if language is None or language.code == self.language.code:
             return False
-        speaker = self._speakers.get(language.code)
-        if speaker is None:
-            speaker = build_tts(self.trace, samplerate=self.gate.samplerate, language=language)
-            self._speakers[language.code] = speaker
+        speaker = self._speaker_for(language)
         self.language = language
         self.rime = speaker
         # The STT carries the active language as state, exactly as it already carries its model, so
@@ -896,6 +893,42 @@ class Day1Spike:
         # assumed: three Hindi questions came back as one Hindi reply and two English ones.
         self.llm.language = language
         return True
+
+    def _speaker_for(self, language):
+        """The Rime client for one language: built once per call, then reused."""
+        speaker = self._speakers.get(language.code)
+        if speaker is None:
+            speaker = build_tts(self.trace, samplerate=self.gate.samplerate, language=language)
+            self._speakers[language.code] = speaker
+        return speaker
+
+    def prewarm_voices(self, languages) -> dict[str, bool]:
+        """Build and connect every other language's voice now, rather than on its first sentence.
+
+        Measured on a real call, 2026-09-19: the first Spanish turn after a switch took 3341 ms to
+        first audio against ~265 ms warm, because the Spanish socket was opened only when that
+        sentence needed it. Run on a background thread during call setup, long before a caller can
+        ask to switch, so the handshake is paid while nobody is waiting.
+
+        The ACTIVE voice is deliberately skipped: it is in use by the greeting, and two threads
+        reading one socket is exactly the ConcurrencyError seen on 2026-09-19. Every other voice has
+        no reader yet, so opening it here cannot collide with anything.
+
+        Best-effort throughout. A voice that cannot be built or warmed is opened on demand, exactly
+        as before this existed.
+        """
+        warmed: dict[str, bool] = {}
+        for language in languages:
+            if language.code == self.language.code:
+                continue
+            try:
+                speaker = self._speaker_for(language)
+            except Exception:
+                warmed[language.code] = False
+                continue
+            warm = getattr(speaker, "warm", None)
+            warmed[language.code] = bool(warm()) if callable(warm) else False
+        return warmed
 
     def begin_language_selection(self) -> None:
         """Open the call owing a language choice, before any hotel greeting is spoken.

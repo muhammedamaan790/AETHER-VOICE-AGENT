@@ -130,7 +130,7 @@ the classifier is implemented and wired, the transitions it implies are emitted,
 product runs on top of both. What remains genuinely unbuilt is salvage, the unsafe-mode control
 path, and the evaluator.
 
-**Updated 2026-09-10: 1970 tests pass, 2 skipped.** Both skips are features that do not exist, and
+**Updated 2026-09-10: 1994 tests pass, 2 skipped.** Both skips are features that do not exist, and
 each names itself.
 
 | Component | Status |
@@ -436,11 +436,11 @@ Still `<from_run>` and must not be quoted:
   where it was exactly 2:1 before. The captured audio transcribes cleanly.
 - **The speech floor DID need recalibrating after all, and my earlier "it does not" was wrong.**
   That conclusion came from one call whose line noise happened to sit at 12.9-15.8 RMS. Two later
-  calls showed noise reaching **1986** -- call-setup bursts the first call did not contain. Against
+  calls showed noise reaching **1994** -- call-setup bursts the first call did not contain. Against
   a floor of 35, eleven of fifteen noise utterances were accepted and Whisper hallucinated words
   onto them ("Good job.", "We'll see you in the next one."), which AETHER then answered.
 
-  Pooled across 28 utterances from three calls: real speech 5560-14971, noise 12-1986, a factor of
+  Pooled across 28 utterances from three calls: real speech 5560-14971, noise 12-1994, a factor of
   2.8 apart. `AETHER_SPEECH_FLOOR=2500` admits 0 of 15 noise and loses 0 of 13 speech. Biased to
   the low end of the viable 2000-3500 band because dropping genuine speech is the worse failure
   (RULES.md R2.3).

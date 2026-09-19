@@ -40,8 +40,8 @@ python scripts/measure_audio_kill.py                       # interrupt -> silenc
 | | |
 |---|---|
 | Full-duplex acceptance (the brief's example) | **9/9 pass** |
-| Whole suite | **1970 passed, 2 skipped** (both skips are unbuilt features, not failures) |
-| `ResultLeaked` across **106** trace files | **0** (re-counted 2026-09-19; 4136 `ResultDiscarded`, 319 `ResponseSpoken`) |
+| Whole suite | **1994 passed, 2 skipped** (both skips are unbuilt features, not failures) |
+| `ResultLeaked` across **112** trace files | **0** (re-counted 2026-09-19; 4136 `ResultDiscarded`, 319 `ResponseSpoken`) |
 | Committed real phone call | 16 turns; **11 answered with `llm_ms = 0`**; 2 generations fenced; 0 leaks |
 | Turn latency, that call | median **1262 ms** |
 | Rime first audio, that call | median **280 ms** |
@@ -764,7 +764,7 @@ Every utterance the VAD saw on that call:
 
 **CORRECTED 2026-09-08 after two further calls.** The paragraph below was written from the first
 call alone, where line noise happened to sit at 12.9-15.8 RMS. Two later calls showed noise reaching
-**1986** -- call-setup bursts and carrier artefacts that the first call did not contain. Against a
+**1994** -- call-setup bursts and carrier artefacts that the first call did not contain. Against a
 floor of 35, eleven of fifteen noise utterances were accepted, transcribed by Whisper into
 hallucinations ("Good job.", "We'll see you in the next one.") and answered as if the caller had
 said them.
@@ -774,7 +774,7 @@ Pooling all 28 utterances from three calls gives a clean separation:
 | | n | min | max |
 |---|---|---|---|
 | Real speech | 13 | **5560.3** | 14971.0 |
-| Noise / hallucination | 15 | 12.1 | **1986.2** |
+| Noise / hallucination | 15 | 12.1 | **1994.2** |
 
 A factor of 2.8 between the loudest noise and the quietest real speech. **`AETHER_SPEECH_FLOOR` is
 now 2500**, which admits 0 of 15 noise utterances and loses 0 of 13 real ones. Any value in

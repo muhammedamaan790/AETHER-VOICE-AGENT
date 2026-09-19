@@ -267,6 +267,23 @@ class RimeStreamingTTS:
             except Exception:
                 pass
 
+    def warm(self) -> bool:
+        """Open the connection now, so the first sentence in this voice does not pay the handshake.
+
+        Measured on a real call, 2026-09-19: the first Spanish turn after a switch took 3341 ms to
+        first audio against ~265 ms for every warm turn, because the Spanish voice's socket was only
+        opened when that sentence needed it. Called off the voice path, before any switch happens.
+
+        Best-effort and silent on failure: a voice that cannot be warmed is simply opened on demand,
+        exactly as before, and a warm-up must never be the reason a call goes wrong.
+        """
+        try:
+            self._get_ws()
+            return True
+        except Exception:
+            self._drop_ws()
+            return False
+
     def close(self) -> None:
         self._drop_ws()
 

@@ -604,6 +604,13 @@ async def hotel_call(ctx: JobContext) -> None:
     # the whole of call setup.
     _build_started = _now_ms()
     spike = await asyncio.to_thread(build_pipeline, trace)
+    # Open the Hindi and Spanish voices now, off the call's path, so a caller who switches language
+    # does not wait through a Rime handshake on their first sentence -- measured at 3341 ms against
+    # ~265 ms warm on 2026-09-19. A daemon thread, best-effort: if it fails the voice is simply
+    # opened on demand as before. The active voice is skipped inside, because the greeting is using it.
+    from ..lang import LANGUAGES as _ALL_LANGUAGES
+    threading.Thread(target=spike.prewarm_voices, args=(tuple(_ALL_LANGUAGES.values()),),
+                     name="aether-prewarm-voices", daemon=True).start()
     bridge = CallBridge(spike, spike.gate, closing)
     # Timed and logged because this is the caller's dead air, and two real calls spent 13 s and
     # 17 s here. If it grows again, the next log says so without needing a second call to notice.

@@ -8,8 +8,8 @@
 
 Multilingual hotel voice agent with deterministic hotel facts and generation-fenced real-time speech.
 
-![stale outputs](https://img.shields.io/badge/stale%20outputs%20spoken-0%20in%20106%20runs-B3261E?style=flat-square)
-![tests](https://img.shields.io/badge/tests-1970%20passing-0B6B58?style=flat-square)
+![stale outputs](https://img.shields.io/badge/stale%20outputs%20spoken-0%20in%20112%20runs-B3261E?style=flat-square)
+![tests](https://img.shields.io/badge/tests-1994%20passing-0B6B58?style=flat-square)
 ![routing](https://img.shields.io/badge/multilingual%20routing-93%2F93-0B6B58?style=flat-square)
 ![turn latency](https://img.shields.io/badge/real--phone%20turn-1262%20ms%20median-454C57?style=flat-square)
 ![python](https://img.shields.io/badge/python-3.12-454C57?style=flat-square)
@@ -55,7 +55,7 @@ Multilingual hotel voice agent with deterministic hotel facts and generation-fen
 
 ### Key numbers
 
-| **0** | **1970** | **93 / 93** | **0.90 ms** |
+| **0** | **1994** | **93 / 93** | **0.90 ms** |
 |:-:|:-:|:-:|:-:|
 | stale outputs spoken | tests passing | multilingual routes | deterministic answer |
 
@@ -70,7 +70,7 @@ Multilingual hotel voice agent with deterministic hotel facts and generation-fen
 
 | Claim | Why you should believe it |
 |:--|:--|
-| **0** stale outputs spoken, 106 recorded runs | `ResultLeaked` has never fired in [`traces/`](traces/) · [scenario A](tests/test_acceptance.py) asserts the fence *and* asserts the event absent |
+| **0** stale outputs spoken, 112 recorded runs | `ResultLeaked` has never fired in [`traces/`](traces/) · [scenario A](tests/test_acceptance.py) asserts the fence *and* asserts the event absent |
 | **5** independent fence checkpoints | Five distinct `ResultDiscarded` reasons in source — [`aether/tools/__init__.py`](aether/tools/__init__.py), [`aether/spike.py`](aether/spike.py) ×3, [`aether/audio/player.py`](aether/audio/player.py) · counted by [`scripts/metrics.py`](scripts/metrics.py) |
 | **33** hotel tools, **0.90 ms** median answer | [`aether/hotel/tools.py`](aether/hotel/tools.py) · timed by `python scripts/measure_understanding.py` |
 | **93 / 93** multilingual routing | [`tests/test_understanding.py`](tests/test_understanding.py) — which also enforces that all three languages are tested *equally* |
@@ -214,7 +214,7 @@ the property.
 | Deterministic route and render | **0.90 ms** median | Local measured |
 | Voice ducks when the caller starts speaking | 22 ms median | *Synthetic* |
 | Voice fully stops | 321 ms median (300 ms of it deliberate) | *Synthetic* |
-| Stale results that reached a caller, 106 recorded runs | **0** | Every trace in [`traces/`](traces/) |
+| Stale results that reached a caller, 112 recorded runs | **0** | Every trace in [`traces/`](traces/) |
 
 [`evidence/demo-run.jsonl`](evidence/demo-run.jsonl) is a real inbound phone call; the worker log for
 the same call is committed beside it and every turn's latency matches between the two files. The
@@ -592,6 +592,6 @@ evidence/        a real phone call's trace and worker log
 | [MEMORY.md](MEMORY.md) | The engineering journal: decisions, what's measured, what isn't |
 
 <div align="center">
-<sub><b>1970 tests pass, 2 are skipped.</b> Both skips are features that genuinely don't exist, and
+<sub><b>1994 tests pass, 2 are skipped.</b> Both skips are features that genuinely don't exist, and
 each test says which: the unsafe-mode control condition, and salvage.</sub>
 </div>

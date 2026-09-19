@@ -237,7 +237,18 @@ def system_prompt_for(language=None) -> str:
 MAX_OUTPUT_TOKENS = 200
 
 # Never let a wedged provider hang the voice loop.
-REQUEST_TIMEOUT_S = 30.0
+#
+# WAS 30 s, which is not a ceiling on a telephone -- it is a caller hanging up. On 2026-09-19 a
+# Gemini stream produced its first token in 1.36 s and then stalled mid-stream, delivering the first
+# complete sentence after 17.1 s, all inside the old limit. Healthy fallback turns measured on the
+# same calls took 1.1-3.0 s. A turn that hits the ceiling is discarded exactly as any provider error
+# already is: nothing is spoken and nothing is remembered.
+#
+# 10 s, AND NOT ONE MILLISECOND LESS. Gemini rejects any lower deadline outright -- a request with
+# 8 s returns 400 INVALID_ARGUMENT "Manually set deadline 8s is too short. Minimum allowed deadline
+# is 10s." -- so a lower value does not shorten stalls, it fails every model turn. That was found by
+# calling the real API after unit tests had passed at 8 s; tests/test_latency_fixes.py now pins it.
+REQUEST_TIMEOUT_S = 10.0
 
 # Intentional: Groq first for latency during testing.
 PROVIDER_ORDER = ("groq", "anthropic", "openai", "gemini")
