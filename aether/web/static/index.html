@@ -19,6 +19,19 @@
    the snapshot carries no field that could hold them. Printing them would put fabricated hotel
    records on screen during a judged demo -- the same failure as the invented menu, better dressed.
    The card keeps the reference's exact shape and fills it with what is true.
+
+   ACCESSIBILITY PASS, 2026-09-19. Contrast was already fine everywhere (measured, not assumed --
+   every --ink*/--panel pair clears 6:1). What was missing: nothing here told a screen reader
+   anything was happening during a live call. Added, without touching the websocket contract, the
+   layout, or the palette: a landmark (<main>), decorative glyphs marked aria-hidden (they duplicate
+   adjacent text), a single delta-announcer for new transcript turns (NOT aria-live on #transcript
+   itself, which is torn down and rebuilt whole every snapshot -- a live region there would re-read
+   the entire conversation back on every turn), a status region for who is speaking, an assertive
+   alert the moment a stale result leaks (RULES.md R1.4), aria-pressed on the listening toggle, and
+   prefers-reduced-motion handling for the three ambient loops (the orb, the recording bead, the
+   speech-activity bars) -- state-driven colour changes still happen, only the continuous idle
+   motion stops. Also fixed: the caller-card language name was missing Spanish, so a Spanish call
+   showed the raw code "spa" instead of a name.
 --------------------------------------------------------------------------------------------- */
 :root{
   --bg:#0b0907; --bg-2:#100d0a; --panel:#16120d;
@@ -36,6 +49,14 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%}
+/* Visually hidden but still reachable by assistive tech -- the standard clip technique, not
+   display:none (which a screen reader also skips) and not width/height:0 (which some readers
+   likewise ignore). Used for the two live-announcement regions below: the console's own visible
+   layout should not change to carry them. */
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
 body{
   margin:0;font-family:var(--sans);color:var(--ink);min-height:100%;
   background:
@@ -142,6 +163,10 @@ body{
 }
 .fact .k{font-size:12.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);flex:1}
 .fact .v{font-size:17px;font-weight:600;color:var(--ink);text-align:right;overflow-wrap:anywhere;max-width:58%}
+/* Counts, not words: Turns and Stale leaks are numbers a duty manager scans at a glance mid-call,
+   and a monospaced numeral does not shift width as it changes (a "9" and a "10" occupy the same
+   visual rhythm). Voice and Language stay in the text face -- they are names, not figures. */
+.fact .v.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 
 /* ---------------- voice ---------------- */
 .voice{padding:16px 18px 12px;display:flex;flex-direction:column;align-items:center}
@@ -224,14 +249,29 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
 #recording{padding:11px 22px;border-top:1px solid var(--line-soft);font-family:var(--mono);
   font-size:13.5px;color:var(--ink-dim);overflow-wrap:anywhere}
 #recording.live{color:#9fd8b4}
+
+/* The two ambient loops on this page -- the recording bead and the speech-activity bars -- run
+   forever regardless of state, which is exactly what a caller with a vestibular disorder needs
+   turned off. State itself must still be visible without them, so each gets a static equivalent
+   rather than simply vanishing: the bead stays solid red, the bars stay lit rather than pulsing.
+   The third ambient loop, the voice orb, is canvas-drawn and is muted the same way in script. */
+@media (prefers-reduced-motion: reduce){
+  .rec.on .bead{animation:none}
+  .speaking.on .bars i{animation:none;opacity:.85}
+}
 </style>
 </head>
 <body>
 <div class="shell">
+  <!-- Announced the moment a stale result reaches the console -- see RULES.md R1.4: one leak fails
+       the run, so a reviewer who is not watching the screen must still be told it happened.
+       role="alert" is implicitly assertive and interrupts politer announcements, which a genuine
+       correctness failure should. -->
+  <div id="leakAlert" class="sr-only" role="alert" aria-atomic="true"></div>
 
   <header class="masthead">
     <div class="brand">
-      <div class="crest">Æ</div>
+      <div class="crest" aria-hidden="true">Æ</div>
       <div>
         <h1>AETHER</h1>
         <p>Duty Manager Console</p>
@@ -244,7 +284,7 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
     </div>
   </header>
 
-  <div class="stage">
+  <main class="stage">
 
     <div class="main-col">
     <section class="card conversation">
@@ -254,13 +294,20 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
         <span class="right" id="turnCount"></span>
       </div>
 
-      <div id="transcript">
+      <!-- role="log": this IS a log, in the ARIA sense -- a sequence of items appended over time.
+           It is not itself aria-live, on purpose. The whole box is torn down and rebuilt on every
+           snapshot (see renderTranscript), and a live region on a fully-rebuilt container announces
+           its ENTIRE contents every time, not just what changed -- a screen reader would re-read
+           the whole conversation on every turn. #transcriptAnnounce below carries the one new line
+           instead; this element stays a browsable, but not talkative, landmark. -->
+      <div id="transcript" role="log" aria-relevant="additions">
         <div class="empty">No conversation yet.<br>The line is open — this fills as the call happens.</div>
       </div>
+      <div id="transcriptAnnounce" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
-      <div class="speaking" id="speaking">
+      <div class="speaking" id="speaking" role="status" aria-live="polite" aria-atomic="true">
         <span id="speakingText">Line quiet</span>
-        <span class="bars"><i></i><i></i><i></i><i></i></span>
+        <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
       </div>
 
       <div id="recording">not recording — no call in progress</div>
@@ -268,7 +315,9 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
 
       <div class="card voice-card">
         <div class="voice">
-          <div class="orb-wrap"><canvas id="orb"></canvas></div>
+          <!-- Decorative and redundant on purpose: everything the orb's colour and motion convey
+               is already said in words by phaseLabel/phaseNote right below it. -->
+          <div class="orb-wrap"><canvas id="orb" aria-hidden="true"></canvas></div>
           <div class="state" id="phaseLabel">Connecting</div>
           <div class="meta" id="phaseNote">Waiting for the engine</div>
         </div>
@@ -294,7 +343,7 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
         </div>
 
         <div class="who">
-          <div class="avatar" id="callerAvatar">☎</div>
+          <div class="avatar" id="callerAvatar" aria-hidden="true">☎</div>
           <div>
             <div class="name" id="callerName">No caller</div>
             <div class="sub" id="callerSub">Waiting for the line</div>
@@ -315,16 +364,16 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
           </div>
           <div class="fact">
             <span class="ico" aria-hidden="true">#</span>
-            <span class="k">Turns</span><span class="v" id="factTurns">—</span>
+            <span class="k">Turns</span><span class="v mono" id="factTurns">—</span>
           </div>
           <div class="fact">
             <span class="ico" aria-hidden="true">◇</span>
-            <span class="k">Stale leaks</span><span class="v" id="factLeaks">0</span>
+            <span class="k">Stale leaks</span><span class="v mono" id="factLeaks">0</span>
           </div>
         </div>
       </div>
     </aside>
-  </div>
+  </main>
 
 </div>
 
@@ -367,6 +416,15 @@ let orbState = "disconnected";
 let amp = 0, flash = 0;
 const t0 = performance.now();
 
+// The orb's ambient wobble and breathing run forever regardless of state -- exactly the kind of
+// motion a vestibular-disorder caveat exists for. Read once, and again on change, so switching the
+// OS setting mid-session takes effect without a reload. State-driven colour and glow transitions
+// stay: they signal something real happening, not decoration, and WCAG's motion guidance targets
+// the latter.
+let REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
+matchMedia("(prefers-reduced-motion: reduce)")
+  .addEventListener("change", (e) => { REDUCED_MOTION = e.matches; });
+
 function sizeCanvas(){
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const r = canvas.getBoundingClientRect();
@@ -391,7 +449,8 @@ function drawOrb(now){
 
   ctx.clearRect(0,0,w,h);
   const base = Math.min(w,h) * 0.30;
-  const breathe = 1 + Math.sin(t * cfg.speed * 1.6) * (0.03 + cfg.wob * 0.2);
+  const breathe = REDUCED_MOTION ? 1
+    : 1 + Math.sin(t * cfg.speed * 1.6) * (0.03 + cfg.wob * 0.2);
 
   const halo = ctx.createRadialGradient(cx,cy,base*0.3,cx,cy,base*2.2);
   halo.addColorStop(0, rgba(hue, 0.22*amp));
@@ -404,8 +463,9 @@ function drawOrb(now){
     const phase = t * cfg.speed * (1 + i*0.33) + i*1.7;
     ctx.beginPath();
     for (let a = 0; a <= Math.PI*2 + 0.001; a += Math.PI/90){
-      const wob = 1 + Math.sin(a*(3+i)+phase)*cfg.wob*(0.5+amp*0.6)
-                    + Math.sin(a*(5+i*2)-phase*1.3)*cfg.wob*0.4;
+      const wob = REDUCED_MOTION ? 1
+        : 1 + Math.sin(a*(3+i)+phase)*cfg.wob*(0.5+amp*0.6)
+            + Math.sin(a*(5+i*2)-phase*1.3)*cfg.wob*0.4;
       const x = cx + Math.cos(a)*rr*wob, y = cy + Math.sin(a)*rr*wob;
       if (a === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     }
@@ -439,6 +499,8 @@ const els = {
   listenBtn:  document.getElementById("listenBtn"),
   interruptBtn: document.getElementById("interruptBtn"),
   transcript: document.getElementById("transcript"),
+  transcriptAnnounce: document.getElementById("transcriptAnnounce"),
+  leakAlert:  document.getElementById("leakAlert"),
   turnCount:  document.getElementById("turnCount"),
   recording:  document.getElementById("recording"),
   callPill:   document.getElementById("callPill"),
@@ -458,6 +520,9 @@ const els = {
 };
 
 let connected = false, lastState = null, callStartedAt = null;
+// Both start at zero and only ever compare against what the ENGINE last reported, so a page
+// refresh mid-call re-announces nothing it has not actually seen happen again.
+let lastAnnouncedTurns = 0, lastLeaks = 0;
 
 function orbStateFor(s){
   if (!connected) return "disconnected";
@@ -490,6 +555,7 @@ function renderTranscript(rows){
   if (!list.length){
     els.transcript.innerHTML =
       '<div class="empty">No conversation yet.<br>The line is open — this fills as the call happens.</div>';
+    lastAnnouncedTurns = 0;
     return;
   }
   const atBottom = els.transcript.scrollHeight - els.transcript.scrollTop
@@ -528,6 +594,20 @@ function renderTranscript(rows){
     els.transcript.appendChild(line);
   }
   if (atBottom) els.transcript.scrollTop = els.transcript.scrollHeight;
+
+  // Announce ONLY the newest line, not the whole rebuilt box. #transcript itself is torn down and
+  // reconstructed above on every snapshot, so a live region placed directly on it would re-read
+  // the entire conversation back on every single turn -- this element is the one thing screen
+  // readers are actually told about, and it says only what changed.
+  if (list.length > lastAnnouncedTurns){
+    const newest = list[list.length - 1];
+    const speaker = newest.role !== "customer" ? "AETHER" : "Guest";
+    const said = newest.status === "interrupted"
+      ? "an answer, discarded before it was heard"
+      : (newest.text || "");
+    els.transcriptAnnounce.textContent = `${speaker}: ${said}`;
+  }
+  lastAnnouncedTurns = list.length;
 }
 
 function renderRecording(s){
@@ -555,13 +635,26 @@ function renderCaller(s){
   els.factVoice.textContent = rime.voice ? `${rime.voice} · ${rime.model || "?"}` : "—";
   // The language AETHER is actually speaking, not a fixed label. On a call that switches, the
   // voice, the model and this all change together, and the operator can see the switch land.
-  const LANGUAGE_NAMES = { eng: "English", hin: "हिन्दी (Hindi)" };
+  // AETHER speaks three languages; this table had two. A Spanish call showed the raw code "spa"
+  // in the caller card instead of a name -- the one language shown correctly by accident was
+  // whichever one someone had tested most recently.
+  const LANGUAGE_NAMES = { eng: "English", hin: "हिन्दी (Hindi)", spa: "Español (Spanish)" };
   els.factLang.textContent = rime.language
     ? (LANGUAGE_NAMES[rime.language] || rime.language)
     : "English";
   els.factTurns.textContent = s && s.turn_id != null ? String(s.turn_id) : "—";
+  const leaks = (s && s.leaks) || 0;
   els.factLeaks.textContent = s && s.leaks != null ? String(s.leaks) : "0";
-  els.factLeaks.style.color = (s && s.leaks) ? "var(--rec)" : "";
+  els.factLeaks.style.color = leaks ? "var(--rec)" : "";
+  // RULES.md R1.4: one leak fails the run. Announced once, when the count actually rises, rather
+  // than repeated on every snapshot -- an assertive region that re-fires unchanged is noise, and
+  // noise is how a real second leak would get missed.
+  if (leaks > lastLeaks){
+    els.leakAlert.textContent = leaks === 1
+      ? "A stale result reached the caller. This must not happen."
+      : `${leaks} stale results have reached the caller. This must not happen.`;
+  }
+  lastLeaks = leaks;
 }
 
 function renderControls(s){
@@ -569,6 +662,8 @@ function renderControls(s){
   // ONE toggle. Its label follows what the engine reports, never what the last click assumed.
   els.listenBtn.textContent = listening ? "Stop Listening" : "Start Listening";
   els.listenBtn.classList.toggle("stop", listening);
+  // A real toggle button exposes its own state to assistive tech, not only through its label text.
+  els.listenBtn.setAttribute("aria-pressed", listening ? "true" : "false");
   els.listenBtn.disabled = !connected;
   els.listenBtn.style.opacity = connected ? "1" : ".45";
   // Emphasised only when something is genuinely interruptible; a safe no-op otherwise.
