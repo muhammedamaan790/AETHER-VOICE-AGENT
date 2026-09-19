@@ -1107,6 +1107,9 @@ def _refusal(summary) -> str:
         return "How many people should I book the table for?"
     if why == "min_one_night":
         return "A stay is at least one night. How many nights would you like?"
+    if why == "room_type_not_given":
+        return ("Which room would you like? We have the Standard King, the Standard Twin, "
+                "the Deluxe King, the Executive Suite and the Family Suite.")
     # Ordering. A dish the kitchen has run out of is the common one, and it has to name the dish --
     # "I could not make that booking" was what a caller asking for the fish curry actually heard.
     if why == "dish_unavailable":

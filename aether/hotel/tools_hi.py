@@ -460,6 +460,9 @@ def _refusal(summary) -> str:
         return f"माफ़ कीजिए, कमरा {say_room_number(summary['room'])} अभी खाली नहीं है।"
     if why == "none_of_that_type_free":
         return f"माफ़ कीजिए, इस समय कोई {summary['room_type']} खाली नहीं है।"
+    if why == "room_type_not_given":
+        return ("आप कौन सा कमरा लेना चाहेंगे? हमारे पास Standard King, Standard Twin, "
+                "Deluxe King, Executive Suite और Family Suite हैं।")
     if why == "hotel_full":
         return "माफ़ कीजिए, आज सारे कमरे भरे हुए हैं।"
     if why == "outside_hours":

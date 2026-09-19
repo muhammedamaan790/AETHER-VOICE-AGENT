@@ -60,6 +60,11 @@ _ROOM_TYPE_WORDS: tuple[tuple[str, str], ...] = tuple(sorted(
     [(t.name.lower(), t.name) for t in _STORE.room_types()] + [
         ("suite", "Executive Suite"), ("suites", "Executive Suite"),
         ("family room", "Family Suite"), ("twin", "Standard Twin"),
+        # Callers say the distinguishing word, not the catalogue name: "a deluxe room", not "a
+        # Deluxe King". Each of these three is the ONLY type carrying that word, so the shorthand
+        # is unambiguous. "standard" is deliberately absent -- there are two Standards, so it must
+        # be asked about rather than guessed.
+        ("deluxe", "Deluxe King"), ("executive", "Executive Suite"), ("family", "Family Suite"),
     ],
     key=lambda pair: -len(pair[0]),
 ))
@@ -79,6 +84,11 @@ _DIET_WORDS: tuple[tuple[str, str], ...] = (
     ("nonveg", "non-vegetarian"), ("non veg", "non-vegetarian"),
     ("vegan", "vegan"), ("plant based", "vegan"),
     ("vegetarian", "vegetarian"), ("veggie", "vegetarian"), ("veg", "vegetarian"),
+    # "a vegetable starter" is what a caller actually says, and what Whisper returns for it. Without
+    # this the sentence routed nowhere and the caller was asked "did you mean starters?" -- having
+    # just said the word starter. Ordered after "vegetarian" only for readability; the table is
+    # sorted longest-first at match time, so "vegetables" cannot shadow "vegetarian".
+    ("vegetable", "vegetarian"), ("vegetables", "vegetarian"),
 )
 
 _SPICE_WORDS: tuple[tuple[str, str], ...] = (

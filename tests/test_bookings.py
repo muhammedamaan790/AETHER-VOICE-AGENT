@@ -168,7 +168,11 @@ def test_a_booked_room_stops_being_free(hotel, runner) -> None:
 
 def test_a_booked_room_leaves_the_available_count_one_lower(hotel, runner) -> None:
     before = int(_count_sql(hotel, "SELECT COUNT(*) FROM rooms WHERE status = 'available'"))
-    _speak(runner, "reserve_room")
+    # A room type is named. This test used to call reserve_room with nothing at all, which relied
+    # on the store silently choosing the cheapest free room -- the exact behaviour that booked a
+    # Standard King for a caller who asked for a deluxe room. An unnamed booking now asks instead
+    # (tests/test_booking_asks_before_guessing.py); the property tested here is unchanged.
+    _speak(runner, "reserve_room", room_type="Standard King")
     after = int(_count_sql(hotel, "SELECT COUNT(*) FROM rooms WHERE status = 'available'"))
     assert after == before - 1
 

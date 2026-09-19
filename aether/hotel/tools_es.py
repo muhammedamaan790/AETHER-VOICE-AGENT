@@ -436,6 +436,9 @@ def _refusal(summary) -> str:
         return f"Lo siento, la habitación {say_room_number(summary['room'])} no está libre."
     if why == "none_of_that_type_free":
         return f"Lo siento, no tenemos ninguna {summary['room_type']} libre ahora mismo."
+    if why == "room_type_not_given":
+        return ("¿Qué habitación prefiere? Tenemos la Standard King, la Standard Twin, "
+                "la Deluxe King, la Executive Suite y la Family Suite.")
     if why == "hotel_full":
         return "Lo siento, esta noche estamos completos."
     if why == "outside_hours":

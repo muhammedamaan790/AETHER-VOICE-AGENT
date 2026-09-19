@@ -211,6 +211,16 @@ class Bookings:
         """
         if nights < 1:
             raise BookingRefused("min_one_night")
+        # NEITHER NAMED: ASK, DO NOT CHOOSE. This used to fall through to the lowest-numbered free
+        # room in the hotel, and on 2026-09-19 a caller who asked for "a deluxe room" -- a phrasing
+        # the router did not yet resolve -- was told "Done. I have reserved the Standard King" at a
+        # rate two thousand rupees below the room they asked for. A dropped word became a confident
+        # wrong booking, which is worse than any refusal: the caller has no way to know.
+        #
+        # A booking is the one thing here that cannot be taken back by saying something else, so an
+        # unnamed room type is a question rather than a default.
+        if room is None and room_type is None:
+            raise BookingRefused("room_type_not_given")
         start = today or datetime.now(timezone.utc).date()
 
         with self._lock:
