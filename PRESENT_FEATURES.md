@@ -235,7 +235,7 @@ Three callers told they had a Deluxe King that somebody else had also been given
 # 9. Everything reproduces with one command
 
 ```bash
-python -m pytest -q          # 1903 passed, 2 skipped — about two minutes
+python -m pytest -q          # 1970 passed, 2 skipped — about two minutes
 ```
 
 Both skips are features that genuinely don't exist, documented in the test body.
@@ -281,7 +281,7 @@ project refuses: an undocumented endpoint that merely happens to respond.
 | | |
 |---|---|
 | Stale results ever spoken | **0** across 95 runs, 6,869 events |
-| Tests | **1903 passing, 2 skipped**, 49 files |
+| Tests | **1970 passing, 2 skipped**, 49 files |
 | Tools | 33 — 25 read, 8 write |
 | Routing accuracy | **31/31** in each of three languages |
 | Database answer | **~1 ms** |

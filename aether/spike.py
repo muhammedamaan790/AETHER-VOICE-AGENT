@@ -491,6 +491,11 @@ class Day1Spike:
             # otherwise, so anything ambiguous still reaches Gemini.
             self._last_stream_metrics = {}
             used_model = False
+            # Which deterministic tool answered, for the trace and the console. Cleared per turn so
+            # a tool name can never carry over onto a turn the model answered -- the console prints
+            # this next to "DETERMINISTIC", and a stale name there would be a false claim about
+            # where an answer came from. Stays None on every model turn.
+            self._route_tool = None
             # Asked for another language? Switch first, then answer in it. Deliberately here rather
             # than before `begin_turn`: this way the switch is an ordinary turn with a generation,
             # a transcript line and a `ResponseSpoken`, so it is fenceable and observable like any
@@ -609,6 +614,9 @@ class Day1Spike:
                 **timing.fields(),
                 **self._last_stream_metrics,
                 llm_provider=self.llm.name,
+                # The deterministic tool that answered, or None when the model did. This is what
+                # lets the console say "SQLite -> price_of" instead of only "no model was used".
+                route_tool=getattr(self, "_route_tool", None),
                 llm_prompt_tokens=usage.get("prompt_tokens"),
                 llm_thoughts_tokens=usage.get("thoughts_tokens"),
                 llm_output_tokens=usage.get("output_tokens"),
@@ -816,6 +824,9 @@ class Day1Spike:
         spoken = render(result, self.language)
         if spoken is None:
             return None
+        # Recorded only once the tool has actually produced a rendered answer -- not at routing
+        # time, and not on the fenced path above, which returns before this line.
+        self._route_tool = decision.tool
         print(f"  MENU[{decision.tool}] via {decision.reason}: {spoken}")
         # Held, not committed. `_pending_subject` becomes `self.subject` at the spoken boundary
         # alongside `history.commit_turn`, and is dropped on every fenced path -- so "it" can only

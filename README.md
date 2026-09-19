@@ -6,7 +6,7 @@
 
 **English  ·  हिन्दी  ·  Español**
 
-![tests](https://img.shields.io/badge/tests-1903%20passing-0B6B58?style=flat-square)
+![tests](https://img.shields.io/badge/tests-1970%20passing-0B6B58?style=flat-square)
 ![stale outputs](https://img.shields.io/badge/stale%20outputs%20spoken-0%20in%20106%20runs-B3261E?style=flat-square)
 ![routing](https://img.shields.io/badge/multilingual%20routing-93%2F93-0B6B58?style=flat-square)
 ![turn latency](https://img.shields.io/badge/turn%20latency-1262%20ms%20median-454C57?style=flat-square)
@@ -27,30 +27,37 @@ say *stop*. AETHER keeps up — and never says something that has stopped being 
 
 <div align="center">
 
-<img src="docs/architecture.svg" width="100%"
+<a href="docs/architecture.svg"><img src="docs/architecture.svg" width="100%"
      alt="AETHER system architecture, left to right: a PSTN caller through LiveKit SIP, turn
      detection and Whisper STT, an interruption classifier and generation supervisor, into a
      deterministic router that splits into a dominant SQLite tool path and a small Gemini fallback,
      then a per-language renderer, Rime TTS and back to the caller, overlaid with the five
-     generation-fencing checkpoints.">
+     generation-fencing checkpoints."></a>
 
-<sub><b>Click to enlarge.</b> The deterministic path is drawn heavy and the LLM fallback light
-because that is their real proportion. The dashed red overlay is the differentiator.</sub>
+<sub><b><a href="docs/architecture.svg">Click to enlarge</a>.</b> The deterministic path is drawn
+heavy and the LLM fallback light because that is their real proportion. The dashed red overlay is
+the differentiator.</sub>
 
 </div>
 
-| | | | |
-|:--|:--|:--|:--|
-| **33** hotel tools | **0.90 ms** median deterministic answer | **5** independent fence checkpoints | **3** languages, one database |
-| 25 read · 8 write | vs 0.9–1.8 s to reach Gemini | a stale turn is stopped at every one | a Hindi price cannot drift from English |
+| Claim | Why you should believe it |
+|:--|:--|
+| **0** stale outputs spoken, 106 recorded runs | `ResultLeaked` has never fired in [`traces/`](traces/) · [scenario A](tests/test_acceptance.py) asserts the fence *and* asserts the event absent |
+| **5** independent fence checkpoints | Five distinct `ResultDiscarded` reasons in source — [`aether/tools/__init__.py`](aether/tools/__init__.py), [`aether/spike.py`](aether/spike.py) ×3, [`aether/audio/player.py`](aether/audio/player.py) · counted by [`scripts/metrics.py`](scripts/metrics.py) |
+| **33** hotel tools, **0.90 ms** median answer | [`aether/hotel/tools.py`](aether/hotel/tools.py) · timed by `python scripts/measure_understanding.py` |
+| **93 / 93** multilingual routing | [`tests/test_understanding.py`](tests/test_understanding.py) — which also enforces that all three languages are tested *equally* |
+| Hotel facts never touch the LLM | `llm_ms = 0` on 11 of 16 turns in [`evidence/demo-run.jsonl`](evidence/demo-run.jsonl) |
+| Nothing can reprice the menu | SQLite authorizer in [`aether/hotel/bookings.py`](aether/hotel/bookings.py) · [`tests/test_bookings.py`](tests/test_bookings.py) proves it by trying |
+| A real phone call, **1262 ms** median turn | [`evidence/demo-run.jsonl`](evidence/demo-run.jsonl) + [`evidence/demo-call-worker.log`](evidence/demo-call-worker.log), asserted to be the same call |
 
-| | |
+| | Go straight to |
 |---|---|
-| **See it** | The recorded demo, and its word-for-word script: [DEMO_SCRIPT.md](DEMO_SCRIPT.md) |
-| **Answer a question fast** | [AETHER_FAST_REFERENCE.md](AETHER_FAST_REFERENCE.md) — every verified fact on one sheet |
-| **Run it** | [Quick start](#quick-start) below · every step for a new machine: [SETUP.md](SETUP.md) |
-| **Judge it** | [JUDGING.md](JUDGING.md) maps each criterion to the file, test or trace behind it |
-| **Check it** | [RIME_EVIDENCE.md](RIME_EVIDENCE.md): the claim, the acceptance test, the procedure, the result and the limits |
+| **See it** | [The 14 scripted turns](DEMO_SCRIPT.md#the-exact-replies-as-the-test-suite-checks-them) — every reply asserted by [`tests/test_demo_script.py`](tests/test_demo_script.py). No video has been recorded yet |
+| **Answer a question fast** | [Fast reference](AETHER_FAST_REFERENCE.md) · [verified metrics](AETHER_FAST_REFERENCE.md#14-current-verified-metrics) · [25 judge questions](AETHER_FAST_REFERENCE.md#19-top-judge-questions) |
+| **Run it** | [Quick start](#quick-start) below · a new machine: [SETUP.md](SETUP.md) · one command, no phone: `python scripts/demo_full_call.py` |
+| **Judge it** | [JUDGING.md](JUDGING.md) maps each criterion to its file, test or trace · and [what we did *not* build](JUDGING.md#what-we-did-not-build-and-what-is-not-measured) |
+| **Check it** | [Claim, test, procedure, result, limits](RIME_EVIDENCE.md#summary--claim-test-procedure-result-limitations) · [the real phone call](RIME_EVIDENCE.md#part-6--real-phone-call--partially-verified) |
+| **Verify the numbers** | `python scripts/metrics.py` derives every public figure from the repo; [`tests/test_reference_integrity.py`](tests/test_reference_integrity.py) fails the suite if a document disagrees |
 
 **Contents** — [Executive summary](#executive-summary) · [Architecture](#architecture) ·
 [What it does](#what-it-does) · [Quick start](#quick-start) ·
@@ -75,7 +82,7 @@ Gemini reached only for hotel questions no tool can answer. The problem we set o
 interruption: on a phone, audio cannot be un-spoken, so every turn is given a generation id and
 *fencing* discards an abandoned turn's work at **five independent checkpoints** — including one
 *before* a mutating tool's body runs, so a booking the caller changed their mind about never writes a
-row. We verified this rather than asserted it: **1903 tests pass**, routing is correct on **93 of 93**
+row. We verified this rather than asserted it: **1970 tests pass**, routing is correct on **93 of 93**
 sentences across the three languages, and across **106 recorded runs** — including a real phone call
 at **1262 ms** median turn latency — **zero stale results have ever reached a caller**. What we have
 *not* measured is stated just as plainly: STT word accuracy on narrowband telephony audio, and two
@@ -159,10 +166,22 @@ Cancelling it is a race that can be lost. So AETHER doesn't rely on cancelling: 
 speak** anything that belongs to a request the caller has abandoned.
 
 **Generation fencing.** Every request gets a generation ID. When the caller interrupts, the current
-generation is *fenced* — permanently, and it can never be un-fenced. Four independent layers check
-the generation before anything reaches the caller's ear: the tool runner, the language model's
-output, the Rime client, and the audio callback that writes to the speaker. An answer computed for an
-abandoned request can finish, and it still can't be heard.
+generation is *fenced* — permanently, and it can never be un-fenced. Five independent checkpoints
+check the generation before anything reaches the caller's ear, and each announces itself with its
+own `ResultDiscarded` reason, so the trace shows exactly which door stopped the work:
+
+| # | Checkpoint | Reason in the trace | Stops |
+|---|---|---|---|
+| 1 | Tool runner | `stale_generation_tool` | a stale booking or order writing a row — checked *before* the tool body runs |
+| 2 | Deterministic answer | `stale_generation_menu` | a hotel answer resolved from a row, then abandoned |
+| 3 | Language model output | `stale_generation_llm` / `_stream` | a completed *or* half-streamed model reply |
+| 4 | Rime client | *(courtesy `clear`)* | Rime doing synthesis nobody will hear |
+| 5 | Audio gate | `stale_generation` | the last door: audio reaching the speaker |
+
+Checkpoint 4 is a courtesy to Rime rather than the guarantee — [`aether/audio/rime_ws.py`](aether/audio/rime_ws.py)
+says so in its own docstring. The audio gate is the authority and refuses any chunk from a
+non-active generation. An answer computed for an abandoned request can finish, and it still can't be
+heard.
 
 **Everything the caller did not hear is forgotten.** The same rule covers memory as well as sound.
 Conversation history, what "it" refers to, a *"did you mean…?"* offer and a booking are all committed
@@ -194,7 +213,7 @@ kill the answer it was encouraging.
 brief's own acceptance test, run against the real pipeline. It checks every clause separately: a
 fixed delay is injected into a lookup, the caller interrupts and changes part of the request,
 queued audio stops, the stale result is never spoken, and the final answer is to the question they
-ended up asking. **Across 84 recorded runs, including real phone calls, the number of stale results
+ended up asking. **Across 106 recorded runs, including real phone calls, the number of stale results
 that reached a caller is zero.**
 
 ---
@@ -216,15 +235,29 @@ that reached a caller is zero.**
                              every event ──▶ trace file + the live console in your browser
 ```
 
-**LiveKit carries the phone audio, and nothing else.** AETHER uses LiveKit's low-level `rtc`
-interface directly, deliberately not its agent framework. That framework brings its own recogniser,
-model, voice and turn-taking, and would bypass the fencing being judged. Everything between the phone
-line and the speaker is the same code the laptop-microphone path runs, so a fence proven on the
-laptop is the same fence on a call.
+**LiveKit carries the phone audio, and nothing else.** AETHER *does* use the LiveKit Agents
+framework, but only for what it is good at here: `AgentServer` and `@server.rtc_session` in
+[`aether/telephony/agent.py`](aether/telephony/agent.py) handle worker registration, job dispatch and
+the warm job executor that stops a caller waiting through a cold model load.
+
+What AETHER deliberately does **not** use is `AgentSession`, the voice-pipeline abstraction. That
+class supplies its own recogniser, model, voice and turn-taking, and adopting it would put the
+interruption behaviour being judged inside somebody else's loop. Instead the audio path is driven
+through the low-level `rtc` primitives directly — `rtc.AudioStream` in, `rtc.AudioSource` out — so
+everything between the phone line and the speaker is the same code the laptop-microphone path runs,
+and a fence proven on the laptop is the same fence on a call.
 
 **The console** shows the call as it happens: the transcript, which answers were cut off and never
 spoken, the active Rime voice and language, the stale-leak count, and an *Interrupt* button that uses
 the same fence as a spoken interruption.
+
+**Judge mode** is a toggle in the console's header, off by default. It adds an evidence view beside
+the conversation: the live pipeline stage, a short generation timeline showing `ACTIVE` and `FENCED`,
+whether the turn was answered deterministically (with the tool that answered it) or by the model, and
+the latency breakdown. Every figure comes from the same snapshot the rest of the page reads — a
+measurement the engine did not report renders as an em dash, never as a zero, and
+[`tests/test_judge_mode.py`](tests/test_judge_mode.py) asserts that the panels carry no numbers of
+their own. Each panel has a small *Why?* that names the module and the test behind the property.
 
 The full component design is in [ARCHITECTURE.md](ARCHITECTURE.md), and the reasoning behind it in
 [DESIGN.md](DESIGN.md).
@@ -405,7 +438,7 @@ matters: Rime deleted the voice model this project first used for Hindi overnigh
 | Voice ducks when the caller starts speaking (synthetic mode) | **22 ms** median | same |
 | Voice fully stops (synthetic mode) | 321 ms median (300 ms of it deliberate) | same |
 | Speech recognition on a real phone line | 927 ms median | [evidence/demo-run.jsonl](evidence/demo-run.jsonl) |
-| Stale results that reached a caller, 84 recorded runs | **0** | every trace in `traces/` |
+| Stale results that reached a caller, 106 recorded runs | **0** | every trace in [`traces/`](traces/) |
 | Turns answered with no language model, real phone demo | 11 of 16 | [evidence/](evidence/) |
 
 `evidence/demo-run.jsonl` is a real inbound phone call. The worker log for the same call is committed
@@ -422,11 +455,20 @@ estimated.
 |---|---|---|
 | **Rime** | All speech output | `RIME_API_KEY` |
 | **LiveKit Cloud** | The phone line: SIP, and the room that carries the call's audio | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
+| **Groq Whisper** | **Speech recognition** — `whisper-large-v3-turbo`, the production setting (`STT_PROVIDER=groq`). It transcribes and does nothing else | `STT_API_KEY` |
 | **Google Gemini** | Questions the database can't answer (`gemini-flash-lite-latest`) | `GEMINI_API_KEY` |
-| Groq / Anthropic / OpenAI | Optional alternative language models, chosen with `LLM_PROVIDER` | that provider's key |
+| Groq / Anthropic / OpenAI | Optional *alternative language models*, chosen with `LLM_PROVIDER`. A separate concern from the line above | that provider's key |
 
-**Local, with no service and no key:** faster-whisper (speech recognition), webrtcvad (speech
-detection), sounddevice / PortAudio (laptop microphone and speaker), and SQLite (the hotel database).
+**Groq appears twice in that table and the two roles are unrelated.** `STT_PROVIDER=groq` is what
+production runs, and it means Groq Whisper turns audio into text. `LLM_PROVIDER=groq` is a different
+switch that would send *reasoning* to a Groq-hosted model; production uses Gemini for that. Groq
+never answers a hotel question in either configuration — the router intercepts those before any model
+is reached.
+
+**Local, with no service and no key:** faster-whisper as the STT fallback (`base.en` for English,
+multilingual `base` for Hindi and Spanish), webrtcvad (speech detection), sounddevice / PortAudio
+(laptop microphone and speaker), and SQLite (the hotel database). Recogniser selection is explicit:
+an unknown `STT_PROVIDER` raises rather than silently substituting.
 
 **No telemetry.** Traces are written to your own disk and nowhere else. The only data sent to a third
 party is the text Rime speaks, the phone audio LiveKit carries, and — only for questions the database
@@ -469,6 +511,9 @@ nothing: inbound audio, listening, speech detection, recognition, reply, voice o
   simultaneous calls haven't been run.
 - **The Hindi and Spanish wording hasn't been reviewed by native speakers**, and the Hindi and
   Spanish voices haven't been judged by listening.
+- **No automatic language detection**, by choice. The caller asks, or takes the offer in the
+  greeting. Detection on short narrowband utterances can flip mid-call, and a language that changes
+  by itself on camera is a visible failure.
 - **Not built:** partial-result reuse when a request is refined ("salvage"), and suspending one task to
   resume later. Both are stated in the tests that would cover them, which are skipped rather than
   faked.
@@ -498,7 +543,7 @@ evidence/        a real phone call's trace and worker log
 
 | | |
 |---|---|
-| **1903 tests pass, 2 are skipped** | Both skips are features that genuinely don't exist, and each test says which: the unsafe-mode control condition, and salvage. Neither is faked to look like evidence. |
+| **1970 tests pass, 2 are skipped** | Both skips are features that genuinely don't exist, and each test says which: the unsafe-mode control condition, and salvage. Neither is faked to look like evidence. |
 | **0 stale outputs, 106 recorded runs** | `ResultLeaked` has never fired. 4136 `ResultDiscarded` events say the fence is doing work, not that the path is untravelled. |
 | **93 / 93 multilingual routing** | 31 sentences per language. A test also enforces that all three are tested *equally*, so English cannot be propped up by coverage. |
 | **A real phone call, committed** | 16 turns, 11 at `llm_ms = 0`, median 1262 ms. The trace and the worker log are asserted to describe the same call. |

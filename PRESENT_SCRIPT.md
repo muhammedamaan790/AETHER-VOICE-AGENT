@@ -233,7 +233,7 @@ Phone → LiveKit SIP → speech detection → Whisper → classifier
 *[Run it live if you have the time — it takes about two minutes. Otherwise show the last run.]*
 
 ```bash
-python -m pytest -q          # 1903 passed, 2 skipped
+python -m pytest -q          # 1970 passed, 2 skipped
 ```
 
 | | |

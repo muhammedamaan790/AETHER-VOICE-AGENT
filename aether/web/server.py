@@ -64,6 +64,10 @@ class UiState:
     rime_language: str | None = None
 
     llm_provider: str | None = None
+    # The deterministic tool that answered the most recent turn, or None when the model did. The
+    # console prints this beside DETERMINISTIC, so it is read from the event and never inferred:
+    # `llm_ms == 0` says no model ran, but only this says which tool ran instead.
+    route_tool: str | None = None
     latency: dict[str, Any] = field(default_factory=dict)
     timeline: list[dict[str, Any]] = field(default_factory=list)   # G17 -> FENCED -> G18
 
@@ -160,6 +164,7 @@ class UiState:
             self.rime_voice = ev.get("voice")
             self.rime_language = ev.get("voice_language")
             self.llm_provider = ev.get("llm_provider")
+            self.route_tool = ev.get("route_tool")
             # Only real measurements: a metric the run did not produce stays absent.
             self.latency = {
                 key: ev.get(key)
@@ -206,6 +211,7 @@ class UiState:
                 "language": self.rime_language,
             },
             "llm_provider": self.llm_provider,
+            "route_tool": self.route_tool,
             "latency": dict(self.latency),
             "timeline": list(self.timeline),
             "transcript": list(self.transcript),

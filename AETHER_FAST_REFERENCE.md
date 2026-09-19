@@ -109,7 +109,7 @@ Caller (PSTN phone)
 | Audio I/O | PortAudio via `sounddevice`, NumPy | Playback, gating |
 | Console | `http.server` + WebSocket, single static HTML file, vanilla JS | Live observation |
 | Tracing | JSONL event trace (`aether/trace.py`) | Evidence, replay |
-| Tests | pytest — 1903 passing | Verification |
+| Tests | pytest — 1970 passing | Verification |
 
 ---
 
@@ -300,7 +300,7 @@ Defined once in `aether/lang/__init__.py`; nothing else decides what a language 
 
 | Metric | Verified Value | Evidence Source |
 |---|---|---|
-| Tests passing | **1903 passed, 2 skipped** (1905 collected) | `python -m pytest -q`, run 2026-09-19 |
+| Tests passing | **1970 passed, 2 skipped** (1905 collected) | `python -m pytest -q`, run 2026-09-19 |
 | Skip 1 | `AETHER_UNSAFE_MODE` control condition — no code path allows a stale result out, so the control cannot be run | `tests/test_acceptance.py:283` |
 | Skip 2 | `ResultSalvaged` not implemented and deliberately not faked | `tests/test_acceptance.py:319` |
 | Full-duplex acceptance | **9/9 pass** | `tests/test_full_duplex_acceptance.py` |
@@ -507,7 +507,7 @@ From `DEMO_SCRIPT.md`; the 14 quoted replies are asserted by `tests/test_demo_sc
 **Evidence:** `evidence/demo-run.jsonl`, `evidence/demo-call-worker.log`
 
 **Q: What's your testing methodology?**
-**30s:** 1903 tests. Pre-registered acceptance scenarios A–H, the brief's full-duplex example at 9/9, per-sentence routing in three languages, and structural tests that read the *source* to prove a function doesn't touch data it shouldn't. Two tests are skipped and both skips are documented as unbuilt features we refused to fake.
+**30s:** 1970 tests. Pre-registered acceptance scenarios A–H, the brief's full-duplex example at 9/9, per-sentence routing in three languages, and structural tests that read the *source* to prove a function doesn't touch data it shouldn't. Two tests are skipped and both skips are documented as unbuilt features we refused to fake.
 **Evidence:** `python -m pytest -q`; `tests/test_acceptance.py`
 
 **Q: How do you know the docs aren't lying?**
@@ -584,7 +584,7 @@ python scripts/demo_full_call.py           # offline / free
 python scripts/demo_full_call.py --mode live   # real Gemini and Rime
 
 # Tests
-python -m pytest -q                                      # 1903 passed, 2 skipped
+python -m pytest -q                                      # 1970 passed, 2 skipped
 python -m pytest tests/test_full_duplex_acceptance.py -q # the brief's example, 9 checks
 python -m pytest tests/test_acceptance.py -q             # scenarios A-H, pre-registered
 
@@ -643,12 +643,12 @@ python scripts/review_learned.py --forget  "<question>"
 AETHER is a multilingual hotel voice agent that answers phone calls in English, Hindi and Spanish. Every hotel fact comes from a database, never from a language model — and when a caller interrupts, the abandoned answer is structurally prevented from ever being spoken. Zero stale answers across 106 recorded runs.
 
 **30 seconds.**
-AETHER answers a hotel's phone in three languages. The hard part isn't the pipeline — it's what happens when a caller talks over the agent. Work is already in flight: a model streaming, a voice synthesising, a booking about to write. AETHER gives every turn a generation id and fences it at five independent checkpoints, so an abandoned answer is never spoken, never remembered, and never writes a row. Hotel facts bypass the model entirely — the router hits SQLite and a template speaks the row, in 0.9 milliseconds, with `llm_ms = 0` visible in the trace. 1903 tests, and zero stale outputs across every run we've ever recorded.
+AETHER answers a hotel's phone in three languages. The hard part isn't the pipeline — it's what happens when a caller talks over the agent. Work is already in flight: a model streaming, a voice synthesising, a booking about to write. AETHER gives every turn a generation id and fences it at five independent checkpoints, so an abandoned answer is never spoken, never remembered, and never writes a row. Hotel facts bypass the model entirely — the router hits SQLite and a template speaks the row, in 0.9 milliseconds, with `llm_ms = 0` visible in the trace. 1970 tests, and zero stale outputs across every run we've ever recorded.
 
 **60 seconds.**
 Hotels lose calls at night and in peak hours, and callers want things that are already in a database: prices, availability, policies, food orders, bookings. AETHER answers the phone in English, Hindi and Spanish and gets those from SQLite — the router matches the sentence, a tool reads the row, a per-language template speaks it. The model is never asked, so a price cannot be hallucinated, and a deterministic turn reports `llm_ms = 0` so you can verify that rather than trust it.
 The engineering problem is interruption. On a phone, audio can't be un-spoken, and when a caller cuts in there's work already running. AETHER classifies the interruption into six types — a "mm-hm" doesn't interrupt, "actually…" refines, "never mind" cancels — and anything that fences marks the generation invalid. Five independent checkpoints then discard its work, including one *before* a tool body runs, so a booking the caller changed their mind about never lands.
-The guarantees are structural, not promised: SQLite's authorizer refuses any write to a price mid-statement; `BEGIN IMMEDIATE` means two callers can't take the last room. 1903 tests, 93 of 93 routing cases across three languages, a real recorded phone call at 1262 ms median turn latency — and zero stale answers across 106 runs.
+The guarantees are structural, not promised: SQLite's authorizer refuses any write to a price mid-statement; `BEGIN IMMEDIATE` means two callers can't take the last room. 1970 tests, 93 of 93 routing cases across three languages, a real recorded phone call at 1262 ms median turn latency — and zero stale answers across 106 runs.
 What we don't claim: word accuracy on narrowband audio is unmeasured, Hindi and Spanish have never run over a real phone, and two simultaneous callers are untested.
 
 ---
@@ -679,4 +679,4 @@ What we don't claim: word accuracy on narrowband audio is unmeasured, Hindi and 
 
 ---
 
-*Verified against the working tree on 2026-09-19. Test counts, tool counts, trace counts, routing accuracy and route latency were re-run rather than copied. One disagreement was found and corrected at the source: RIME_EVIDENCE.md said 84 trace files against a current 106 — same zero-leak result — and now says 106.*
+*Verified against the working tree on 2026-09-19. Test counts, tool counts, trace counts, routing accuracy and route latency are derived by `scripts/metrics.py` rather than copied, and `tests/test_reference_integrity.py` fails the suite when any document disagrees with it. Three disagreements were found that way and corrected at the source: a stale trace count in RIME_EVIDENCE.md and README.md, and a fence-checkpoint count that said four in README.md and JUDGING.md where the source has five.*

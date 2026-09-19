@@ -250,6 +250,119 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
   font-size:13.5px;color:var(--ink-dim);overflow-wrap:anywhere}
 #recording.live{color:#9fd8b4}
 
+/* ---------------- judge mode ----------------
+   OFF BY DEFAULT, and everything below is additive: with `body.judge` absent the console is exactly
+   the console that existed before, which is the point -- the demo must not depend on a display
+   option. Every value shown here is read from the same snapshot the rest of the page reads. Where
+   the engine does not report something for a turn, the UI prints an em dash rather than a plausible
+   number: an invented latency on a page whose subject is honesty would be the worst possible bug. */
+.judge-only{display:none}
+body.judge .judge-only{display:block}
+body.judge .judge-only.row{display:flex}
+body.judge button.why.judge-only{display:inline-block}
+.fact .why{margin-left:10px;font-size:10px;letter-spacing:.06em;color:var(--ink-dim);
+  background:transparent;border:1px solid var(--line);border-radius:5px;padding:1px 7px;
+  font-weight:600;flex:0 0 auto}
+.fact .why:hover{color:var(--gold);border-color:rgba(212,169,74,.5)}
+#judgeBtn{
+  padding:8px 14px;border-radius:8px;font-size:11.5px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;background:transparent;color:var(--ink-dim);
+  border:1px solid var(--line);
+}
+#judgeBtn[aria-pressed="true"]{color:var(--gold-bright);border-color:rgba(212,169,74,.5);
+  background:rgba(212,169,74,.1)}
+
+/* The pipeline. A stage lights only from state the snapshot actually carries -- `phase`,
+   `speech_active`, `call_active`. Stages the console cannot observe individually (the router and
+   the renderer run inside one `thinking` phase) light together, and say so in the title text
+   rather than pretending to finer resolution than exists. */
+.pipe{
+  flex:0 0 auto;display:flex;align-items:center;gap:0;padding:9px 14px;overflow-x:auto;
+  border:1px solid var(--line);border-radius:12px;background:var(--panel);
+}
+.pipe .st{
+  display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:7px;white-space:nowrap;
+  font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;transition:color .18s,background .18s;
+}
+.pipe .st .dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.45}
+.pipe .st.on{color:var(--gold-bright);background:rgba(212,169,74,.12)}
+.pipe .st.on .dot{opacity:1;box-shadow:0 0 7px currentColor}
+.pipe .st.fenced{color:#ff8b82;background:rgba(226,69,60,.12)}
+.pipe .sep{width:13px;height:1px;background:var(--line);flex:0 0 auto}
+
+/* A judge panel is a plain bordered block, not a card with a shadow: this is instrumentation. */
+.jp{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:12px 14px}
+.jp + .jp{margin-top:12px}
+.jp h3{
+  margin:0 0 9px;font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:700;display:flex;align-items:center;gap:8px;
+}
+.jp h3 .why{
+  margin-left:auto;font-family:var(--sans);font-size:10px;letter-spacing:.08em;text-transform:none;
+  color:var(--ink-dim);background:transparent;border:1px solid var(--line);border-radius:5px;
+  padding:1px 7px;font-weight:600;
+}
+.jp h3 .why:hover{color:var(--gold);border-color:rgba(212,169,74,.5)}
+
+/* Generation timeline. A short window on purpose -- the judge needs the transition, not a log. */
+.gens{display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:12.5px}
+.gen-row{display:flex;align-items:center;gap:9px;padding:4px 8px;border-radius:6px;
+  background:rgba(255,255,255,.02);border:1px solid transparent}
+.gen-row .id{font-weight:600;color:var(--ink);min-width:40px}
+.gen-row .tag{font-size:10px;letter-spacing:.12em;padding:1px 7px;border-radius:4px;font-weight:600}
+.gen-row.active{border-color:rgba(53,199,106,.4);background:rgba(53,199,106,.08)}
+.gen-row.active .tag{color:var(--live);border:1px solid rgba(53,199,106,.45)}
+.gen-row.fenced{border-color:rgba(226,69,60,.45);background:rgba(226,69,60,.09)}
+.gen-row.fenced .tag{color:#ff8b82;border:1px solid rgba(226,69,60,.5)}
+.gen-row.fenced .id{color:#ff8b82;text-decoration:line-through}
+.gen-row.spoken .tag{color:var(--ink-dim);border:1px solid var(--line)}
+.gen-row .why-detail{margin-left:auto;color:var(--ink-faint);font-size:11px}
+
+/* Route. The single most important thing a judge can see on a completed turn. */
+.route{display:flex;flex-direction:column;gap:6px}
+.route .kind{font-size:14px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.route.det .kind{color:var(--live)}
+.route.llm .kind{color:var(--gold-bright)}
+.route .detail{font-family:var(--mono);font-size:12.5px;color:var(--ink);overflow-wrap:anywhere}
+.route .sub{font-size:11.5px;color:var(--ink-faint)}
+
+/* Latency. Tabular figures, and an em dash wherever the engine reported nothing. */
+.lat{display:flex;flex-direction:column;gap:3px;font-family:var(--mono);font-size:12.5px}
+.lat .r{display:flex;align-items:baseline;gap:10px}
+.lat .r .k{flex:1;color:var(--ink-faint);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  font-family:var(--sans);font-weight:600}
+.lat .r .v{color:var(--ink);font-variant-numeric:tabular-nums}
+.lat .r .v.none{color:var(--ink-faint)}
+.lat .r.total{border-top:1px solid var(--line-soft);margin-top:4px;padding-top:5px}
+.lat .r.total .v{font-weight:700;color:var(--gold-bright)}
+
+/* The interruption, named. */
+.intr{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px}
+.intr .cls{font-weight:700;letter-spacing:.1em;color:var(--gold-bright)}
+.intr .rule{color:var(--ink-faint);font-size:11.5px}
+.intr .fenced{color:#ff8b82;font-weight:700;letter-spacing:.1em}
+.intr .none{color:var(--ink-faint);font-family:var(--sans)}
+
+/* The "Why?" drawer. A dialog, so Escape closes it and focus is trapped by the platform. */
+#whyBox{
+  border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);
+  max-width:540px;width:calc(100vw - 48px);padding:0;
+}
+#whyBox::backdrop{background:rgba(0,0,0,.62)}
+#whyBox .hd{display:flex;align-items:center;gap:12px;padding:15px 18px;
+  border-bottom:1px solid var(--line-soft)}
+#whyBox .hd h4{margin:0;font-size:15px;font-weight:700;letter-spacing:.02em}
+#whyBox .hd button{margin-left:auto;background:transparent;border:1px solid var(--line);
+  color:var(--ink-dim);border-radius:6px;padding:3px 10px;font-size:12px}
+#whyBox .bd{padding:16px 18px;font-size:13.5px;line-height:1.65;color:var(--ink-dim)}
+#whyBox .bd p{margin:0 0 12px}
+#whyBox .bd dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px}
+#whyBox .bd dt{color:var(--ink-faint);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  font-weight:700;padding-top:2px}
+#whyBox .bd dd{margin:0;font-family:var(--mono);overflow-wrap:anywhere}
+#whyBox .bd dd a{color:var(--gold-bright)}
+
 /* The two ambient loops on this page -- the recording bead and the speech-activity bars -- run
    forever regardless of state, which is exactly what a caller with a vestibular disorder needs
    turned off. State itself must still be visible without them, so each gets a static equivalent
@@ -281,6 +394,9 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
       <span class="pill" id="callPill"><span class="bead"></span><span id="callState">Standing by</span></span>
       <span class="pill"><span aria-hidden="true">☎</span><span class="clock" id="callClock">00:00</span></span>
       <span class="rec" id="recPill"><span class="bead"></span><span id="recLabel">Not recording</span></span>
+      <!-- Off by default. The console below it is unchanged when this is off, so a demo never
+           depends on a display option being in the right state. -->
+      <button id="judgeBtn" type="button" aria-pressed="false">Judge mode</button>
     </div>
   </header>
 
@@ -312,6 +428,22 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
 
       <div id="recording">not recording — no call in progress</div>
     </section>
+
+      <!-- The pipeline, lit from `phase`, `speech_active` and `call_active`. The router and the
+           renderer share one stage because the engine reports one `thinking` phase for both, and
+           inventing a finer resolution than the events carry would be a lie in the judge's
+           favour. No LLM stage lights on a deterministic turn. -->
+      <div class="pipe judge-only row" id="pipe" aria-label="Voice pipeline, current stage">
+        <span class="st" data-stage="caller"><span class="dot"></span>Caller</span><span class="sep"></span>
+        <span class="st" data-stage="vad"><span class="dot"></span>VAD</span><span class="sep"></span>
+        <span class="st" data-stage="stt"><span class="dot"></span>STT</span><span class="sep"></span>
+        <span class="st" data-stage="classifier"><span class="dot"></span>Classifier</span><span class="sep"></span>
+        <span class="st" data-stage="router"><span class="dot"></span>Router</span><span class="sep"></span>
+        <span class="st" data-stage="answer"><span class="dot"></span>Tool / Gemini</span><span class="sep"></span>
+        <span class="st" data-stage="render"><span class="dot"></span>Renderer</span><span class="sep"></span>
+        <span class="st" data-stage="rime"><span class="dot"></span>Rime</span><span class="sep"></span>
+        <span class="st" data-stage="gate"><span class="dot"></span>Audio gate</span>
+      </div>
 
       <div class="card voice-card">
         <div class="voice">
@@ -369,11 +501,41 @@ kbd{font-family:var(--mono);font-size:12px;color:var(--ink);border:1px solid var
           <div class="fact">
             <span class="ico" aria-hidden="true">◇</span>
             <span class="k">Stale leaks</span><span class="v mono" id="factLeaks">0</span>
+            <button class="why judge-only" type="button" data-why="leaks">Why?</button>
           </div>
         </div>
       </div>
+
+      <!-- The judge rail. Every value below comes from the same snapshot the caller card reads. -->
+      <div class="jp judge-only">
+        <h3>Generations <button class="why" type="button" data-why="fence">Why?</button></h3>
+        <div class="gens" id="gens"></div>
+      </div>
+
+      <div class="jp judge-only">
+        <h3>This turn <button class="why" type="button" data-why="route">Why?</button></h3>
+        <div class="route" id="route"></div>
+      </div>
+
+      <div class="jp judge-only">
+        <h3>Latency <button class="why" type="button" data-why="latency">Why?</button></h3>
+        <div class="lat" id="lat"></div>
+      </div>
+
+      <div class="jp judge-only">
+        <h3>Last interruption <button class="why" type="button" data-why="classify">Why?</button></h3>
+        <div class="intr" id="intr"></div>
+      </div>
     </aside>
   </main>
+
+  <dialog id="whyBox">
+    <div class="hd">
+      <h4 id="whyTitle">Why</h4>
+      <button type="button" id="whyClose">Close</button>
+    </div>
+    <div class="bd" id="whyBody"></div>
+  </dialog>
 
 </div>
 
@@ -514,6 +676,16 @@ const els = {
   callerName: document.getElementById("callerName"),
   callerSub:  document.getElementById("callerSub"),
   callerBadge: document.getElementById("callerBadge"),
+  judgeBtn:   document.getElementById("judgeBtn"),
+  pipe:       document.getElementById("pipe"),
+  gens:       document.getElementById("gens"),
+  route:      document.getElementById("route"),
+  lat:        document.getElementById("lat"),
+  intr:       document.getElementById("intr"),
+  whyBox:     document.getElementById("whyBox"),
+  whyTitle:   document.getElementById("whyTitle"),
+  whyBody:    document.getElementById("whyBody"),
+  whyClose:   document.getElementById("whyClose"),
   factVoice:  document.getElementById("factVoice"),
   factLang:   document.getElementById("factLang"),
   factTurns:  document.getElementById("factTurns"),
@@ -658,6 +830,252 @@ function renderCaller(s){
   lastLeaks = leaks;
 }
 
+/* =================================================================================================
+   JUDGE MODE. Additive: none of the functions below run unless the toggle is on, and none of them
+   touch the transport, the controls or the transcript. Every value is read from the snapshot. The
+   rule throughout is that a field the engine did not report renders as an em dash -- this console's
+   whole subject is not saying things that are not true, and a fabricated millisecond here would
+   undo the argument the rest of the page is making.
+================================================================================================= */
+
+/* Which pipeline stages are lit, derived ONLY from what the snapshot carries. The engine reports
+   one `thinking` phase covering routing, the tool or the model, and rendering -- so those three
+   light together rather than being guessed apart. */
+function stagesFor(s){
+  if (!connected || !s) return [];
+  if (s.call_active === false) return [];
+  if (s.phase === "interrupted" || s.phase === "recovering") return ["fence"];
+  if (s.speech_active) return ["caller", "vad", "stt"];
+  if (s.phase === "thinking") return ["classifier", "router", "answer", "render"];
+  if (s.phase === "speaking") return ["rime", "gate"];
+  if (s.phase === "listening") return ["caller", "vad"];
+  return [];
+}
+
+function renderPipe(s){
+  const lit = stagesFor(s);
+  const fenced = lit[0] === "fence";
+  for (const el of els.pipe.querySelectorAll(".st")){
+    el.classList.toggle("on", !fenced && lit.includes(el.dataset.stage));
+    el.classList.toggle("fenced", fenced);
+  }
+}
+
+/* A short window: the judge needs to see the transition, not read a log. `timeline` carries the
+   generation changes and fences the engine actually emitted. */
+function renderGens(s){
+  const seen = [];
+  for (const row of (s && s.timeline) || []){
+    if (!row.gen) continue;
+    if (!seen.includes(row.gen)) seen.push(row.gen);
+  }
+  if (s && s.generation && !seen.includes(s.generation)) seen.push(s.generation);
+  const recent = seen.slice(-4);
+
+  els.gens.replaceChildren();
+  if (!recent.length){
+    const empty = document.createElement("div");
+    empty.className = "gen-row";
+    empty.textContent = "no generations yet";
+    els.gens.appendChild(empty);
+    return;
+  }
+  for (const id of recent){
+    const isActive = s.generation === id && s.fenced_generation !== id;
+    const isFenced = s.fenced_generation === id;
+    const row = document.createElement("div");
+    row.className = "gen-row " + (isFenced ? "fenced" : isActive ? "active" : "spoken");
+
+    const label = document.createElement("span");
+    label.className = "id";
+    label.textContent = id;
+
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = isFenced ? "FENCED" : isActive ? "ACTIVE" : "SPOKEN";
+
+    row.append(label, tag);
+    if (isFenced && s.fence_reason){
+      const why = document.createElement("span");
+      why.className = "why-detail";
+      why.textContent = s.fence_reason;
+      row.appendChild(why);
+    }
+    els.gens.appendChild(row);
+  }
+}
+
+/* DETERMINISTIC vs LLM FALLBACK, decided by `llm_ms` -- the engine records a zero span when no
+   model was consulted, which is the same field the trace is judged on. `route_tool` names the tool
+   that answered; it is null on a model turn and on a turn that has not completed, and the UI says
+   so rather than guessing a name. */
+function renderRoute(s){
+  const lat = (s && s.latency) || {};
+  const box = els.route;
+  box.className = "route";
+  box.replaceChildren();
+
+  const add = (cls, text) => {
+    const el = document.createElement("div");
+    el.className = cls;
+    el.textContent = text;
+    box.appendChild(el);
+  };
+
+  if (lat.llm_ms === undefined || lat.llm_ms === null){
+    add("kind", "No turn yet");
+    add("sub", "the route is shown once a turn has been spoken");
+    return;
+  }
+  if (lat.llm_ms === 0){
+    box.classList.add("det");
+    add("kind", "Deterministic");
+    add("detail", s.route_tool ? `SQLite → ${s.route_tool}` : "SQLite → —");
+    add("sub", "llm_ms = 0 — no model was consulted");
+  } else {
+    box.classList.add("llm");
+    add("kind", "LLM fallback");
+    add("detail", s.llm_provider || "—");
+    add("sub", `${Math.round(lat.llm_ms)} ms — the router had no tool for this question`);
+  }
+}
+
+/* An em dash wherever the engine reported nothing for this turn. The three figures measure
+   different things and are labelled so they cannot be read as one another. */
+function renderLatency(s){
+  const lat = (s && s.latency) || {};
+  const rows = [
+    ["Speech → text", lat.stt_ms, ""],
+    ["Model", lat.llm_ms, ""],
+    ["Rime first audio", lat.tts_ms, ""],
+    ["Whole turn", lat.turn_latency_ms, "total"],
+  ];
+  els.lat.replaceChildren();
+  for (const [name, value, extra] of rows){
+    const r = document.createElement("div");
+    r.className = "r " + extra;
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = name;
+    const v = document.createElement("span");
+    const has = value !== undefined && value !== null;
+    v.className = "v" + (has ? "" : " none");
+    v.textContent = has ? `${Math.round(value)} ms` : "—";
+    r.append(k, v);
+    els.lat.appendChild(r);
+  }
+}
+
+function renderInterruption(s){
+  els.intr.replaceChildren();
+  if (!s || !s.last_class){
+    const none = document.createElement("span");
+    none.className = "none";
+    none.textContent = "none this call";
+    els.intr.appendChild(none);
+    return;
+  }
+  const cls = document.createElement("span");
+  cls.className = "cls";
+  cls.textContent = s.last_class;
+  els.intr.appendChild(cls);
+
+  if (s.last_class_rule){
+    const rule = document.createElement("span");
+    rule.className = "rule";
+    rule.textContent = `rule: ${s.last_class_rule}`;
+    els.intr.appendChild(rule);
+  }
+  if (s.fenced_generation){
+    const f = document.createElement("span");
+    f.className = "fenced";
+    f.textContent = `${s.fenced_generation} FENCED`;
+    els.intr.appendChild(f);
+  }
+}
+
+/* The "Why?" drawer. Static explanation plus the module and test that back the property -- named
+   symbols and file paths rather than line numbers, which go stale the moment anything is edited. */
+const WHY = {
+  fence: {
+    title: "Generation fencing",
+    text: "Every turn gets a generation id. Allocating the next turn fences the previous one. "
+        + "Fencing is not cancellation: in-flight work is allowed to finish and is then refused at "
+        + "five independent checkpoints, so an abandoned answer can complete and still never be "
+        + "spoken, remembered, or leave a booking behind.",
+    facts: [["Source", "aether/supervisor/generations.py, aether/interruption/"],
+            ["Checkpoints", "aether/tools/__init__.py, aether/spike.py, aether/audio/player.py"],
+            ["Tests", "tests/test_acceptance.py scenarios A–H"],
+            ["Rule", "RULES.md R1"]],
+  },
+  route: {
+    title: "Deterministic vs model",
+    text: "A hotel fact is a row, not a guess. The router matches the sentence to one of 33 tools "
+        + "and a template speaks the row, so llm_ms is 0 and the model never sees the question. "
+        + "Gemini is reached only when the router returns nothing.",
+    facts: [["Router", "aether/hotel/router.py"],
+            ["Tools", "aether/hotel/tools.py"],
+            ["Tests", "tests/test_understanding.py — 93/93 across three languages"],
+            ["Evidence", "evidence/demo-run.jsonl — 11 of 16 turns at llm_ms = 0"]],
+  },
+  latency: {
+    title: "What these three measure",
+    text: "They are different quantities and are not comparable. Speech-to-text is the recogniser. "
+        + "Rime first audio is time to the first chunk received, not time to sound in the ear. "
+        + "Whole turn spans speech ending to the answer being decided. A dash means the engine "
+        + "reported nothing for this turn — it is not a zero.",
+    facts: [["Measured", "evidence/demo-run.jsonl"],
+            ["Real call", "median whole turn 1262 ms, Rime first audio 280 ms"],
+            ["Not claimed", "no ear-to-ear figure anywhere"]],
+  },
+  classify: {
+    title: "Interruption classes",
+    text: "Six classes, decided deterministically from closed word sets and prefixes — no model. "
+        + "BACKCHANNEL and STATUS_QUERY protect the turn in flight and do not fence it; the other "
+        + "four proceed into the turn machinery.",
+    facts: [["Source", "aether/classify/__init__.py"],
+            ["Tests", "tests/test_classifier.py, tests/test_interruption_coordinator.py"]],
+  },
+  leaks: {
+    title: "Stale outputs spoken",
+    text: "The count of ResultLeaked events this call. It has never been anything but zero, across "
+        + "every run ever recorded. One would fail the run — it is the single number this whole "
+        + "system exists to keep at zero.",
+    facts: [["Counted from", "ResultLeaked in the live event stream"],
+            ["Recorded runs", "106 trace files in traces/, 0 leaked"],
+            ["Verify", "python scripts/metrics.py"]],
+  },
+};
+
+function openWhy(key){
+  const entry = WHY[key];
+  if (!entry) return;
+  els.whyTitle.textContent = entry.title;
+  els.whyBody.replaceChildren();
+  const p = document.createElement("p");
+  p.textContent = entry.text;
+  els.whyBody.appendChild(p);
+  const dl = document.createElement("dl");
+  for (const [term, value] of entry.facts){
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    dl.append(dt, dd);
+  }
+  els.whyBody.appendChild(dl);
+  if (typeof els.whyBox.showModal === "function") els.whyBox.showModal();
+}
+
+function renderJudge(s){
+  if (!document.body.classList.contains("judge")) return;
+  renderPipe(s);
+  renderGens(s);
+  renderRoute(s);
+  renderLatency(s);
+  renderInterruption(s);
+}
+
 function renderControls(s){
   const listening = !!(s && s.listening);
   // ONE toggle. Its label follows what the engine reports, never what the last click assumed.
@@ -695,7 +1113,30 @@ function onState(s){
   renderTranscript(s.transcript);
   renderCaller(s);
   renderRecording(s);
+  renderJudge(s);
 }
+
+/* The toggle. Remembered per browser as a convenience only -- the page renders correctly whether
+   or not storage answers, which it does not in a private window or during a thumbnail capture. */
+function setJudge(on){
+  document.body.classList.toggle("judge", on);
+  els.judgeBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  try { localStorage.setItem("aether.judge", on ? "1" : "0"); } catch (e) { /* not essential */ }
+  if (on) renderJudge(lastState);
+}
+
+(function initJudge(){
+  let remembered = false;
+  try { remembered = localStorage.getItem("aether.judge") === "1"; } catch (e) { remembered = false; }
+  setJudge(remembered);
+  els.judgeBtn.addEventListener("click", () => {
+    setJudge(!document.body.classList.contains("judge"));
+  });
+  for (const btn of document.querySelectorAll("[data-why]")){
+    btn.addEventListener("click", () => openWhy(btn.dataset.why));
+  }
+  els.whyClose.addEventListener("click", () => els.whyBox.close());
+})();
 
 /* Events are used ONLY for moments, never as a second copy of state. A fence is a moment. */
 function onEvent(ev){
